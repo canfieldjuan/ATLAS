@@ -21,18 +21,21 @@ can report a structurally present but unusable schema as ready.
   389 that assigns recovery-object ownership to `atlas_eom_handoff_owner`,
   provides the precise `atlas` privileges needed by the recovery service
   (including the `UPDATE` capability required for its `FOR UPDATE` row locks),
-  preserves NocoDB's direct denial, and makes the CRM-trigger bridge run with
-  the isolated owner and a fixed search path. Extend
-  `missed_call_recovery_schema_ready` to prove that the configured runtime role
-  can actually use the schema. Add migration 393 to the slim EOM profile's
-  closed readiness tuple. Add disposable-PostgreSQL proof for both roles and
-  the trigger bridge.
+  preserves NocoDB's direct denial across table, column, and function ACLs,
+  and makes the CRM-trigger bridge run with the isolated owner and a fixed
+  search path. Extend `missed_call_recovery_schema_ready` to prove that the
+  configured runtime role can actually use only the intended schema surface,
+  the guard remains membership-isolated, and immutable-evidence triggers are
+  intact. Keep migration 393 out of ordinary EOM startup migration selection;
+  provide a controlled DBA-only runner and runbook step so runtime startup sees
+  the recorded repair. Add disposable-PostgreSQL proof for both roles, trigger
+  fencing, and the controlled runner.
 - Must not change: do not rewrite migration 389 or its recorded receipt; do not
   modify existing recovery evidence, provider defaults, booking/email behavior,
   authenticated routes, CRM UI, role memberships, billing logic, or historical
-  migration-recovery selection. Do not repair production through manual grants
-  or restart services before the forward migration is source-reviewed and
-  applied.
+  migration contents or the generic full migration runner. Do not repair
+  production through manual grants or restart services before the forward
+  migration is source-reviewed and applied.
 
 ## Scope (this PR)
 
@@ -42,15 +45,19 @@ Slice phase: Production hardening
 1. Add the additive recovery-ACL migration and security-definer trigger bridge.
 2. Make readiness fail closed when the runtime role cannot execute the service's
    actual recovery-table operations.
-3. Enroll migration 393 in the closed slim-profile recovery migration set.
+3. Keep DBA-only/historical recovery SQL out of the slim-profile's ordinary
+   migration set and provide a controlled runner for migration 393.
 4. Prove the runtime/NocoDB boundary in a disposable Postgres schema.
+5. Document the redacted-DSN DBA cutover before normal runtime startup.
 
 ### Review Contract
 
 - Acceptance criteria:
   1. The new migration is forward-only and DBA-gated; it keeps the existing
-     no-login, membership-isolated guard model and transfers all six recovery
-     tables plus the privileged CRM-trigger functions to that guard.
+     no-login, membership-isolated guard model, transfers all six recovery
+     tables plus the privileged CRM-trigger functions to that guard, clears
+     stale table/column/function ACLs, and refuses to grant mutable evidence
+     access unless the exact append-only trigger bindings are intact.
   2. After applying the migration in a disposable schema, the runtime role has
      the exact required table privileges: read/insert/lock for receipts and
      attempts, read/insert for suppressions/events, and read/insert/update for
@@ -61,25 +68,35 @@ Slice phase: Production hardening
      and terminalizes affected recovery work. The same disposable-Postgres test
      proves both sides.
   4. `missed_call_recovery_schema_ready` returns false for a structurally
-     complete schema with missing runtime ACLs, and true only after the
-     migration establishes the expected privilege/guard properties. The
-     integration test settles the effect through the real query.
-  5. `EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS` includes migration 393, so
-     the slim EOM migration path can apply the forward repair. The corresponding
-     source-level migration-set test settles the closed-set change.
+     complete schema with missing or extra runtime ACLs, runtime guard
+     membership, a disabled/rebound immutable-evidence trigger, or an untrusted
+     NocoDB direct path; it returns true only after the migration establishes
+     the expected privilege/guard properties. The integration test settles the
+     effect through the real query.
+  5. `EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS` excludes DBA-only and
+     historical recovery SQL. The dedicated DBA runner defaults to a redacted,
+     read-only preflight, applies only migration 393 after `--apply`, and
+     verifies the migration ledger before a full generic Atlas startup or
+     enabling recovery. A fresh target first receives migration 389 from the
+     slim EOM bootstrap path. The corresponding source-level tests settle both
+     boundaries.
   6. No route, provider, delivery configuration, email copy, booking state, or
      recorded recovery evidence changes. Settled by the focused existing
      recovery test suite and a cold diff audit.
 - Reachability proof: the service calls `missed_call_recovery_schema_ready`
   before starting the worker; the disposable Postgres proof applies the actual
   migration, connects as each real role, executes the schema probe, and observes
-  the corresponding allowed/denied database effects.
+  the corresponding allowed/denied database effects. The controlled DBA runner
+  uses the existing migration ledger after the slim bootstrap records 389 and
+  before a full generic Atlas process starts or recovery is enabled.
 - Affected surfaces: `atlas_brain/storage/migrations/`,
   `atlas_brain/main_eom.py`, `atlas_brain/services/eom_missed_call_recovery.py`,
-  and its disposable Postgres tests.
+  the controlled migration runner/runbook, and their disposable Postgres/unit
+  tests.
 - Risk areas: PostgreSQL ownership/ACL semantics, `FOR UPDATE` lock privileges,
   security-definer search paths and direct function execution, NocoDB direct
-  data exposure, migration retry/atomicity, and worker startup gating.
+  data exposure, migration retry/atomicity, immutable-evidence fences, and
+  worker startup gating.
 - Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R8, R10, R11, R12, R13.
 
 ### Boundary-change enumeration
@@ -90,13 +107,14 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 
 - Boundary path/seam: `atlas` service role -> recovery tables; `atlas_nocodb`
   CRM-table write -> guarded recovery trigger functions; startup probe -> worker
-  admission.
+  admission; protected DBA DSN -> recorded migration 393 -> normal runtime
+  startup.
 - Replaced-path behaviors: previously a table's mere existence admitted the
   worker; after this change only structural presence plus usable runtime ACLs
   and guarded trigger properties admit it.
-- Guard-relevant fields: table owner/ACL, function owner, `prosecdef`, function
-  `search_path`, role login/inheritance/membership properties, and the six
-  recovery table names.
+- Guard-relevant fields: table/column ACL, table owner, function ACL/owner,
+  `prosecdef`, function `search_path`, trigger identity/enabled state, role
+  login/inheritance/membership properties, and the six recovery table names.
 - Caller x input shape: `atlas` executes its existing service SQL; NocoDB only
   performs its documented contacts/contact-interactions mutations. Neither
   caller receives a new public route or payload shape.
@@ -124,8 +142,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_missed_call_recovery.py`
 - `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql`
+- `scripts/apply_eom_missed_call_recovery_runtime_privileges.py`
+- `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md`
 - `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md`
 - `tests/test_eom_missed_call_recovery.py`
+- `tests/test_eom_missed_call_privilege_runner.py`
 - `tests/test_eom_render_profile.py`
 
 ## Mechanism
@@ -134,19 +155,21 @@ The migration validates that a DBA is applying it and that
 `atlas_eom_handoff_owner` remains a no-login, membership-isolated guard. It
 moves recovery tables and the CRM-trigger execution chain under that guard,
 sets privileged trigger functions to `SECURITY DEFINER` with a fixed schema
-search path, and revokes public execution. It explicitly revokes NocoDB's
-direct table access, clears stale direct `atlas` rights, and then grants the
-runtime only its proven SQL surface; the append-only triggers still reject
-mutation of immutable evidence even where `UPDATE` is needed solely to take a
-row lock.
+search path, clears public/NocoDB/runtime table and column ACLs plus explicit
+NocoDB function execution, and then grants the runtime only its proven SQL
+surface. It refuses to proceed unless the receipt/attempt append-only triggers
+are still enabled and bound to their rejecting functions.
 
 The service's existing structural probe becomes an admission predicate for that
-same privilege/guard contract, so a partial or DBA-owned deployment fails closed
-before any provider worker can run. The test applies the source migration to an
-empty disposable schema, connects as each restricted role, and exercises both
-allowed runtime locking/writes and denied direct NocoDB data access plus the
-guarded CRM trigger path. The slim profile's explicit readiness tuple receives
-the new migration name, preserving its closed-set deployment behavior.
+same privilege/guard contract, so a partial, over-privileged, trigger-drifted,
+or DBA-owned deployment fails closed before any provider worker can run. The
+test applies the source migration to an empty disposable schema, connects as
+each restricted role, and exercises both allowed runtime locking/writes and
+denied direct NocoDB data access plus the guarded CRM trigger path. A fresh
+target's slim EOM bootstrap records migration 389; the separate DBA runner then
+records migration 393 before a full generic Atlas runtime starts or recovery is
+enabled. The slim readiness tuple intentionally carries only ordinary schema
+prerequisites.
 
 ## Intentional
 
@@ -163,9 +186,9 @@ the new migration name, preserving its closed-set deployment behavior.
 ## Deferred
 
 - Production cutover happens only after this source slice is reviewed, merged,
-  and its forward migration is applied through the controlled DBA runner. The
-  required post-apply role probes and service restart are operational proof, not
-  a manual ACL workaround.
+  migration 389 is present, and its forward repair is applied through the
+  controlled DBA runner. The required post-apply role probes and service restart
+  are operational proof, not a manual ACL workaround.
 
 Parking predicate: speculative privilege hardening unrelated to the six
 recovery tables or the existing CRM trigger bridge is parked; only a proven
@@ -175,43 +198,26 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest -q tests/test_eom_missed_call_recovery.py
-  tests/test_eom_render_profile.py` — `77 passed, 42 skipped` locally. The
-  database-gated cases remain CI proof; no local test was pointed at the
-  operational schema.
-- `python -m compileall -q atlas_brain/services/eom_missed_call_recovery.py
-  tests/test_eom_missed_call_recovery.py tests/test_eom_render_profile.py` —
-  passed locally.
-- Rollback-only PostgreSQL boundary smoke — applied migrations 035, 256, 346,
-  351, 363, 366, 389, and source migration 393 in a random schema inside one
-  uncommitted transaction; seeded a stale `atlas` `DELETE` grant and observed
-  migration 393 remove it, asserted `atlas`-role readiness, revoked one
-  required `UPDATE` grant and observed readiness become false, restored it, and
-  rolled the transaction back. Passed locally.
-- Rollback-only NocoDB bridge smoke — in the same disposable pattern, a
-  `SET ROLE atlas_nocodb` direct recovery-table read was denied while an allowed
-  contact email edit cancelled the active sequence through the guarded trigger;
-  the transaction was rolled back. Passed locally.
-- `git diff --check origin/main` — passed locally.
-- No supported Python formatter/linter package is installed in the current
-  virtual environment. The required `scripts/push_pr.sh` wrapper will run the
-  repository's mechanical local-review bundle before publishing.
-
-## Estimated diff size
-
-| File | LOC |
-|---|---:|
-| `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 101 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 311 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 217 |
-| `tests/test_eom_missed_call_recovery.py` | 432 |
-| `tests/test_eom_render_profile.py` | 1 |
-| **Total** | **1063** |
+- `python -m compileall -q atlas_brain/main_eom.py
+  atlas_brain/services/eom_missed_call_recovery.py
+  scripts/apply_eom_missed_call_recovery_runtime_privileges.py
+  tests/test_eom_missed_call_recovery.py
+  tests/test_eom_missed_call_privilege_runner.py
+  tests/test_eom_render_profile.py` — passed locally.
+- `python -m pytest -q tests/test_eom_missed_call_recovery.py` — `13 passed,
+  42 skipped` locally. The disposable-PostgreSQL role test is skipped because
+  `ATLAS_MIGRATION_TEST_DATABASE_URL` is absent in this workspace; hosted CI
+  remains the required real-role proof.
+- `python -m pytest -q tests/test_eom_missed_call_privilege_runner.py
+  tests/test_eom_render_profile.py` — `67 passed` locally.
+- `git diff --check` and the repository mechanical review wrapper remain
+  required before publishing. No production database, role, migration, or
+  service restart was touched by this source slice.
 
 ## Diff size rationale
 
 The source/test diff exceeds the 400-LOC soft budget because the indivisible
 security repair requires one forward migration, an executable readiness
-predicate, and a real-role disposable-Postgres proof. No provider, route,
-configuration, UI, or historical-evidence behavior is included.
+predicate, a controlled DBA-only runner, and a real-role disposable-Postgres
+proof. No provider, route, configuration, UI, or historical-evidence behavior
+is included.

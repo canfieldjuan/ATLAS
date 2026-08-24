@@ -44,23 +44,45 @@ claim or send a step.
 
 ## Safe rollout order
 
-1. Deploy the Atlas provider code and migration `389_eom_missed_call_recovery`
-   with recovery disabled. Verify the full application starts, the migration is
-   recorded, and no worker is running. On the compatible slim EOM profile,
-   `ATLAS_EOM_RUN_MIGRATIONS=true` applies this additive schema even while the
-   recovery flag remains disabled; that flag controls delivery, not schema
-   readiness.
-2. Deploy the tracker capability-backed proxy after Atlas is serving the named
+1. Keep recovery disabled. On a fresh target, or one that has not yet recorded
+   migration `389_eom_missed_call_recovery`, deploy this source and use the
+   compatible slim EOM profile with `ATLAS_EOM_RUN_MIGRATIONS=true` once. That
+   profile applies the ordinary recovery prerequisites through migration 389,
+   deliberately excludes migration 393, and leaves the worker stopped while
+   recovery is disabled. Verify migration 389 is recorded before continuing.
+2. After migration 389 is recorded, and before any full generic Atlas startup
+   or enabling recovery, apply the DBA-only privilege repair from the release
+   worktree in a protected DBA shell where
+   `ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL` is already injected, run:
+
+   ```bash
+   python scripts/apply_eom_missed_call_recovery_runtime_privileges.py --json
+   python scripts/apply_eom_missed_call_recovery_runtime_privileges.py --apply --json
+   ```
+
+   The first command is read-only. The second applies only migration
+   `393_eom_missed_call_recovery_runtime_privileges` through Atlas's normal
+   migration ledger and requires a PostgreSQL superuser. Do not pass a DBA DSN
+   on the command line, add it to the normal Atlas service environment, or give
+   the `atlas` runtime role guard membership. Confirm the result reports
+   `migration_recorded: true`, then remove the temporary DBA secret injection.
+3. Start the Atlas entrypoint with recovery still disabled. Verify the full
+   application starts, migration 389 and migration 393 are recorded, and no
+   worker is running. On the compatible slim EOM profile,
+   `ATLAS_EOM_RUN_MIGRATIONS=true` applies only ordinary recovery prerequisites;
+   it never applies the DBA-only ownership repair. That flag controls normal
+   migration startup, not delivery permission or DBA authority.
+4. Deploy the tracker capability-backed proxy after Atlas is serving the named
    endpoints.
-3. Deploy the Website CRM Leads card after the tracker advertises the exact
+5. Deploy the Website CRM Leads card after the tracker advertises the exact
    capability names and routes.
-4. Configure the private booking link and validate the process still starts
+6. Configure the private booking link and validate the process still starts
    with recovery disabled. Do not place a placeholder or test link in customer
    configuration.
-5. Verify the existing email transport is enabled and the sender remains the
+7. Verify the existing email transport is enabled and the sender remains the
    established EOM sender. Then set recovery enabled and restart the Atlas
    service.
-6. Use only controlled non-customer test data and a fake/sandbox provider for
+8. Use only controlled non-customer test data and a fake/sandbox provider for
    pre-production verification. Do not test this by emailing a real lead.
 
 The sender is dormant until a real operator action creates an eligible sequence.

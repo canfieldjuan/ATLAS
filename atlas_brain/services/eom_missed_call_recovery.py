@@ -414,10 +414,36 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                               AND has_table_privilege(current_user, relation.oid, 'SELECT')
                               AND has_table_privilege(current_user, relation.oid, 'INSERT')
                               AND (
-                                  NOT required_relation.requires_update
-                                  OR has_table_privilege(
-                                      current_user, relation.oid, 'UPDATE'
+                                  (
+                                      required_relation.requires_update
+                                      AND has_table_privilege(
+                                          current_user, relation.oid, 'UPDATE'
+                                      )
                                   )
+                                  OR (
+                                      NOT required_relation.requires_update
+                                      AND NOT has_table_privilege(
+                                          current_user, relation.oid, 'UPDATE'
+                                      )
+                                      AND NOT has_any_column_privilege(
+                                          current_user, relation.oid, 'UPDATE'
+                                      )
+                                  )
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'DELETE'
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'TRUNCATE'
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  current_user, relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'TRIGGER'
                               )
                               AND NOT has_table_privilege(
                                   'atlas_nocodb', relation.oid, 'SELECT'
@@ -443,6 +469,15 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                               AND NOT has_table_privilege(
                                   'atlas_nocodb', relation.oid, 'TRUNCATE'
                               )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'TRIGGER'
+                              )
                           )
                        FROM (
                            VALUES
@@ -462,9 +497,36 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                          )
                        JOIN pg_namespace AS namespace
                          ON namespace.oid = relation.relnamespace
-                       JOIN pg_roles AS table_owner
+                      JOIN pg_roles AS table_owner
                          ON table_owner.oid = relation.relowner
                       WHERE namespace.nspname = current_schema()
+                   )
+                   AND EXISTS (
+                       SELECT 1
+                       FROM pg_roles AS guard_role
+                       WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+                         AND NOT guard_role.rolcanlogin
+                         AND NOT guard_role.rolinherit
+                         AND NOT guard_role.rolsuper
+                         AND NOT guard_role.rolcreaterole
+                         AND NOT guard_role.rolcreatedb
+                         AND NOT guard_role.rolreplication
+                         AND NOT guard_role.rolbypassrls
+                         AND has_schema_privilege(
+                             guard_role.oid, current_schema(), 'USAGE'
+                         )
+                         AND has_schema_privilege(
+                             guard_role.oid, current_schema(), 'CREATE'
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM pg_roles AS member_role
+                             WHERE member_role.rolcanlogin
+                               AND NOT member_role.rolsuper
+                               AND pg_has_role(
+                                   member_role.oid, guard_role.oid, 'MEMBER'
+                               )
+                         )
                    )
                    AND EXISTS (
                        SELECT 1 FROM pg_index AS idx
@@ -482,11 +544,35 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                    )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
+                       WHERE trigger.tgrelid = 'eom_missed_call_operation_receipts'::regclass
+                         AND trigger.tgname = 'trg_prevent_eom_missed_call_operation_receipt_mutation'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'prevent_eom_missed_call_operation_receipt_mutation()'
+                         )
+                         AND trigger.tgtype = 27
+                         AND trigger.tgenabled = 'O'
+                         AND NOT trigger.tgisinternal
+                   )
+                   AND EXISTS (
+                       SELECT 1 FROM pg_trigger AS trigger
+                       WHERE trigger.tgrelid = 'eom_missed_call_attempts'::regclass
+                         AND trigger.tgname = 'trg_prevent_eom_missed_call_attempt_mutation'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'prevent_eom_missed_call_attempt_mutation()'
+                         )
+                         AND trigger.tgtype = 27
+                         AND trigger.tgenabled = 'O'
+                         AND NOT trigger.tgisinternal
+                   )
+                   AND EXISTS (
+                       SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contacts'::regclass
                          AND trigger.tgname = 'trg_cancel_eom_missed_call_on_contact_change'
                          AND trigger.tgfoid = to_regprocedure(
                              'cancel_eom_missed_call_on_contact_change()'
                          )
+                         AND trigger.tgtype = 17
+                         AND trigger.tgenabled = 'O'
                          AND NOT trigger.tgisinternal
                    )
                    AND EXISTS (
@@ -496,6 +582,8 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                          AND trigger.tgfoid = to_regprocedure(
                              'lock_eom_missed_call_interaction_contact()'
                          )
+                         AND trigger.tgtype = 31
+                         AND trigger.tgenabled = 'O'
                          AND NOT trigger.tgisinternal
                    )
                    AND EXISTS (
@@ -505,6 +593,8 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                          AND trigger.tgfoid = to_regprocedure(
                              'cancel_eom_missed_call_on_interaction()'
                          )
+                         AND trigger.tgtype = 29
+                         AND trigger.tgenabled = 'O'
                          AND NOT trigger.tgisinternal
                    )
                    AND (

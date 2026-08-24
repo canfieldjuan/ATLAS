@@ -331,28 +331,31 @@ async def _insert_active_sequence_for_privilege_probe(
     pool: _ConnectionPool,
     *,
     email: str,
+    contact_id: UUID | None = None,
 ) -> tuple[UUID, UUID, UUID]:
     """Create minimal active state without calling a provider or public route."""
 
-    contact_id = uuid4()
+    should_create_contact = contact_id is None
+    contact_id = contact_id or uuid4()
     attempt_id = uuid4()
     sequence_id = uuid4()
     now = datetime.now(timezone.utc) - timedelta(minutes=1)
     operation_key = _operation_key("privilege-attempt")
     fingerprint = f"{uuid4().hex}{uuid4().hex}"
-    await pool._connection.execute(
-        """
-        INSERT INTO contacts (
-            id, full_name, email, business_context_id, contact_type, status,
-            lead_stage, source, customer_type, created_at
-        ) VALUES ($1, 'Privilege Probe Lead', $2, $3, 'lead', 'active', 'new',
-                  'test', 'unknown', $4)
-        """,
-        contact_id,
-        email,
-        _EOM_CONTEXT,
-        now,
-    )
+    if should_create_contact:
+        await pool._connection.execute(
+            """
+            INSERT INTO contacts (
+                id, full_name, email, business_context_id, contact_type, status,
+                lead_stage, source, customer_type, created_at
+            ) VALUES ($1, 'Privilege Probe Lead', $2, $3, 'lead', 'active', 'new',
+                      'test', 'unknown', $4)
+            """,
+            contact_id,
+            email,
+            _EOM_CONTEXT,
+            now,
+        )
     await pool._connection.execute(
         """
         INSERT INTO eom_missed_call_attempts (
@@ -417,11 +420,51 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
         connection = admin_pool._connection
         try:
             await _provision_privilege_repair_roles(connection)
+            runtime_contact_id = await _insert_estimate_lead(
+                admin_pool,
+                email="runtime-privilege@example.test",
+            )
+            contact_change_id = await _insert_estimate_lead(
+                admin_pool,
+                email="before-change@example.test",
+            )
+            interaction_id = await _insert_estimate_lead(
+                admin_pool,
+                email="interaction@example.test",
+            )
             # A repair must not preserve a prior broad application grant just
             # because the table is being transferred from its old owner.
             await connection.execute(
                 f"GRANT DELETE ON TABLE {_quote_ident(schema)}."
                 "eom_missed_call_sequences TO atlas"
+            )
+            await connection.execute(
+                f"GRANT UPDATE (recipient_email) ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_sequences TO atlas"
+            )
+            await connection.execute(
+                f"GRANT SELECT (recipient_email) ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_sequences TO atlas_nocodb"
+            )
+            await connection.execute(
+                f"GRANT EXECUTE ON FUNCTION {_quote_ident(schema)}."
+                "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR) "
+                "TO atlas_nocodb"
+            )
+            await connection.execute(
+                f"ALTER TABLE {_quote_ident(schema)}."
+                "eom_missed_call_operation_receipts DISABLE TRIGGER "
+                "trg_prevent_eom_missed_call_operation_receipt_mutation"
+            )
+            with pytest.raises(
+                asyncpg.exceptions.RaiseError,
+                match="append-only receipt and attempt triggers must be intact",
+            ):
+                await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+            await connection.execute(
+                f"ALTER TABLE {_quote_ident(schema)}."
+                "eom_missed_call_operation_receipts ENABLE TRIGGER "
+                "trg_prevent_eom_missed_call_operation_receipt_mutation"
             )
             await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
 
@@ -481,6 +524,35 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 "eom_missed_call_sequence_steps": {"INSERT", "SELECT", "UPDATE"},
                 "eom_missed_call_sequence_events": {"INSERT", "SELECT"},
             }
+            stale_column_acl_rows = await connection.fetch(
+                """
+                SELECT relation.relname, attribute.attname
+                FROM pg_attribute AS attribute
+                JOIN pg_class AS relation ON relation.oid = attribute.attrelid
+                JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                CROSS JOIN LATERAL aclexplode(
+                    COALESCE(attribute.attacl, ARRAY[]::aclitem[])
+                ) AS acl
+                WHERE namespace.nspname = current_schema()
+                  AND relation.relname = ANY($1::text[])
+                  AND attribute.attnum > 0
+                  AND NOT attribute.attisdropped
+                  AND acl.grantee IN (
+                      0,
+                      (SELECT oid FROM pg_roles WHERE rolname = 'atlas'),
+                      (SELECT oid FROM pg_roles WHERE rolname = 'atlas_nocodb')
+                  )
+                """,
+                [
+                    "eom_missed_call_operation_receipts",
+                    "eom_missed_call_attempts",
+                    "eom_missed_call_contact_suppressions",
+                    "eom_missed_call_sequences",
+                    "eom_missed_call_sequence_steps",
+                    "eom_missed_call_sequence_events",
+                ],
+            )
+            assert stale_column_acl_rows == []
 
             database_name = await connection.fetchval("SELECT current_database()")
             await connection.execute(
@@ -545,14 +617,57 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             )
             assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
 
+            await connection.execute(
+                f"GRANT DELETE ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_sequences TO {runtime_probe_ident}"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            await connection.execute(
+                f"REVOKE DELETE ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_sequences FROM {runtime_probe_ident}"
+            )
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"GRANT REFERENCES (recipient_email) ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_sequences TO atlas_nocodb"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            await connection.execute(
+                f"REVOKE REFERENCES (recipient_email) ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_sequences FROM atlas_nocodb"
+            )
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"GRANT TRIGGER ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_sequences TO atlas_nocodb"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            await connection.execute(
+                f"REVOKE TRIGGER ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_sequences FROM atlas_nocodb"
+            )
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"GRANT atlas_eom_handoff_owner TO {runtime_probe_ident}"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            await connection.execute(
+                f"REVOKE atlas_eom_handoff_owner FROM {runtime_probe_ident}"
+            )
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
             contact_id, _attempt_id, sequence_id = (
                 await _insert_active_sequence_for_privilege_probe(
-                    admin_pool,
+                    runtime_pool,
                     email="runtime-privilege@example.test",
+                    contact_id=runtime_contact_id,
                 )
             )
             receipt_key = _operation_key("runtime-receipt")
-            await connection.execute(
+            await runtime_connection.execute(
                 """
                 INSERT INTO eom_missed_call_operation_receipts (
                     operation_key, contact_id, operation_kind, request_fingerprint
@@ -633,11 +748,16 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 )
                 """
             )
+            with pytest.raises(asyncpg.exceptions.InsufficientPrivilegeError):
+                await nocodb_connection.fetchval(
+                    "SELECT recipient_email FROM eom_missed_call_sequences LIMIT 1"
+                )
 
-            contact_change_id, _change_attempt_id, changed_sequence_id = (
+            _contact_change_id, _change_attempt_id, changed_sequence_id = (
                 await _insert_active_sequence_for_privilege_probe(
-                    admin_pool,
+                    runtime_pool,
                     email="before-change@example.test",
+                    contact_id=contact_change_id,
                 )
             )
             await nocodb_connection.execute(
@@ -651,10 +771,11 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 changed_sequence_id,
             )
 
-            interaction_id, _interaction_attempt_id, interaction_sequence_id = (
+            _interaction_id, _interaction_attempt_id, interaction_sequence_id = (
                 await _insert_active_sequence_for_privilege_probe(
-                    admin_pool,
+                    runtime_pool,
                     email="interaction@example.test",
+                    contact_id=interaction_id,
                 )
             )
             await nocodb_connection.execute(
@@ -2591,10 +2712,18 @@ async def test_resume_and_cancel_keys_are_globally_bound_to_their_original_conta
 
 
 @pytest.mark.asyncio
-async def test_operator_route_reaches_persisted_call_and_status_state() -> None:
+async def test_operator_route_reaches_persisted_call_and_status_state(monkeypatch) -> None:
     async with _test_store() as (pool, _schema):
         contact_id = await _insert_estimate_lead(pool)
         service = _service(pool, gateway=_FakeGateway())
+
+        async def schema_ready() -> None:
+            return None
+
+        # This route fixture intentionally exercises the persisted handler on
+        # migration-389 shape only. The dedicated real-role test above settles
+        # the stricter 393 readiness predicate and ACL boundary.
+        monkeypatch.setattr(service, "require_schema_ready", schema_ready)
         app = FastAPI()
         app.include_router(funnel_mod.router, prefix="/api/v1")
         app.dependency_overrides[funnel_auth_mod.require_eom_funnel_api] = lambda: None

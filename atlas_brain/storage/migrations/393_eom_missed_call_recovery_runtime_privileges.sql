@@ -19,6 +19,9 @@ DECLARE
     runtime_role_ready BOOLEAN;
     nocodb_role_ready BOOLEAN;
     relation_name TEXT;
+    column_name TEXT;
+    function_signature TEXT;
+    append_only_triggers_ready BOOLEAN;
 BEGIN
     SELECT COALESCE(executor_role.rolsuper, FALSE)
       INTO executor_is_superuser
@@ -113,6 +116,56 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- UPDATE is needed for the worker's existing FOR UPDATE locks. Do not
+    -- grant it until the immutable-evidence triggers from migration 389 are
+    -- present, enabled, and still bound to their rejecting functions.
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_trigger AS trigger
+         WHERE trigger.tgrelid = to_regclass(
+                   format(
+                       '%I.%I',
+                       schema_name,
+                       'eom_missed_call_operation_receipts'
+                   )
+               )
+           AND trigger.tgname = 'trg_prevent_eom_missed_call_operation_receipt_mutation'
+           AND trigger.tgfoid = to_regprocedure(
+               format(
+                   '%I.%I()',
+                   schema_name,
+                   'prevent_eom_missed_call_operation_receipt_mutation'
+               )
+           )
+           AND trigger.tgtype = 27
+           AND trigger.tgenabled = 'O'
+           AND NOT trigger.tgisinternal
+    )
+    AND EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_trigger AS trigger
+         WHERE trigger.tgrelid = to_regclass(
+                   format('%I.%I', schema_name, 'eom_missed_call_attempts')
+               )
+           AND trigger.tgname = 'trg_prevent_eom_missed_call_attempt_mutation'
+           AND trigger.tgfoid = to_regprocedure(
+               format(
+                   '%I.%I()',
+                   schema_name,
+                   'prevent_eom_missed_call_attempt_mutation'
+               )
+           )
+           AND trigger.tgtype = 27
+           AND trigger.tgenabled = 'O'
+           AND NOT trigger.tgisinternal
+    )
+      INTO append_only_triggers_ready;
+
+    IF NOT append_only_triggers_ready THEN
+        RAISE EXCEPTION
+            'append-only receipt and attempt triggers must be intact before running 393_eom_missed_call_recovery_runtime_privileges';
+    END IF;
+
     -- PostgreSQL requires the target owner to hold CREATE on the schema. The
     -- guard remains no-login and membership-isolated, so this grant does not
     -- create an executable path for Atlas or NocoDB.
@@ -148,6 +201,37 @@ BEGIN
             schema_name,
             relation_name
         );
+        -- Table and column ACLs are separate PostgreSQL catalogs. Rebuild the
+        -- entire direct access surface so an old column grant cannot survive
+        -- the table-level revoke and expose recovery evidence to NocoDB.
+        FOR column_name IN
+            SELECT attribute.attname
+              FROM pg_catalog.pg_attribute AS attribute
+             WHERE attribute.attrelid = to_regclass(
+                       format('%I.%I', schema_name, relation_name)
+                   )
+               AND attribute.attnum > 0
+               AND NOT attribute.attisdropped
+        LOOP
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES (%I) ON TABLE %I.%I FROM PUBLIC',
+                column_name,
+                schema_name,
+                relation_name
+            );
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES (%I) ON TABLE %I.%I FROM atlas_nocodb',
+                column_name,
+                schema_name,
+                relation_name
+            );
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES (%I) ON TABLE %I.%I FROM atlas',
+                column_name,
+                schema_name,
+                relation_name
+            );
+        END LOOP;
         EXECUTE format(
             'ALTER TABLE %I.%I OWNER TO atlas_eom_handoff_owner',
             schema_name,
@@ -277,6 +361,25 @@ BEGIN
         'ALTER FUNCTION %I.cancel_eom_missed_call_on_interaction() OWNER TO atlas_eom_handoff_owner',
         schema_name
     );
+
+    -- REVOKE FROM PUBLIC does not remove an explicit old NocoDB EXECUTE
+    -- grant. Clear that direct path on all SECURITY DEFINER bridge helpers.
+    FOR function_signature IN
+        SELECT unnest(ARRAY[
+            'cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)',
+            'lock_eom_missed_call_interaction_contact()',
+            'eom_missed_call_effective_recipient(UUID, TEXT)',
+            'cancel_eom_missed_call_on_recipient_change(UUID)',
+            'cancel_eom_missed_call_on_contact_change()',
+            'cancel_eom_missed_call_on_interaction()'
+        ])
+    LOOP
+        EXECUTE format(
+            'REVOKE ALL ON FUNCTION %I.%s FROM atlas_nocodb',
+            schema_name,
+            function_signature
+        );
+    END LOOP;
 
     -- Direct runtime access intentionally remains narrower than object owner
     -- access. UPDATE on immutable receipt/attempt rows is required for the
