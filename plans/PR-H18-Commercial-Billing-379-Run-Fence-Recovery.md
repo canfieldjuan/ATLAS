@@ -584,6 +584,29 @@ run-isolation defect, or an EOM entrypoint unable to select its prerequisite.
   false/error/healthy-path proof, and exact-status default-helper proof. Keep
   full Unit Gate GitHub-owned.
 
+### Contract correction after foreign-key evidence projection review
+
+- New evidence: current CI and two current Codex threads show that the
+  per-constraint foreign-key predicate is already part of
+  `required_billing_constraints_ready`, but the separately reported
+  `foreign_key_enforcement_ready` was not projected by the final catalog
+  query. The attester therefore read a missing field as false and fenced every
+  real catalog. The isolated test mutation also disables only the referencing
+  relation's two enforcement triggers; the referenced relation's action
+  triggers correctly remain origin-enabled.
+- Corrected root cause: this was incomplete evidence projection plus an
+  over-strong test oracle, not a reason to weaken the four-trigger catalog
+  invariant or widen recovery behavior.
+- Corrected required change surface: project a fail-closed aggregate over the
+  required foreign-key members in the final catalog evidence, preserving the
+  existing exact-four/origin-enabled per-constraint predicate. The real
+  PostgreSQL proof must assert that at least one of the four internal triggers
+  is no longer origin-enabled, which is exactly the condition the predicate
+  rejects. The metadata fake must require both the per-constraint and final
+  projection occurrences.
+- Corrected non-scope: do not modify migration SQL, startup policy, recovery
+  state transitions, schema shape, or any unrelated catalog guard.
+
 ## Scope (this PR)
 
 Ownership lane: h18-migration-content-integrity
@@ -945,10 +968,10 @@ contract; no new hardening mechanism is introduced in this PR.
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1556 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 954 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1570 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 977 |
 | `tests/test_commercial_billing_runs.py` | 1501 |
 | `tests/test_eom_render_profile.py` | 2 |
-| `tests/test_migration_content_integrity_preflight.py` | 624 |
+| `tests/test_migration_content_integrity_preflight.py` | 625 |
 | `tests/test_migrations_runner.py` | 1033 |
-| **Total** | **6308** |
+| **Total** | **6346** |

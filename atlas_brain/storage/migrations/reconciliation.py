@@ -3444,6 +3444,20 @@ async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]
                           IS DISTINCT FROM expected_check.normalized_expression
                 )
             ) AS required_billing_constraints_ready,
+            NOT EXISTS (
+                SELECT 1
+                FROM required_constraints AS expected_constraint
+                LEFT JOIN target_constraints AS actual_constraint
+                  ON actual_constraint.relation_name = expected_constraint.relation_name
+                 AND actual_constraint.constraint_name = expected_constraint.constraint_name
+                WHERE expected_constraint.constraint_type = 'f'
+                  AND (
+                      actual_constraint.constraint_name IS NULL
+                      OR actual_constraint.constraint_type IS DISTINCT FROM 'f'
+                      OR actual_constraint.foreign_key_enforcement_ready
+                         IS DISTINCT FROM TRUE
+                  )
+            ) AS foreign_key_enforcement_ready,
             (
                 SELECT no_unreviewed_billing_constraints
                 FROM unreviewed_constraints

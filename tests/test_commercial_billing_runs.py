@@ -3119,7 +3119,7 @@ async def test_real_postgres_historical_379_rejects_incomplete_catalog_before_39
                     """
                     SELECT COUNT(*) = 4
                        AND bool_and(trigger_state.tgisinternal)
-                       AND bool_and(trigger_state.tgenabled <> 'O'::\"char\")
+                       AND bool_or(trigger_state.tgenabled <> 'O'::\"char\")
                     FROM pg_catalog.pg_trigger AS trigger_state
                     WHERE trigger_state.tgconstraint = (
                         SELECT constraint_state.oid

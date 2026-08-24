@@ -774,7 +774,8 @@ class _Migration379PreflightConnection:
         assert "constraint_trigger.tgconstraint = constraint_state.oid" in query
         assert "constraint_trigger.tgisinternal" in query
         assert "constraint_trigger.tgenabled = 'O'::\"char\"" in query
-        assert "foreign_key_enforcement_ready" in query
+        assert query.count("AS foreign_key_enforcement_ready") == 2
+        assert "WHERE expected_constraint.constraint_type = 'f'" in query
         assert "required_indexes" in query
         assert "index_state.indpred IS NULL AS has_no_predicate" in query
         assert "OR NOT actual_index.has_no_predicate" in query
