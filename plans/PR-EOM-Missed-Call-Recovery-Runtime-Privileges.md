@@ -142,11 +142,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_missed_call_recovery.py`
 - `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql`
-- `scripts/apply_eom_missed_call_recovery_runtime_privileges.py`
 - `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md`
 - `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md`
-- `tests/test_eom_missed_call_recovery.py`
+- `scripts/apply_eom_missed_call_recovery_runtime_privileges.py`
 - `tests/test_eom_missed_call_privilege_runner.py`
+- `tests/test_eom_missed_call_recovery.py`
 - `tests/test_eom_render_profile.py`
 
 ## Mechanism
@@ -213,6 +213,21 @@ Parked hardening: none.
 - `git diff --check` and the repository mechanical review wrapper remain
   required before publishing. No production database, role, migration, or
   service restart was touched by this source slice.
+
+## Estimated diff size
+
+| File | LOC |
+|---|---:|
+| `atlas_brain/main_eom.py` | 11 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 191 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 414 |
+| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 44 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 238 |
+| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 174 |
+| `tests/test_eom_missed_call_privilege_runner.py` | 158 |
+| `tests/test_eom_missed_call_recovery.py` | 563 |
+| `tests/test_eom_render_profile.py` | 3 |
+| **Total** | **1796** |
 
 ## Diff size rationale
 
