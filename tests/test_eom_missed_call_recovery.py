@@ -483,6 +483,9 @@ async def test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled
     async def run_recovery_migrations() -> None:
         events.append("recovery-migrations")
 
+    async def run_completion_migrations() -> None:
+        events.append("completion-migrations")
+
     async def prepare(*, pool: object, config: EOMFunnelConfig) -> None:
         assert pool is not None
         assert config.missed_call_recovery_enabled is False
@@ -520,6 +523,11 @@ async def test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled
         "_run_eom_missed_call_recovery_startup_migrations",
         run_recovery_migrations,
     )
+    monkeypatch.setattr(
+        main_eom,
+        "_run_eom_first_clean_completion_startup_migrations",
+        run_completion_migrations,
+    )
     monkeypatch.setattr(main_eom, "get_eom_funnel_db_pool", lambda: pool)
     monkeypatch.setattr(
         recovery_mod, "prepare_eom_missed_call_recovery_worker", prepare
@@ -528,7 +536,12 @@ async def test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled
     async with main_eom.lifespan(FastAPI()):
         events.append("inside")
 
-    assert events == ["recovery-migrations", "prepare-disabled", "inside"]
+    assert events == [
+        "recovery-migrations",
+        "completion-migrations",
+        "prepare-disabled",
+        "inside",
+    ]
 
 
 @pytest.mark.asyncio
