@@ -133,6 +133,11 @@ present while the superseded team-lead and `right away` wording are absent.
 
 - None.
 
+Parking predicate: this copy-only slice parks customer-type routing,
+localization, delivery/lifecycle, and broader CRM/template hardening unless it
+directly prevents future shared EOM first-clean drafts from conveying the
+post-service quality-check instruction without a clock promise.
+
 Parked hardening: none.
 
 ## Verification
