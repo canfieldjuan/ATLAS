@@ -2399,9 +2399,10 @@ def test_onboarding_welcome_asks_for_post_cleaning_quality_check():
 
     assert (
         "3. After we finish, please take a walk through the space and let us know if\n"
-        "anything needs attention. We'll take care of it right away."
+        "anything needs attention. We'll take care of it."
     ) in body
     assert "Walk the space with your team lead at the start or end" not in body
+    assert "right away" not in body
 
 
 @pytest.mark.asyncio

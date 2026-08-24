@@ -33,7 +33,7 @@ instructions and come back to a finished space. If you'd rather be present
 for the first visit, that works too.
 
 3. After we finish, please take a walk through the space and let us know if
-anything needs attention. We'll take care of it right away.
+anything needs attention. We'll take care of it.
 
 4. After the first cleaning, tell us what you thought. We adjust to your
 feedback, and there's no long-term contract holding you here - we keep the
