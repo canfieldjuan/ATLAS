@@ -41,6 +41,7 @@ can report a structurally present but unusable schema as ready.
 
 Ownership lane: eom/missed-call-recovery-runtime-privileges
 Slice phase: Production hardening
+Max files: 9
 
 1. Add the additive recovery-ACL migration and security-definer trigger bridge.
 2. Make readiness fail closed when the runtime role cannot execute the service's
@@ -222,12 +223,12 @@ Parked hardening: none.
 | `atlas_brain/services/eom_missed_call_recovery.py` | 191 |
 | `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 414 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 44 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 238 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 239 |
 | `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 174 |
 | `tests/test_eom_missed_call_privilege_runner.py` | 158 |
 | `tests/test_eom_missed_call_recovery.py` | 563 |
 | `tests/test_eom_render_profile.py` | 3 |
-| **Total** | **1796** |
+| **Total** | **1797** |
 
 ## Diff size rationale
 
