@@ -483,8 +483,10 @@ Max files: 12
    391-to-392 interaction, 386 ordering, and rejection of unrecognized drift.
 5. Enroll the dedicated disposable PostgreSQL regression in the existing
    migration job and add the new migration to existing EOM path coverage.
-6. Re-attest 392 inside its atomic receipt transaction after locking every
-   relation and trigger-function catalog surface covered by the 379 predicate.
+6. Re-attest both selected 391 and 392 recoveries inside their atomic receipt
+   transactions after locking the reviewed application relations and replaying
+   only the exact, owner-replaceable trigger definitions that passed the closed
+   379 predicate. Do not require a normal migration role to lock `pg_proc`.
 
 ### Review Contract
 
@@ -630,20 +632,26 @@ migration-382 contract. No table rows, financial history, invoices, payments,
 or ledger facts are rewritten. The normal runner records the new migration
 digest in the same transaction.
 
-Migration 392 is also `atomic-bookkeeping`. Before its SQL can run, the runner
-enters that same atomic transaction, locks the four reviewed billing relations
-and `pg_catalog.pg_proc`, repeats the canonical 379 catalog predicate, and sets
-a transaction-local active-schema marker. The migration refuses to bind or
-receipt without that marker. It then re-checks that the active-schema function
-is the reviewed 391 body with either no function-local configuration or the
-exact desired configuration, pins its local `search_path` to `pg_catalog`, the
-active schema, and `pg_temp`, and re-reads the body/configuration postcondition
-before the normal runner records its digest. It changes no table rows. The
-relation locks exclude concurrent table, trigger, policy, constraint, index, and
-rewrite DDL; the `pg_proc` lock serializes the three reviewed trigger functions'
-DDL for the receipt boundary. The observer allows no other execution metadata
-or function-local setting and rejects every non-`_RETURN` invoice rewrite rule
-as well as every extra row-level before-insert invoice trigger.
+Both selected recoveries are `atomic-bookkeeping`. Before either 391 or 392 SQL
+can run, the runner enters that same atomic transaction, locks the four reviewed
+billing relations plus `schema_migrations`, reads the three required trigger
+definitions only when their bodies, execution metadata, and owner-replaceability
+match the closed 379 predicate, and replays those exact definitions. PostgreSQL
+holds the resulting function-row locks through the receipt, so competing
+`CREATE OR REPLACE FUNCTION` or `ALTER FUNCTION` waits without requiring a
+normal migration role to lock `pg_catalog.pg_proc`. The runner then repeats the
+canonical 379 predicate for the exact state selected: `recovery_required` for
+391 and `schema_binding_required` for 392. Only 392 receives the
+transaction-local active-schema marker. It refuses to bind or receipt without
+that marker, verifies the reviewed 391 body/configuration, pins its local
+`search_path` to `pg_catalog`, the active schema, and `pg_temp`, and re-reads
+the body/configuration postcondition before the normal runner records its
+digest. It changes no table rows. The application-relation locks exclude
+concurrent table, trigger, policy, constraint, index, rewrite, ledger, and
+receipt changes; the owner-replayed definitions close the named trigger-function
+DDL race. The observer allows no other execution metadata or function-local
+setting and rejects every non-`_RETURN` invoice rewrite rule as well as every
+extra row-level before-insert invoice trigger.
 
 The selector remains closed rather than becoming a generic exception system.
 It may choose 391 only for the exact known legacy state, then may choose 392
@@ -692,18 +700,20 @@ deployment sequence.
   the recovered invoice fence transitions only from empty to its exact active-
   schema `search_path` under 392's own receipt. `prosrc` and OID equality alone
   do not constrain ambient caller resolution or a changed security context.
-- Make the 392 receipt conditional on the catalog still matching the canonical
-  predicate inside its atomic transaction. The process-wide migration advisory
-  lock serializes cooperative runners only; target relation plus `pg_proc` locks
-  close the remaining direct-DDL race without broadening this recovery into a
-  global migration framework.
+- Make each 391/392 receipt conditional on the catalog still matching the
+  canonical predicate inside its atomic transaction. The process-wide migration
+  advisory lock serializes cooperative runners only; target relation locks plus
+  exact owner-replayed function definitions close the remaining named direct-DDL
+  race without broadening this recovery into a global migration framework or
+  requiring system-catalog write privileges.
 
 ## Deferred
 
 - #2363: a general cross-product schema-change coordinator remains outside this
-  recovery. This slice closes the named 392 receipt boundary with target
-  relation and `pg_proc` locks plus in-transaction canonical re-attestation; it
-  does not impose a new global DDL protocol on unrelated Atlas migrations.
+  recovery. This slice closes the named 391/392 receipt boundaries with target
+  relation locks, owner-replayed trigger definitions, and in-transaction
+  canonical re-attestation; it does not impose a new global DDL protocol on
+  unrelated Atlas migrations.
 - The current target's 391 execution was observed only through its exact ledger
   receipt and catalog result; repository evidence cannot determine its operator
   or change-control record. The receipt/digest is recorded in #2476. A protected
@@ -720,11 +730,14 @@ Parked hardening: none.
   PostgreSQL recovery test when its isolated test URL is available, Python
   syntax, Ruff, plan sync, whitespace, and contract checks. GitHub owns the
   full Unit Gate and remaining required checks; no duplicate local Unit Gate.
-- The controlled PostgreSQL recovery suite includes both guard sides for 392:
-  direct SQL without the runner's transaction-local catalog proof fails before
-  the function can be pinned, and a second connection creates an unreviewed
-  index after the outer selector but before the in-transaction lock. The runner
-  must refuse that stale state without recording 392.
+- The controlled PostgreSQL recovery suite covers both selected receipts and
+  both synchronization boundaries: direct SQL without 392's transaction-local
+  catalog proof fails before the function can be pinned; a second connection
+  can drop the reviewed override constraint after the outer selector but before
+  391 takes its locks; and second-session `CREATE OR REPLACE FUNCTION` and
+  `ALTER FUNCTION` operations time out while the preflight holds the validated
+  function rows. The same path passes as a non-superuser role that owns the
+  schema objects, proving no `pg_proc` table lock is required.
 - Historical target proof before the schema-binding predicate: a read-only
   `scripts/check_migration_content_integrity.py` receipt against the exact
   configured target showed 391's exact source digest and the then-current 379
@@ -751,10 +764,10 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql` | 343 |
 | `atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql` | 123 |
 | `atlas_brain/storage/migrations/__init__.py` | 32 |
-| `atlas_brain/storage/migrations/reconciliation.py` | 1281 |
-| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 760 |
-| `tests/test_commercial_billing_runs.py` | 741 |
+| `atlas_brain/storage/migrations/reconciliation.py` | 1432 |
+| `plans/PR-H18-Commercial-Billing-379-Run-Fence-Recovery.md` | 773 |
+| `tests/test_commercial_billing_runs.py` | 1006 |
 | `tests/test_eom_render_profile.py` | 2 |
 | `tests/test_migration_content_integrity_preflight.py` | 571 |
-| `tests/test_migrations_runner.py` | 831 |
-| **Total** | **4708** |
+| `tests/test_migrations_runner.py` | 921 |
+| **Total** | **5227** |

@@ -3067,6 +3067,271 @@ async def test_real_postgres_historical_379_commercial_billing_run_fence_recover
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "function_ddl",
+    [
+        (
+            "CREATE OR REPLACE FUNCTION "
+            "prevent_commercial_billing_review_decision_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN RETURN OLD; END; "
+            "$tampered$"
+        ),
+        (
+            "ALTER FUNCTION prevent_commercial_billing_review_decision_mutation() "
+            "SET search_path TO pg_catalog"
+        ),
+    ],
+)
+async def test_real_postgres_historical_379_atomic_preflight_blocks_function_ddl(
+    function_ddl,
+):
+    """The owner-replayed definitions hold their pg_proc rows through receipt."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations.reconciliation import (
+        reattest_historical_forward_recovery_in_atomic_transaction,
+    )
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+        await drift_conn.execute("SET lock_timeout = '100ms'")
+        try:
+            async with conn.transaction():
+                await reattest_historical_forward_recovery_in_atomic_transaction(
+                    conn,
+                    migration_name=record.recovery_migration_name,
+                    migration_files=sorted(migrations_dir.glob("*.sql")),
+                )
+                with pytest.raises(
+                    asyncpg.PostgresError,
+                    match="lock timeout",
+                ):
+                    await drift_conn.execute(function_ddl)
+        finally:
+            await drift_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_atomic_preflight_runs_as_function_owner():
+    """391/392 need only the owner privileges already needed to replace functions."""
+    pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, _database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        migration_owner = f"billing_379_migration_owner_{uuid4().hex}"
+        schema_identifier = f'"{schema}"'
+        owner_identifier = f'"{migration_owner}"'
+        await conn.execute(f"CREATE ROLE {owner_identifier} NOLOGIN NOSUPERUSER")
+        try:
+            await conn.execute(
+                f"ALTER SCHEMA {schema_identifier} OWNER TO {owner_identifier}"
+            )
+            await conn.execute(
+                f"""
+                DO $transfer_billing_schema_ownership$
+                DECLARE
+                    relation_state RECORD;
+                    function_state RECORD;
+                BEGIN
+                    FOR relation_state IN
+                        SELECT class_state.relname, class_state.relkind
+                        FROM pg_catalog.pg_class AS class_state
+                        JOIN pg_catalog.pg_namespace AS namespace_state
+                          ON namespace_state.oid = class_state.relnamespace
+                        WHERE namespace_state.nspname = '{schema}'
+                          AND class_state.relkind IN ('r', 'p', 'S')
+                    LOOP
+                        IF relation_state.relkind = 'S' THEN
+                            EXECUTE pg_catalog.format(
+                                'ALTER SEQUENCE %1$I.%2$I OWNER TO %3$I',
+                                '{schema}', relation_state.relname, '{migration_owner}'
+                            );
+                        ELSE
+                            EXECUTE pg_catalog.format(
+                                'ALTER TABLE %1$I.%2$I OWNER TO %3$I',
+                                '{schema}', relation_state.relname, '{migration_owner}'
+                            );
+                        END IF;
+                    END LOOP;
+
+                    FOR function_state IN
+                        SELECT function_catalog.proname,
+                               pg_catalog.pg_get_function_identity_arguments(
+                                   function_catalog.oid
+                               ) AS identity_arguments
+                        FROM pg_catalog.pg_proc AS function_catalog
+                        JOIN pg_catalog.pg_namespace AS namespace_state
+                          ON namespace_state.oid = function_catalog.pronamespace
+                        WHERE namespace_state.nspname = '{schema}'
+                    LOOP
+                        EXECUTE pg_catalog.format(
+                            'ALTER FUNCTION %1$I.%2$I(%3$s) OWNER TO %4$I',
+                            '{schema}',
+                            function_state.proname,
+                            function_state.identity_arguments,
+                            '{migration_owner}'
+                        );
+                    END LOOP;
+                END;
+                $transfer_billing_schema_ownership$;
+                """
+            )
+            await conn.execute(f"SET ROLE {owner_identifier}")
+            assert (
+                await conn.fetchval(
+                    "SELECT rolsuper FROM pg_catalog.pg_roles "
+                    "WHERE rolname = CURRENT_USER"
+                )
+                is False
+            )
+
+            record, _legacy_body = await _stage_historical_379_legacy_recovery_state(
+                conn
+            )
+            migrations_dir = (
+                Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+            )
+            pool = _SchemaPool(conn, schema)
+
+            with pytest.raises(
+                PendingMigrationContentIntegrityError,
+                match="after historical forward recovery",
+            ):
+                await run_migrations(
+                    pool,
+                    migrations_dir=migrations_dir,
+                    only={
+                        record.recovery_migration_name,
+                        record.schema_binding_migration_name,
+                    },
+                )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.recovery_migration_name,
+                )
+                == 1
+            )
+
+            await run_migrations(
+                pool,
+                migrations_dir=migrations_dir,
+                only={record.schema_binding_migration_name},
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.schema_binding_migration_name,
+                )
+                == 1
+            )
+            assert (
+                await _attest_migration_379(
+                    conn,
+                    sorted(migrations_dir.glob("*.sql")),
+                )
+            ).status == "attested"
+        finally:
+            await conn.execute("RESET ROLE")
+            await conn.execute(f"DROP SCHEMA IF EXISTS {schema_identifier} CASCADE")
+            await conn.execute(f"DROP ROLE IF EXISTS {owner_identifier}")
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_recovery_rechecks_catalog_after_selection():
+    """A concurrent constraint drop cannot consume the one-time 391 receipt."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+
+        class _CatalogDriftInjectingConnection:
+            """Commit catalog drift after selection, before 391 takes its locks."""
+
+            def __init__(self) -> None:
+                self.drift_injected = False
+
+            async def execute(self, query, *args):
+                if "$migration_379_catalog_lock$" in query and not self.drift_injected:
+                    await drift_conn.execute(
+                        "ALTER TABLE commercial_billing_candidate_overrides "
+                        "DROP CONSTRAINT "
+                        "commercial_billing_candidate_overrides_revision_key"
+                    )
+                    self.drift_injected = True
+                return await conn.execute(query, *args)
+
+            async def fetch(self, query, *args):
+                return await conn.fetch(query, *args)
+
+            async def fetchrow(self, query, *args):
+                return await conn.fetchrow(query, *args)
+
+            async def fetchval(self, query, *args):
+                return await conn.fetchval(query, *args)
+
+            def transaction(self):
+                return conn.transaction()
+
+        wrapped_conn = _CatalogDriftInjectingConnection()
+
+        class _CatalogDriftSchemaPool(_SchemaPool):
+            async def acquire(self):
+                await wrapped_conn.execute(f'SET search_path TO "{self.schema}"')
+                return wrapped_conn
+
+            async def release(self, released) -> None:
+                assert released is wrapped_conn
+
+        try:
+            race_pool = _CatalogDriftSchemaPool(conn, schema)
+            with pytest.raises(
+                PendingMigrationContentIntegrityError,
+                match="catalog changed after selection",
+            ):
+                await run_migrations(
+                    race_pool,
+                    migrations_dir=migrations_dir,
+                    only={record.recovery_migration_name},
+                )
+
+            assert wrapped_conn.drift_injected is True
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.recovery_migration_name,
+                )
+                == 0
+            )
+            assert (
+                await _attest_migration_379(
+                    conn,
+                    sorted(migrations_dir.glob("*.sql")),
+                )
+            ).status == "not_attested"
+        finally:
+            await drift_conn.close()
+
+
+@pytest.mark.asyncio
 async def test_real_postgres_historical_379_schema_binding_rechecks_catalog_after_selection():
     """A concurrent catalog change cannot consume the one-time 392 receipt."""
     asyncpg = pytest.importorskip("asyncpg")

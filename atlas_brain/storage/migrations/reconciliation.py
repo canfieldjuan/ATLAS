@@ -3639,24 +3639,167 @@ async def _attest_migration_379(
     )
 
 
+_MIGRATION_379_ATOMIC_FUNCTION_NAMES = (
+    "prevent_commercial_billing_candidate_override_mutation",
+    "prevent_commercial_billing_invoice_for_excluded_candidate",
+    "prevent_commercial_billing_review_decision_mutation",
+)
+
+
+async def _migration_379_atomic_function_definitions(
+    executor: Any,
+    *,
+    expected_invoice_fence_body_sha256: str,
+) -> tuple[str, ...]:
+    """Return only owner-replayable, catalog-attested trigger definitions.
+
+    PostgreSQL deliberately does not grant a normal application/migration role
+    write-class ``LOCK TABLE`` access to ``pg_catalog.pg_proc``. Replaying the
+    exact, already-validated definition instead takes the function row lock
+    that conflicts with ``CREATE OR REPLACE FUNCTION`` and ``ALTER FUNCTION``.
+    The definition is read and validated before replay, so an untrusted catalog
+    change can never be executed as migration SQL.
+    """
+
+    rows = [
+        dict(row)
+        for row in await executor.fetch(
+            """
+            WITH expected_invoice_fence_config AS (
+                SELECT ARRAY[
+                    pg_catalog.format(
+                        'search_path=pg_catalog, %I, pg_temp',
+                        pg_catalog.current_schema()
+                    )
+                ]::text[] AS function_proconfig
+            )
+            SELECT function_state.proname AS function_name,
+                   function_state.prosrc AS function_body,
+                   pg_catalog.pg_get_functiondef(function_state.oid)
+                       AS function_definition,
+                   pg_catalog.pg_has_role(
+                       CURRENT_USER,
+                       function_state.proowner,
+                       'MEMBER'
+                   ) AS current_role_can_replace
+            FROM pg_catalog.pg_proc AS function_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = function_state.pronamespace
+            JOIN pg_catalog.pg_language AS language_state
+              ON language_state.oid = function_state.prolang
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND function_state.proname IN (
+                  'prevent_commercial_billing_invoice_for_excluded_candidate',
+                  'prevent_commercial_billing_review_decision_mutation',
+                  'prevent_commercial_billing_candidate_override_mutation'
+              )
+              AND function_state.pronargs = 0
+              AND function_state.prorettype = 'trigger'::pg_catalog.regtype
+              AND function_state.prokind = 'f'
+              AND language_state.lanname = 'plpgsql'
+              AND function_state.provolatile = 'v'
+              AND NOT function_state.proisstrict
+              AND NOT function_state.prosecdef
+              AND NOT function_state.proleakproof
+              AND function_state.proparallel = 'u'
+              AND function_state.prosupport IS NOT DISTINCT FROM 0::pg_catalog.oid
+              AND (
+                  (
+                      function_state.proname =
+                          'prevent_commercial_billing_invoice_for_excluded_candidate'
+                      AND (
+                          COALESCE(function_state.proconfig, ARRAY[]::text[])
+                              = ARRAY[]::text[]
+                          OR COALESCE(function_state.proconfig, ARRAY[]::text[])
+                              = (
+                                  SELECT function_proconfig
+                                  FROM expected_invoice_fence_config
+                              )
+                      )
+                  )
+                  OR (
+                      function_state.proname <>
+                          'prevent_commercial_billing_invoice_for_excluded_candidate'
+                      AND COALESCE(function_state.proconfig, ARRAY[]::text[])
+                          = ARRAY[]::text[]
+                  )
+              )
+            ORDER BY function_state.proname
+            """
+        )
+    ]
+    observed_names = tuple(row["function_name"] for row in rows)
+    if observed_names != _MIGRATION_379_ATOMIC_FUNCTION_NAMES:
+        raise HistoricalForwardRecoveryAtomicPreflightError(
+            "the exact owner-replayable 379 trigger-function set was not present"
+        )
+
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    expected_body_sha256 = {
+        "prevent_commercial_billing_candidate_override_mutation": (
+            record.override_history_guard_function_body_sha256
+        ),
+        "prevent_commercial_billing_invoice_for_excluded_candidate": (
+            expected_invoice_fence_body_sha256
+        ),
+        "prevent_commercial_billing_review_decision_mutation": (
+            record.review_decision_history_guard_function_body_sha256
+        ),
+    }
+    function_definitions: list[str] = []
+    for row in rows:
+        function_name = row["function_name"]
+        if not row["current_role_can_replace"]:
+            raise HistoricalForwardRecoveryAtomicPreflightError(
+                "the migration role cannot replay the attested 379 trigger functions"
+            )
+        if (
+            _catalog_function_body_sha256(row["function_body"])
+            != expected_body_sha256[function_name]
+        ):
+            raise HistoricalForwardRecoveryAtomicPreflightError(
+                "the 379 trigger-function body changed before its atomic receipt"
+            )
+        function_definition = row["function_definition"]
+        if not isinstance(function_definition, str) or not function_definition.strip():
+            raise HistoricalForwardRecoveryAtomicPreflightError(
+                "the 379 trigger-function definition could not be safely replayed"
+            )
+        function_definitions.append(function_definition)
+    return tuple(function_definitions)
+
+
 async def reattest_historical_forward_recovery_in_atomic_transaction(
     executor: Any,
     *,
     migration_name: str,
     migration_files: Collection[Path],
 ) -> None:
-    """Close the 392 select-to-receipt catalog race inside its transaction.
+    """Close the selected 391/392 catalog race inside its receipt transaction.
 
     ``run_migrations`` holds the process-wide migration advisory lock, but that
     lock intentionally does not govern a separate session's direct catalog DDL.
-    The 392 receipt must therefore acquire real relation locks, repeat the
-    canonical 379 predicate, and leave a transaction-local proof for the SQL
-    migration before it can alter the fence or record its irreversible receipt.
+    Relation locks stabilize tables, constraints, indexes, rules, triggers, and
+    receipts. Exact owner-replayed trigger definitions stabilize the associated
+    ``pg_proc`` rows without requiring a superuser-only system-catalog lock.
+    The canonical 379 predicate is then re-attested before the selected SQL or
+    its irreversible receipt may run.
     """
 
     record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
-    if migration_name != record.schema_binding_migration_name:
+    expected_recovery_state = {
+        record.recovery_migration_name: (
+            "recovery_required",
+            record.legacy_function_body_sha256,
+        ),
+        record.schema_binding_migration_name: (
+            "schema_binding_required",
+            record.recovered_function_body_template_sha256,
+        ),
+    }.get(migration_name)
+    if expected_recovery_state is None:
         return
+    expected_status, expected_invoice_fence_body_sha256 = expected_recovery_state
 
     await executor.execute(
         """
@@ -3669,13 +3812,12 @@ async def reattest_historical_forward_recovery_in_atomic_transaction(
                     'Cannot re-attest commercial billing fence without an active schema';
             END IF;
 
-            -- Keep every relation and trigger function that contributes to the
-            -- closed 379 catalog predicate stable through the later ALTER
-            -- FUNCTION and migration receipt. The pg_proc lock serializes
-            -- function DDL; SHARE ROW EXCLUSIVE also excludes index DDL.
-            LOCK TABLE pg_catalog.pg_proc IN SHARE ROW EXCLUSIVE MODE;
+            -- SHARE ROW EXCLUSIVE excludes concurrent relation DDL and writes
+            -- through the final receipt while remaining self-compatible with
+            -- this atomic recovery's own function/trigger/ledger changes.
             EXECUTE pg_catalog.format(
                 'LOCK TABLE '
+                || '%1$I.schema_migrations, '
                 || '%1$I.commercial_billing_candidate_overrides, '
                 || '%1$I.commercial_billing_candidate_review_decisions, '
                 || '%1$I.commercial_billing_run_candidates, '
@@ -3688,18 +3830,27 @@ async def reattest_historical_forward_recovery_in_atomic_transaction(
         """
     )
 
+    function_definitions = await _migration_379_atomic_function_definitions(
+        executor,
+        expected_invoice_fence_body_sha256=expected_invoice_fence_body_sha256,
+    )
+    for function_definition in function_definitions:
+        await executor.execute(function_definition)
+
     attestation = await _attest_migration_379(executor, migration_files)
-    if attestation.status != "schema_binding_required":
+    if attestation.status != expected_status:
         raise HistoricalForwardRecoveryAtomicPreflightError(
-            "the exact 392 schema-binding state was not present after acquiring "
-            f"the billing catalog locks (observed={attestation.status})"
+            "the exact 379 recovery state was not present after acquiring the "
+            f"atomic catalog locks (expected={expected_status}, "
+            f"observed={attestation.status})"
         )
 
-    await executor.execute(
-        "SELECT pg_catalog.set_config("
-        "'atlas.migration_379_catalog_attestation_schema', "
-        "pg_catalog.current_schema(), TRUE)"
-    )
+    if migration_name == record.schema_binding_migration_name:
+        await executor.execute(
+            "SELECT pg_catalog.set_config("
+            "'atlas.migration_379_catalog_attestation_schema', "
+            "pg_catalog.current_schema(), TRUE)"
+        )
 
 
 async def _migration_386_catalog_evidence(executor: Any) -> Mapping[str, object]:
