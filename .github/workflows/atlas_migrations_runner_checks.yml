@@ -12,6 +12,7 @@ on:
       - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"
+      - "tests/test_commercial_billing_runs.py"
       - "tests/test_b2b_company_signal_promotion_migration_repair.py"
       - "tests/test_b2b_watchlist_alert_events_migration_repair.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
@@ -26,6 +27,7 @@ on:
       - "scripts/check_migration_content_integrity.py"
       - "tests/test_migrations_runner.py"
       - "tests/test_migration_content_integrity_preflight.py"
+      - "tests/test_commercial_billing_runs.py"
       - "tests/test_b2b_company_signal_promotion_migration_repair.py"
       - "tests/test_b2b_watchlist_alert_events_migration_repair.py"
       - "tests/test_eom_public_onboarding_migration_repair.py"
@@ -50,6 +52,7 @@ jobs:
           --health-retries 5
     env:
       ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
+      ATLAS_RECEIVABLES_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -63,7 +66,14 @@ jobs:
       - name: Install runtime dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install asyncpg pytest pytest-asyncio pydantic pydantic-settings
+          python -m pip install \
+            asyncpg \
+            fastapi==0.139.0 \
+            httpx==0.28.1 \
+            pytest \
+            pytest-asyncio \
+            pydantic \
+            pydantic-settings
 
       # The runner tests mostly use a fake pool, but this disposable service also
       # executes the public-onboarding legacy-schema repair against PostgreSQL.
@@ -76,4 +86,8 @@ jobs:
             tests/test_b2b_watchlist_alert_events_migration_repair.py \
             tests/test_eom_public_onboarding_migration_repair.py \
             tests/test_presence_unknown_count_migration_repair.py \
+            -q
+          python -m pytest \
+            tests/test_commercial_billing_runs.py \
+            -k "historical_379" \
             -q

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import ast
 import copy
+import hashlib
 import inspect
 import json
 import os
@@ -1903,29 +1904,88 @@ async def test_full_atlas_migration_check_blocks_enabled_receivables_without_rec
 
 
 @pytest.mark.asyncio
+async def test_full_atlas_migration_check_blocks_enabled_receivables_without_392_schema_binding():
+    """A 391-only recovery cannot leave the full receivables API serving."""
+    from atlas_brain import main
+
+    events: list[str] = []
+    ledger_queries: list[str] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            assert args in {
+                (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,),
+            }
+            ledger_queries.append(args[0])
+            events.append("ledger")
+            return args in {
+                (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,),
+            }
+
+    async def fail_after_391(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+        raise RuntimeError("392 schema binding remains pending")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="run-fence schema binding must complete",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=True,
+            run_migrations_fn=fail_after_391,
+            close_database_fn=close_database,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert ledger_queries == [
+        main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+        main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+        main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+    ]
+    assert events == ["migrate", "ledger", "ledger", "ledger", "close"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     (
         "migration_fails",
         "receivables_api_enabled",
-        "recovery_recorded",
+        "review_recovery_recorded",
+        "run_fence_recovery_recorded",
+        "schema_binding_recorded",
+        "run_fence_attested",
         "dedup_ready",
         "expected_events",
         "expected_ledger_migrations",
     ),
     (
-        # receivables_api_enabled=True requires review-recovery migration 382
-        # plus recurring-writer dedup readiness, not a base receivables
-        # migration-385 ledger check.
-        (True, True, True, True, ["migrate", "ledger", "recurring-ready"], "recovery"),
-        (False, True, True, True, ["migrate", "ledger", "recurring-ready"], "recovery"),
-        (True, False, False, False, ["migrate"], "none"),
-        (False, False, False, False, ["migrate"], "none"),
+        # Receivables always require 382. A recorded 391 changes the recovery
+        # state and therefore makes its 392 schema-binding successor required.
+        # An ordinary healthy catalog records neither reserved receipt.
+        (True, True, True, False, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
+        (False, True, True, False, False, False, True, ["migrate", "ledger", "ledger", "recurring-ready"], "healthy"),
+        (True, True, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "attested", "recurring-ready"], "recovered"),
+        (False, True, True, True, True, True, True, ["migrate", "ledger", "ledger", "ledger", "attested", "recurring-ready"], "recovered"),
+        (True, False, False, False, False, False, False, ["migrate"], "none"),
+        (False, False, False, False, False, False, False, ["migrate"], "none"),
     ),
 )
 async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivables(
     migration_fails: bool,
     receivables_api_enabled: bool,
-    recovery_recorded: bool,
+    review_recovery_recorded: bool,
+    run_fence_recovery_recorded: bool,
+    schema_binding_recorded: bool,
+    run_fence_attested: bool,
     dedup_ready: bool,
     expected_events: list[str],
     expected_ledger_migrations: str,
@@ -1938,10 +1998,18 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
     class _Pool:
         async def fetchval(self, query: str, *args: object) -> bool:
             assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
-            assert args == (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,)
+            assert args in {
+                (main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,),
+                (main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,),
+            }
             ledger_queries.append(args[0])
             events.append("ledger")
-            return recovery_recorded
+            return {
+                main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION: review_recovery_recorded,
+                main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION: run_fence_recovery_recorded,
+                main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION: schema_binding_recorded,
+            }[args[0]]
 
     async def fail_migrations(pool: object) -> None:
         assert isinstance(pool, _Pool)
@@ -1957,21 +2025,159 @@ async def test_full_atlas_migration_check_allows_recovered_or_disabled_receivabl
         events.append("recurring-ready")
         return dedup_ready
 
+    async def current_run_fence_attestation(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("attested")
+        return run_fence_attested
+
     await main._run_database_migration_check(
         _Pool(),
         receivables_api_enabled=receivables_api_enabled,
         run_migrations_fn=fail_migrations,
         close_database_fn=close_database,
         recurring_dedup_ready_fn=recurring_ready,
+        commercial_billing_run_fence_attested_fn=current_run_fence_attestation,
     )
 
     assert events == expected_events
-    if expected_ledger_migrations == "recovery":
+    if expected_ledger_migrations == "healthy":
         assert ledger_queries == [
             main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+            main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+        ]
+    elif expected_ledger_migrations == "recovered":
+        assert ledger_queries == [
+            main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+            main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+            main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
         ]
     else:
         assert ledger_queries == []
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_migration_check_blocks_recovered_receivables_when_379_is_no_longer_attested():
+    """Receipts alone cannot leave a drifted 379/391/392 fence serving."""
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            return args[0] in {
+                main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+            }
+
+    async def rejected_migrations(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+        raise RuntimeError("379 catalog is not attested")
+
+    async def current_run_fence_attestation(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("attested")
+        return False
+
+    async def close_database() -> None:
+        events.append("close")
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="must remain currently attested",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=True,
+            run_migrations_fn=rejected_migrations,
+            close_database_fn=close_database,
+            commercial_billing_run_fence_attested_fn=current_run_fence_attestation,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert events == ["migrate", "attested", "close"]
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_migration_check_fails_closed_when_current_379_attestation_errors():
+    """A read failure cannot degrade the recovered receivables fence to a warning."""
+    from atlas_brain import main
+
+    events: list[str] = []
+
+    class _Pool:
+        async def fetchval(self, query: str, *args: object) -> bool:
+            assert query == "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)"
+            return args[0] in {
+                main._COMMERCIAL_BILLING_REVIEW_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION,
+                main._COMMERCIAL_BILLING_RUN_FENCE_SCHEMA_BINDING_MIGRATION,
+            }
+
+    async def migrations_complete(pool: object) -> None:
+        assert isinstance(pool, _Pool)
+        events.append("migrate")
+
+    async def current_run_fence_attestation(pool: object) -> bool:
+        assert isinstance(pool, _Pool)
+        events.append("attested")
+        raise RuntimeError("379 attestation query failed")
+
+    async def close_database() -> None:
+        events.append("close")
+
+    with pytest.raises(
+        main.CommercialBillingReviewRecoveryUnavailableError,
+        match="could not be currently attested",
+    ) as exc_info:
+        await main._run_database_migration_check(
+            _Pool(),
+            receivables_api_enabled=True,
+            run_migrations_fn=migrations_complete,
+            close_database_fn=close_database,
+            commercial_billing_run_fence_attested_fn=current_run_fence_attestation,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert events == ["migrate", "attested", "close"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    (("attested", True), ("not_attested", False), ("schema_binding_required", False)),
+)
+async def test_commercial_billing_run_fence_current_attestation_requires_exact_status(
+    status: str,
+    expected: bool,
+):
+    """The production default evaluates the authoritative 379 status exactly."""
+    from atlas_brain import main
+
+    captured: dict[str, object] = {}
+
+    class _Attestation:
+        def __init__(self, observed_status: str) -> None:
+            self.status = observed_status
+
+    async def fake_attest(pool: object, migration_files) -> _Attestation:
+        captured["pool"] = pool
+        captured["migration_files"] = tuple(migration_files)
+        return _Attestation(status)
+
+    pool = object()
+
+    assert await main._commercial_billing_run_fence_is_currently_attested(
+        pool,
+        attest_migration_379_fn=fake_attest,
+    ) is expected
+    assert captured["pool"] is pool
+    assert any(
+        path.stem == main._COMMERCIAL_BILLING_RUN_FENCE_RECOVERY_MIGRATION
+        for path in captured["migration_files"]
+    )
 
 
 @pytest.mark.asyncio
@@ -2422,6 +2628,1277 @@ def test_review_decision_recovery_migration_is_atomic_and_data_preserving():
     assert "INSERT INTO commercial_billing_candidate_review_decisions" not in executable
     assert "INSERT INTO invoices" not in executable
     assert "DELETE FROM commercial_billing_candidate_review_decisions" not in executable
+
+
+def test_historical_379_run_fence_recovery_is_atomic_and_data_preserving():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/"
+        "391_eom_commercial_billing_run_fence_recovery.sql"
+    ).read_text(encoding="utf-8")
+
+    assert migration.startswith("-- atlas: atomic-bookkeeping")
+    assert "b71db37ee1906ca26788be21deb716092052fc3197d4b72762d57892fbc77851" in migration
+    assert "commercialBillingRunId" in migration
+    assert "WHERE billing_run_id = candidate_identity_billing_run_id" in migration
+    assert "immutable review history guards" in migration
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "DROP TABLE" not in executable
+    assert "INSERT INTO commercial_billing_candidate_review_decisions" not in executable
+    assert "UPDATE commercial_billing_candidate_review_decisions" not in executable
+    assert "INSERT INTO commercial_billing_candidate_overrides" not in executable
+    assert "UPDATE commercial_billing_candidate_overrides" not in executable
+    assert "INSERT INTO invoices" not in executable
+    assert "UPDATE invoices" not in executable
+
+
+def test_historical_379_schema_binding_recovery_is_atomic_and_exact():
+    migration = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/"
+        "392_eom_commercial_billing_run_fence_schema_binding.sql"
+    ).read_text(encoding="utf-8")
+
+    assert migration.startswith("-- atlas: atomic-bookkeeping")
+    assert "04b99e4a3ff2b18f2d58d3e1e610a4b2079fcbbd0d5ce51d97c212daaefd0477" in migration
+    assert "ALTER FUNCTION %1$I.prevent_commercial_billing_invoice_for_excluded_candidate()" in migration
+    assert "SET search_path = pg_catalog, %1$I, pg_temp" in migration
+    assert "atlas.migration_379_catalog_attestation_schema" in migration
+    assert "atomic catalog re-attestation" in migration
+    assert "post-alter state changed" in migration
+    assert "unrecognized recovered invoice fence body" in migration
+    assert "unrecognized function configuration" in migration
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+    assert "DROP TABLE" not in executable
+    assert "INSERT INTO invoices" not in executable
+    assert "UPDATE invoices" not in executable
+    assert "DELETE FROM invoices" not in executable
+
+
+async def _stage_historical_379_legacy_recovery_state(conn):
+    """Create only the attested legacy fence state in an isolated schema."""
+    from atlas_brain.storage.migrations.reconciliation import (
+        MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY,
+    )
+
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    await conn.execute(
+        "ALTER TABLE invoices ADD COLUMN metadata JSONB NOT NULL "
+        "DEFAULT '{}'::jsonb"
+    )
+    legacy_source = (
+        Path(__file__).parents[1]
+        / "atlas_brain/storage/migrations/"
+        "382_commercial_billing_candidate_overrides.sql"
+    ).read_text(encoding="utf-8")
+    legacy_section = legacy_source.split(
+        "CREATE OR REPLACE FUNCTION "
+        "prevent_commercial_billing_invoice_for_excluded_candidate()",
+        1,
+    )[1]
+    legacy_body = (
+        legacy_section.split("AS $$", 1)[1]
+        .split("$$;", 1)[0]
+        .replace("    candidate_identity_billing_run_id UUID;\n", "")
+        .replace(
+            "       OR jsonb_typeof(NEW.metadata -> 'commercialBillingRunId') "
+            "IS DISTINCT FROM 'string'\n",
+            "",
+        )
+        .replace(
+            "    BEGIN\n"
+            "        candidate_identity_billing_run_id :=\n"
+            "            (NEW.metadata ->> 'commercialBillingRunId')::UUID;\n"
+            "    EXCEPTION WHEN invalid_text_representation THEN\n"
+            "        RAISE EXCEPTION "
+            "'Commercial billing invoice review identity is invalid';\n"
+            "    END;\n",
+            "",
+        )
+        .replace(
+            "    WHERE billing_run_id = candidate_identity_billing_run_id\n"
+            "      AND candidate_key = candidate_identity_key\n",
+            "    WHERE candidate_key = candidate_identity_key\n",
+        )
+    )
+    assert hashlib.sha256(legacy_body.encode()).hexdigest() == (
+        record.legacy_function_body_sha256
+    )
+    await conn.execute(
+        "CREATE OR REPLACE FUNCTION "
+        "prevent_commercial_billing_invoice_for_excluded_candidate() "
+        "RETURNS TRIGGER LANGUAGE plpgsql AS $legacy$"
+        f"{legacy_body}"
+        "$legacy$;"
+    )
+    await conn.execute(
+        "CREATE TABLE schema_migrations ("
+        "version INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL, "
+        "content_sha256 VARCHAR(64), "
+        "applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)"
+    )
+    await conn.executemany(
+        "INSERT INTO schema_migrations (version, name, content_sha256, applied_at) "
+        "VALUES ($1, $2, $3, $4)",
+        [
+            (
+                record.historical_migration_version,
+                record.migration_name,
+                record.historical_ledger_sha256,
+                record.observed_applied_at,
+            ),
+            *[
+                (
+                    receipt.migration_version,
+                    receipt.migration_name,
+                    None,
+                    receipt.observed_applied_at,
+                )
+                for receipt in record.successor_receipts
+            ],
+        ],
+    )
+    return record, legacy_body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "catalog_mutation"),
+    [
+        (
+            "missing cited override revision key",
+            "ALTER TABLE commercial_billing_candidate_overrides DROP CONSTRAINT "
+            "commercial_billing_candidate_overrides_revision_key",
+        ),
+        (
+            "missing review-decision revision key",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_key",
+        ),
+        (
+            "missing review-decision snapshot foreign key",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DROP CONSTRAINT commercial_billing_candidate_review_decisions_snapshot_fkey",
+        ),
+        (
+            "nullable review-decision revision",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN revision DROP NOT NULL",
+        ),
+        (
+            "wrong-type review-decision revision",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN revision TYPE BIGINT",
+        ),
+        (
+            "wrong review-decision varchar bound",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN decision TYPE VARCHAR(15)",
+        ),
+        (
+            "nondefault review-decision collation",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ALTER COLUMN decision TYPE VARCHAR(16) COLLATE \"C\"",
+        ),
+        (
+            "nullable override revision",
+            "ALTER TABLE commercial_billing_candidate_overrides "
+            "ALTER COLUMN revision DROP NOT NULL",
+        ),
+        (
+            "unreviewed billing column",
+            "ALTER TABLE commercial_billing_candidate_overrides "
+            "ADD COLUMN unreviewed_379_billing_column VARCHAR(64)",
+        ),
+        (
+            "forced row security hides excluded decisions",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE ROW LEVEL SECURITY; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "FORCE ROW LEVEL SECURITY; "
+            "CREATE POLICY unreviewed_379_excluded_decision_filter "
+            "ON commercial_billing_candidate_review_decisions "
+            "FOR SELECT USING (decision <> 'excluded')",
+        ),
+        (
+            "inherited review-decision child",
+            "CREATE TABLE unreviewed_379_review_decision_child () "
+            "INHERITS (commercial_billing_candidate_review_decisions)",
+        ),
+        (
+            "review-decision before-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_review_decision_before_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_review_decision_before_insert "
+            "BEFORE INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_review_decision_before_insert()",
+        ),
+        (
+            "review-decision after-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_review_decision_after_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_review_decision_after_insert "
+            "AFTER INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_review_decision_after_insert()",
+        ),
+        (
+            "override before-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_override_before_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN NEW.reason_code := 'customer_credit'; RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_override_before_insert "
+            "BEFORE INSERT ON commercial_billing_candidate_overrides "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_override_before_insert()",
+        ),
+        (
+            "override after-update write interceptor",
+            "CREATE FUNCTION unreviewed_379_override_after_update() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_override_after_update "
+            "AFTER UPDATE ON commercial_billing_candidate_overrides "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_override_after_update()",
+        ),
+        (
+            "candidate before-insert write interceptor",
+            "CREATE FUNCTION unreviewed_379_candidate_before_insert() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN NEW.candidate_key := 'unreviewed-candidate'; RETURN NEW; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_candidate_before_insert "
+            "BEFORE INSERT ON commercial_billing_run_candidates "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_candidate_before_insert()",
+        ),
+        (
+            "candidate after-delete write interceptor",
+            "CREATE FUNCTION unreviewed_379_candidate_after_delete() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $unreviewed$ "
+            "BEGIN RETURN OLD; END; "
+            "$unreviewed$; "
+            "CREATE TRIGGER unreviewed_379_candidate_after_delete "
+            "AFTER DELETE ON commercial_billing_run_candidates "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "unreviewed_379_candidate_after_delete()",
+        ),
+        (
+            "altered source-declared default review trigger body",
+            "CREATE OR REPLACE FUNCTION "
+            "default_commercial_billing_review_fingerprint() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$tampered$",
+        ),
+        (
+            "conditional source-declared default review trigger",
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "BEFORE INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW WHEN (false) EXECUTE FUNCTION "
+            "default_commercial_billing_review_fingerprint()",
+        ),
+        (
+            "wrong-type source-declared default review trigger",
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "AFTER INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION "
+            "default_commercial_billing_review_fingerprint()",
+        ),
+        (
+            "missing source-declared default review trigger",
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions",
+        ),
+        (
+            "foreign-schema source-declared default review trigger",
+            "CREATE SCHEMA {foreign_schema}; "
+            "CREATE FUNCTION {foreign_schema}."
+            "default_commercial_billing_review_fingerprint() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$foreign$; "
+            "DROP TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_default_commercial_billing_review_decision_fingerprint "
+            "BEFORE INSERT ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION {foreign_schema}."
+            "default_commercial_billing_review_fingerprint()",
+        ),
+        (
+            "same-name altered review-decision revision check",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DROP CONSTRAINT commercial_billing_candidate_review_decisions_revision_check; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ADD CONSTRAINT commercial_billing_candidate_review_decisions_revision_check "
+            "CHECK (revision >= 0)",
+        ),
+        (
+            "renamed candidate exact-source index",
+            "ALTER INDEX idx_commercial_billing_run_candidates_exact_source "
+            "RENAME TO unreviewed_379_candidate_exact_source_index",
+        ),
+        (
+            "missing review-decision review index",
+            "DROP INDEX idx_commercial_billing_candidate_review_decisions_review",
+        ),
+        (
+            "missing override active index",
+            "DROP INDEX idx_commercial_billing_candidate_overrides_active",
+        ),
+        (
+            "partial replacement for override active index",
+            "DROP INDEX idx_commercial_billing_candidate_overrides_active; "
+            "CREATE INDEX idx_commercial_billing_candidate_overrides_active "
+            "ON commercial_billing_candidate_overrides "
+            "(billing_run_id, candidate_key, source_fingerprint, revision DESC) "
+            "WHERE false",
+        ),
+        (
+            "foreign-schema invoice fence function",
+            "CREATE SCHEMA {foreign_schema}; "
+            "CREATE FUNCTION {foreign_schema}."
+            "prevent_commercial_billing_invoice_for_excluded_candidate() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
+            "BEGIN RETURN NEW; END; "
+            "$foreign$; "
+            "DROP TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "ON invoices; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "BEFORE INSERT ON invoices FOR EACH ROW "
+            "EXECUTE FUNCTION {foreign_schema}."
+            "prevent_commercial_billing_invoice_for_excluded_candidate()",
+        ),
+        (
+            "foreign-schema history guard function",
+            "CREATE SCHEMA {foreign_schema}; "
+            "CREATE FUNCTION {foreign_schema}."
+            "prevent_commercial_billing_review_decision_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $foreign$ "
+            "BEGIN RETURN OLD; END; "
+            "$foreign$; "
+            "DROP TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "BEFORE UPDATE OR DELETE ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW EXECUTE FUNCTION {foreign_schema}."
+            "prevent_commercial_billing_review_decision_mutation()",
+        ),
+        (
+            "altered review-decision history guard body",
+            "CREATE OR REPLACE FUNCTION prevent_commercial_billing_review_decision_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN RETURN OLD; END; "
+            "$tampered$",
+        ),
+        (
+            "altered override history guard body",
+            "CREATE OR REPLACE FUNCTION "
+            "prevent_commercial_billing_candidate_override_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN RETURN OLD; END; "
+            "$tampered$",
+        ),
+        (
+            "conditional invoice fence trigger",
+            "DROP TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "ON invoices; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_invoice_for_excluded_candidate "
+            "BEFORE INSERT ON invoices FOR EACH ROW WHEN (false) "
+            "EXECUTE FUNCTION prevent_commercial_billing_invoice_for_excluded_candidate()",
+        ),
+        (
+            "unreviewed ordered invoice interceptors",
+            "CREATE FUNCTION unreviewed_invoice_source_before_fence() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $before_fence$ "
+            "BEGIN NEW.source := 'unreviewed_source_before_fence'; RETURN NEW; END; "
+            "$before_fence$; "
+            "CREATE FUNCTION unreviewed_invoice_source_after_fence() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $after_fence$ "
+            "BEGIN NEW.source := 'eom_commercial_billing'; RETURN NEW; END; "
+            "$after_fence$; "
+            "CREATE TRIGGER aaa_unreviewed_invoice_source_before_fence "
+            "BEFORE INSERT ON invoices FOR EACH ROW "
+            "EXECUTE FUNCTION unreviewed_invoice_source_before_fence(); "
+            "CREATE TRIGGER zzz_unreviewed_invoice_source_after_fence "
+            "BEFORE INSERT ON invoices FOR EACH ROW "
+            "EXECUTE FUNCTION unreviewed_invoice_source_after_fence()",
+        ),
+        (
+            "unreviewed statement-level invoice insert interceptor",
+            "CREATE FUNCTION unreviewed_invoice_statement_before_fence() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $statement_fence$ "
+            "BEGIN RETURN NULL; END; "
+            "$statement_fence$; "
+            "CREATE TRIGGER unreviewed_invoice_statement_before_fence "
+            "BEFORE INSERT ON invoices FOR EACH STATEMENT "
+            "EXECUTE FUNCTION unreviewed_invoice_statement_before_fence()",
+        ),
+        (
+            "invoice insert rewrite suppression",
+            "CREATE RULE unreviewed_379_invoice_insert_suppression "
+            "AS ON INSERT TO invoices DO INSTEAD NOTHING",
+        ),
+        (
+            "configured invoice-fence execution environment",
+            "ALTER FUNCTION prevent_commercial_billing_invoice_for_excluded_candidate() "
+            "SET search_path TO pg_catalog",
+        ),
+        (
+            "security-definer history guard",
+            "ALTER FUNCTION prevent_commercial_billing_review_decision_mutation() "
+            "SECURITY DEFINER",
+        ),
+        (
+            "conditional append-only history trigger",
+            "DROP TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "ON commercial_billing_candidate_review_decisions; "
+            "CREATE TRIGGER trg_prevent_commercial_billing_review_decision_mutation "
+            "BEFORE UPDATE OR DELETE ON commercial_billing_candidate_review_decisions "
+            "FOR EACH ROW WHEN (false) "
+            "EXECUTE FUNCTION prevent_commercial_billing_review_decision_mutation()",
+        ),
+        (
+            "unreviewed catalog constraint",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ADD CONSTRAINT unreviewed_379_catalog_constraint CHECK (1 = 1)",
+        ),
+        (
+            "unreviewed catalog index",
+            "CREATE INDEX unreviewed_379_catalog_index "
+            "ON commercial_billing_candidate_overrides (reason_code)",
+        ),
+        (
+            "disabled review-decision snapshot foreign-key enforcement",
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "DISABLE TRIGGER ALL; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE TRIGGER trg_default_commercial_billing_review_decision_fingerprint; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE TRIGGER trg_prevent_commercial_billing_review_decision_mutation; "
+            "ALTER TABLE commercial_billing_candidate_review_decisions "
+            "ENABLE TRIGGER trg_prevent_commercial_billing_review_decision_truncate",
+        ),
+    ],
+)
+async def test_real_postgres_historical_379_rejects_incomplete_catalog_before_391(
+    case,
+    catalog_mutation,
+):
+    """The runner must reject every reviewed catalog drift before 391 SQL."""
+    pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+
+    async with _billing_run_database() as (conn, schema, _database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        foreign_schema = f"commercial_billing_foreign_{uuid4().hex}"
+        try:
+            await conn.execute(catalog_mutation.replace("{foreign_schema}", foreign_schema))
+            if case == "disabled review-decision snapshot foreign-key enforcement":
+                assert await conn.fetchval(
+                    """
+                    SELECT COUNT(*) = 4
+                       AND bool_and(trigger_state.tgisinternal)
+                       AND bool_or(trigger_state.tgenabled <> 'O'::\"char\")
+                    FROM pg_catalog.pg_trigger AS trigger_state
+                    WHERE trigger_state.tgconstraint = (
+                        SELECT constraint_state.oid
+                        FROM pg_catalog.pg_constraint AS constraint_state
+                        WHERE constraint_state.conrelid =
+                            'commercial_billing_candidate_review_decisions'::regclass
+                          AND constraint_state.conname =
+                            'commercial_billing_candidate_review_decisions_snapshot_fkey'
+                    )
+                    """
+                ) is True
+                assert await conn.fetchval(
+                    """
+                    SELECT COUNT(*) = 3
+                       AND bool_and(trigger_state.tgenabled = 'O'::\"char\")
+                    FROM pg_catalog.pg_trigger AS trigger_state
+                    WHERE trigger_state.tgrelid =
+                            'commercial_billing_candidate_review_decisions'::regclass
+                      AND NOT trigger_state.tgisinternal
+                    """
+                ) is True
+            pool = _SchemaPool(conn, schema)
+            migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+
+            with pytest.raises(PendingMigrationContentIntegrityError, match="missing_source="):
+                await run_migrations(
+                    pool,
+                    migrations_dir=migrations_dir,
+                    only={record.recovery_migration_name},
+                )
+
+            assert await conn.fetchval(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                record.recovery_migration_name,
+            ) == 0, case
+            assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0, case
+            assert await conn.fetchval(
+                "SELECT function_state.prosrc "
+                "FROM pg_catalog.pg_proc AS function_state "
+                "JOIN pg_catalog.pg_namespace AS namespace_state "
+                "ON namespace_state.oid = function_state.pronamespace "
+                "WHERE namespace_state.nspname = pg_catalog.current_schema() "
+                "AND function_state.proname = "
+                "'prevent_commercial_billing_invoice_for_excluded_candidate' "
+                "AND function_state.pronargs = 0"
+            ) == legacy_body, case
+        finally:
+            await conn.execute(f'DROP SCHEMA IF EXISTS "{foreign_schema}" CASCADE')
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_commercial_billing_run_fence_recovery():
+    """391 plus 392 preserve run scope under a hostile caller search path."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, _database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        candidate = _candidate(
+            "commercial-billing:historical-379-run-fence", _fingerprint("a")
+        )
+        first_run_id, second_run_id = uuid4(), uuid4()
+        await _insert_legacy_run_candidate(
+            conn,
+            run_id=first_run_id,
+            candidate=candidate,
+            idempotency_key=f"migration-379-first-{first_run_id}",
+        )
+        await _insert_legacy_run_candidate(
+            conn,
+            run_id=second_run_id,
+            candidate=candidate,
+            idempotency_key=f"migration-379-second-{second_run_id}",
+        )
+        override_fingerprint = _fingerprint("b")
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_candidate_overrides (
+                id, billing_run_id, candidate_key, source_fingerprint, revision,
+                review_fingerprint, effective_snapshot, reason_code, reason, source,
+                idempotency_key, request_fingerprint, overridden_by
+            ) VALUES (
+                $1, $2, $3, $4, 1, $5, $6::jsonb,
+                'source_correction_pending', 'Run-A-only recovery proof.',
+                'eom_admin', $7, $8, 'Migration recovery test'
+            )
+            """,
+            uuid4(),
+            first_run_id,
+            candidate["candidateKey"],
+            candidate["sourceFingerprint"],
+            override_fingerprint,
+            json.dumps(candidate),
+            "historical-379-run-a-override",
+            _fingerprint("c"),
+        )
+        override_history_before = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_overrides ORDER BY id"
+            )
+        ]
+        second_run_metadata = json.dumps({
+            "candidateKey": candidate["candidateKey"],
+            "commercialBillingRunId": str(second_run_id),
+            "sourceFingerprint": candidate["sourceFingerprint"],
+        })
+        with pytest.raises(asyncpg.PostgresError, match="stale"):
+            await conn.execute(
+                "INSERT INTO invoices (id, source, source_ref, metadata) "
+                "VALUES ($1, 'eom_commercial_billing', 'historical-379-before', $2::jsonb)",
+                uuid4(),
+                second_run_metadata,
+            )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 0
+
+        pool = _SchemaPool(conn, schema)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        assert (
+            await _attest_migration_379(
+                conn,
+                sorted(migrations_dir.glob("*.sql")),
+            )
+        ).status == "recovery_required"
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match="after historical forward recovery",
+        ):
+            await run_migrations(
+                pool,
+                migrations_dir=migrations_dir,
+                only={
+                    record.recovery_migration_name,
+                    record.schema_binding_migration_name,
+                },
+            )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.recovery_migration_name,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+            record.recovery_migration_name,
+        ) == record.recovery_packaged_sha256
+        assert (
+            await _attest_migration_379(
+                conn,
+                sorted(migrations_dir.glob("*.sql")),
+            )
+        ).status == "schema_binding_required"
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
+        ) == 0
+
+        # The SQL cannot be run directly after selection: only the runner's
+        # transaction-scoped lock plus canonical re-attestation may authorize it.
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="atomic catalog re-attestation",
+        ):
+            await conn.execute(
+                (
+                    migrations_dir / f"{record.schema_binding_migration_name}.sql"
+                ).read_text(encoding="utf-8")
+            )
+        assert await conn.fetchval(
+            "SELECT function_state.proconfig "
+            "FROM pg_catalog.pg_proc AS function_state "
+            "JOIN pg_catalog.pg_namespace AS namespace_state "
+            "ON namespace_state.oid = function_state.pronamespace "
+            "WHERE namespace_state.nspname = pg_catalog.current_schema() "
+            "AND function_state.proname = "
+            "'prevent_commercial_billing_invoice_for_excluded_candidate' "
+            "AND function_state.pronargs = 0"
+        ) is None
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={record.schema_binding_migration_name},
+        )
+
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
+        ) == record.schema_binding_packaged_sha256
+        assert (
+            await _attest_migration_379(
+                conn,
+                sorted(migrations_dir.glob("*.sql")),
+            )
+        ).status == "attested"
+        assert await conn.fetchval(
+            "SELECT function_state.proconfig "
+            "FROM pg_catalog.pg_proc AS function_state "
+            "JOIN pg_catalog.pg_namespace AS namespace_state "
+            "ON namespace_state.oid = function_state.pronamespace "
+            "WHERE namespace_state.nspname = pg_catalog.current_schema() "
+            "AND function_state.proname = "
+            "'prevent_commercial_billing_invoice_for_excluded_candidate' "
+            "AND function_state.pronargs = 0"
+        ) == [f"search_path=pg_catalog, {schema}, pg_temp"]
+        await conn.execute(
+            "INSERT INTO invoices (id, source, source_ref, metadata) "
+            "VALUES ($1, 'eom_commercial_billing', 'historical-379-after', $2::jsonb)",
+            uuid4(),
+            second_run_metadata,
+        )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+        await conn.execute(
+            """
+            INSERT INTO commercial_billing_candidate_review_decisions (
+                id, billing_run_id, candidate_key, source_fingerprint,
+                revision, decision, reason, source, idempotency_key,
+                request_fingerprint, decided_by
+            ) VALUES ($1, $2, $3, $4, 1, 'excluded', $5, 'eom_admin', $6, $7,
+                      'Migration recovery test')
+            """,
+            uuid4(),
+            second_run_id,
+            candidate["candidateKey"],
+            candidate["sourceFingerprint"],
+            "Final catalog predicate search-path proof.",
+            "historical-379-search-path-excluded-decision",
+            _fingerprint("d"),
+        )
+        review_history_after_exclusion = [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_review_decisions ORDER BY id"
+            )
+        ]
+        shadow_schema = f"commercial_billing_shadow_{uuid4().hex}"
+        try:
+            await conn.execute(f'CREATE SCHEMA "{shadow_schema}"')
+            await conn.execute(
+                f'CREATE TABLE "{shadow_schema}".'
+                "commercial_billing_candidate_review_decisions "
+                f'(LIKE "{schema}".commercial_billing_candidate_review_decisions)'
+            )
+            await conn.execute(f'SET search_path TO "{shadow_schema}", "{schema}"')
+            with pytest.raises(asyncpg.PostgresError, match="excluded"):
+                await conn.execute(
+                    f'INSERT INTO "{schema}".invoices '
+                    "(id, source, source_ref, metadata) "
+                    "VALUES ($1, 'eom_commercial_billing', "
+                    "'historical-379-shadow-search-path', $2::jsonb)",
+                    uuid4(),
+                    second_run_metadata,
+                )
+        finally:
+            await conn.execute(f'SET search_path TO "{schema}"')
+            await conn.execute(f'DROP SCHEMA IF EXISTS "{shadow_schema}" CASCADE')
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+        missing_run_metadata = json.dumps({
+            "candidateKey": candidate["candidateKey"],
+            "sourceFingerprint": candidate["sourceFingerprint"],
+        })
+        with pytest.raises(asyncpg.PostgresError, match="invalid"):
+            await conn.execute(
+                "INSERT INTO invoices (id, source, source_ref, metadata) "
+                "VALUES ($1, 'eom_commercial_billing', "
+                "'historical-379-after-missing-run', $2::jsonb)",
+                uuid4(),
+                missing_run_metadata,
+            )
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+        assert [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_review_decisions ORDER BY id"
+            )
+        ] == review_history_after_exclusion
+        assert [
+            dict(row)
+            for row in await conn.fetch(
+                "SELECT * FROM commercial_billing_candidate_overrides ORDER BY id"
+            )
+        ] == override_history_before
+
+        await run_migrations(
+            pool,
+            migrations_dir=migrations_dir,
+            only={
+                record.recovery_migration_name,
+                record.schema_binding_migration_name,
+            },
+        )
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.recovery_migration_name,
+        ) == 1
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+            record.schema_binding_migration_name,
+        ) == 1
+        assert await conn.fetchval("SELECT COUNT(*) FROM invoices") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "function_ddl",
+    [
+        (
+            "CREATE OR REPLACE FUNCTION "
+            "default_commercial_billing_review_fingerprint() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN NEW.decision := 'included'; RETURN NEW; END; "
+            "$tampered$"
+        ),
+        (
+            "CREATE OR REPLACE FUNCTION "
+            "prevent_commercial_billing_review_decision_mutation() "
+            "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+            "BEGIN RETURN OLD; END; "
+            "$tampered$"
+        ),
+        (
+            "ALTER FUNCTION prevent_commercial_billing_review_decision_mutation() "
+            "SET search_path TO pg_catalog"
+        ),
+    ],
+)
+async def test_real_postgres_historical_379_atomic_preflight_blocks_function_ddl(
+    function_ddl,
+):
+    """The owner-replayed definitions hold their pg_proc rows through receipt."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations.reconciliation import (
+        reattest_historical_forward_recovery_in_atomic_transaction,
+    )
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+        await drift_conn.execute("SET lock_timeout = '100ms'")
+        try:
+            async with conn.transaction():
+                await reattest_historical_forward_recovery_in_atomic_transaction(
+                    conn,
+                    migration_name=record.recovery_migration_name,
+                    migration_files=sorted(migrations_dir.glob("*.sql")),
+                )
+                with pytest.raises(
+                    asyncpg.PostgresError,
+                    match="lock timeout",
+                ):
+                    await drift_conn.execute(function_ddl)
+        finally:
+            await drift_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_atomic_preflight_runs_as_function_owner():
+    """391/392 need only the owner privileges already needed to replace functions."""
+    pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, _database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        migration_owner = f"billing_379_migration_owner_{uuid4().hex}"
+        schema_identifier = f'"{schema}"'
+        owner_identifier = f'"{migration_owner}"'
+        await conn.execute(f"CREATE ROLE {owner_identifier} NOLOGIN NOSUPERUSER")
+        try:
+            await conn.execute(
+                f"ALTER SCHEMA {schema_identifier} OWNER TO {owner_identifier}"
+            )
+            await conn.execute(
+                f"""
+                DO $transfer_billing_schema_ownership$
+                DECLARE
+                    relation_state RECORD;
+                    function_state RECORD;
+                BEGIN
+                    FOR relation_state IN
+                        SELECT class_state.relname, class_state.relkind
+                        FROM pg_catalog.pg_class AS class_state
+                        JOIN pg_catalog.pg_namespace AS namespace_state
+                          ON namespace_state.oid = class_state.relnamespace
+                        WHERE namespace_state.nspname = '{schema}'
+                          AND class_state.relkind IN ('r', 'p', 'S')
+                    LOOP
+                        IF relation_state.relkind = 'S' THEN
+                            EXECUTE pg_catalog.format(
+                                'ALTER SEQUENCE %1$I.%2$I OWNER TO %3$I',
+                                '{schema}', relation_state.relname, '{migration_owner}'
+                            );
+                        ELSE
+                            EXECUTE pg_catalog.format(
+                                'ALTER TABLE %1$I.%2$I OWNER TO %3$I',
+                                '{schema}', relation_state.relname, '{migration_owner}'
+                            );
+                        END IF;
+                    END LOOP;
+
+                    FOR function_state IN
+                        SELECT function_catalog.proname,
+                               pg_catalog.pg_get_function_identity_arguments(
+                                   function_catalog.oid
+                               ) AS identity_arguments
+                        FROM pg_catalog.pg_proc AS function_catalog
+                        JOIN pg_catalog.pg_namespace AS namespace_state
+                          ON namespace_state.oid = function_catalog.pronamespace
+                        WHERE namespace_state.nspname = '{schema}'
+                    LOOP
+                        EXECUTE pg_catalog.format(
+                            'ALTER FUNCTION %1$I.%2$I(%3$s) OWNER TO %4$I',
+                            '{schema}',
+                            function_state.proname,
+                            function_state.identity_arguments,
+                            '{migration_owner}'
+                        );
+                    END LOOP;
+                END;
+                $transfer_billing_schema_ownership$;
+                """
+            )
+            await conn.execute(f"SET ROLE {owner_identifier}")
+            assert (
+                await conn.fetchval(
+                    "SELECT rolsuper FROM pg_catalog.pg_roles "
+                    "WHERE rolname = CURRENT_USER"
+                )
+                is False
+            )
+
+            record, _legacy_body = await _stage_historical_379_legacy_recovery_state(
+                conn
+            )
+            migrations_dir = (
+                Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+            )
+            pool = _SchemaPool(conn, schema)
+
+            with pytest.raises(
+                PendingMigrationContentIntegrityError,
+                match="after historical forward recovery",
+            ):
+                await run_migrations(
+                    pool,
+                    migrations_dir=migrations_dir,
+                    only={
+                        record.recovery_migration_name,
+                        record.schema_binding_migration_name,
+                    },
+                )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.recovery_migration_name,
+                )
+                == 1
+            )
+
+            await run_migrations(
+                pool,
+                migrations_dir=migrations_dir,
+                only={record.schema_binding_migration_name},
+            )
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.schema_binding_migration_name,
+                )
+                == 1
+            )
+            assert (
+                await _attest_migration_379(
+                    conn,
+                    sorted(migrations_dir.glob("*.sql")),
+                )
+            ).status == "attested"
+        finally:
+            await conn.execute("RESET ROLE")
+            await conn.execute(f"DROP SCHEMA IF EXISTS {schema_identifier} CASCADE")
+            await conn.execute(f"DROP ROLE IF EXISTS {owner_identifier}")
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_recovery_rechecks_catalog_after_selection():
+    """A concurrent constraint drop cannot consume the one-time 391 receipt."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+
+        class _CatalogDriftInjectingConnection:
+            """Commit catalog drift after selection, before 391 takes its locks."""
+
+            def __init__(self) -> None:
+                self.drift_injected = False
+
+            async def execute(self, query, *args):
+                if "$migration_379_catalog_lock$" in query and not self.drift_injected:
+                    await drift_conn.execute(
+                        "ALTER TABLE commercial_billing_candidate_overrides "
+                        "DROP CONSTRAINT "
+                        "commercial_billing_candidate_overrides_revision_key"
+                    )
+                    self.drift_injected = True
+                return await conn.execute(query, *args)
+
+            async def fetch(self, query, *args):
+                return await conn.fetch(query, *args)
+
+            async def fetchrow(self, query, *args):
+                return await conn.fetchrow(query, *args)
+
+            async def fetchval(self, query, *args):
+                return await conn.fetchval(query, *args)
+
+            def transaction(self):
+                return conn.transaction()
+
+        wrapped_conn = _CatalogDriftInjectingConnection()
+
+        class _CatalogDriftSchemaPool(_SchemaPool):
+            async def acquire(self):
+                await wrapped_conn.execute(f'SET search_path TO "{self.schema}"')
+                return wrapped_conn
+
+            async def release(self, released) -> None:
+                assert released is wrapped_conn
+
+        try:
+            race_pool = _CatalogDriftSchemaPool(conn, schema)
+            with pytest.raises(
+                PendingMigrationContentIntegrityError,
+                match="catalog changed after selection",
+            ):
+                await run_migrations(
+                    race_pool,
+                    migrations_dir=migrations_dir,
+                    only={record.recovery_migration_name},
+                )
+
+            assert wrapped_conn.drift_injected is True
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.recovery_migration_name,
+                )
+                == 0
+            )
+            assert (
+                await _attest_migration_379(
+                    conn,
+                    sorted(migrations_dir.glob("*.sql")),
+                )
+            ).status == "not_attested"
+        finally:
+            await drift_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_function_replay_race_rolls_back_without_receipt():
+    """PostgreSQL rejects a stale replay instead of overwriting newer DDL."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import run_migrations
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+
+        class _FunctionDdlRaceInjectingConnection:
+            """Commit DDL after the definition read but before its stale replay."""
+
+            def __init__(self) -> None:
+                self.drift_injected = False
+                self.release_task = None
+
+            async def execute(self, query, *args):
+                return await conn.execute(query, *args)
+
+            async def fetch(self, query, *args):
+                rows = await conn.fetch(query, *args)
+                if "pg_get_functiondef(function_state.oid)" in query and not self.drift_injected:
+                    await drift_conn.execute("BEGIN")
+                    await drift_conn.execute(
+                        "CREATE OR REPLACE FUNCTION "
+                        "prevent_commercial_billing_invoice_for_excluded_candidate() "
+                        "RETURNS TRIGGER LANGUAGE plpgsql AS $tampered$ "
+                        "BEGIN RETURN OLD; END; "
+                        "$tampered$"
+                    )
+                    self.drift_injected = True
+
+                    async def release_drift_lock() -> None:
+                        await asyncio.sleep(0.05)
+                        await drift_conn.execute("COMMIT")
+
+                    self.release_task = asyncio.create_task(release_drift_lock())
+                return rows
+
+            async def fetchrow(self, query, *args):
+                return await conn.fetchrow(query, *args)
+
+            async def fetchval(self, query, *args):
+                return await conn.fetchval(query, *args)
+
+            def transaction(self):
+                return conn.transaction()
+
+        wrapped_conn = _FunctionDdlRaceInjectingConnection()
+
+        class _FunctionDdlRaceSchemaPool(_SchemaPool):
+            async def acquire(self):
+                await wrapped_conn.execute(f'SET search_path TO "{self.schema}"')
+                return wrapped_conn
+
+            async def release(self, released) -> None:
+                assert released is wrapped_conn
+
+        try:
+            with pytest.raises(asyncpg.PostgresError):
+                await run_migrations(
+                    _FunctionDdlRaceSchemaPool(conn, schema),
+                    migrations_dir=migrations_dir,
+                    only={record.recovery_migration_name},
+                )
+
+            assert wrapped_conn.drift_injected is True
+            assert wrapped_conn.release_task is not None
+            await wrapped_conn.release_task
+            wrapped_conn.release_task = None
+            assert (
+                await conn.fetchval(
+                    "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                    record.recovery_migration_name,
+                )
+                == 0
+            )
+            assert "RETURN OLD" in await conn.fetchval(
+                "SELECT function_state.prosrc "
+                "FROM pg_catalog.pg_proc AS function_state "
+                "JOIN pg_catalog.pg_namespace AS namespace_state "
+                "  ON namespace_state.oid = function_state.pronamespace "
+                "WHERE namespace_state.nspname = $1 "
+                "  AND function_state.proname = "
+                "'prevent_commercial_billing_invoice_for_excluded_candidate'",
+                schema,
+            )
+        finally:
+            if wrapped_conn.release_task is not None:
+                await wrapped_conn.release_task
+            if drift_conn.is_in_transaction():
+                await drift_conn.execute("ROLLBACK")
+            await drift_conn.close()
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_historical_379_schema_binding_rechecks_catalog_after_selection():
+    """A concurrent catalog change cannot consume the one-time 392 receipt."""
+    asyncpg = pytest.importorskip("asyncpg")
+    from atlas_brain.storage.migrations import (
+        PendingMigrationContentIntegrityError,
+        run_migrations,
+    )
+    from atlas_brain.storage.migrations.reconciliation import _attest_migration_379
+
+    async with _billing_run_database() as (conn, schema, database_url):
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
+        record, _legacy_body = await _stage_historical_379_legacy_recovery_state(conn)
+        migrations_dir = Path(__file__).parents[1] / "atlas_brain/storage/migrations"
+        initial_pool = _SchemaPool(conn, schema)
+
+        with pytest.raises(
+            PendingMigrationContentIntegrityError,
+            match="after historical forward recovery",
+        ):
+            await run_migrations(
+                initial_pool,
+                migrations_dir=migrations_dir,
+                only={
+                    record.recovery_migration_name,
+                    record.schema_binding_migration_name,
+                },
+            )
+
+        drift_conn = await asyncpg.connect(database_url)
+        await drift_conn.execute(f'SET search_path TO "{schema}"')
+
+        class _CatalogDriftInjectingConnection:
+            """Commit catalog drift after selection, before 392 takes its locks."""
+
+            def __init__(self) -> None:
+                self.drift_injected = False
+
+            async def execute(self, query, *args):
+                if (
+                    "$migration_379_catalog_lock$" in query
+                    and not self.drift_injected
+                ):
+                    await drift_conn.execute(
+                        "CREATE INDEX unreviewed_392_catalog_race_index "
+                        "ON commercial_billing_candidate_overrides (reason_code)"
+                    )
+                    self.drift_injected = True
+                return await conn.execute(query, *args)
+
+            async def fetch(self, query, *args):
+                return await conn.fetch(query, *args)
+
+            async def fetchrow(self, query, *args):
+                return await conn.fetchrow(query, *args)
+
+            async def fetchval(self, query, *args):
+                return await conn.fetchval(query, *args)
+
+            def transaction(self):
+                return conn.transaction()
+
+        wrapped_conn = _CatalogDriftInjectingConnection()
+
+        class _CatalogDriftSchemaPool(_SchemaPool):
+            async def acquire(self):
+                await wrapped_conn.execute(f'SET search_path TO "{self.schema}"')
+                return wrapped_conn
+
+            async def release(self, released) -> None:
+                assert released is wrapped_conn
+
+        try:
+            race_pool = _CatalogDriftSchemaPool(conn, schema)
+            with pytest.raises(
+                PendingMigrationContentIntegrityError,
+                match="catalog changed after selection",
+            ):
+                await run_migrations(
+                    race_pool,
+                    migrations_dir=migrations_dir,
+                    only={record.schema_binding_migration_name},
+                )
+
+            assert wrapped_conn.drift_injected is True
+            assert await conn.fetchval(
+                "SELECT COUNT(*) FROM schema_migrations WHERE name = $1",
+                record.schema_binding_migration_name,
+            ) == 0
+            assert (
+                await _attest_migration_379(
+                    conn,
+                    sorted(migrations_dir.glob("*.sql")),
+                )
+            ).status == "not_attested"
+        finally:
+            await drift_conn.close()
 
 
 @pytest.mark.asyncio

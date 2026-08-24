@@ -573,7 +573,12 @@ def _split_sql_statements(sql: str) -> list[str]:
     return statements
 
 
-async def _apply_pending_migration(conn, migration_file: Path) -> None:
+async def _apply_pending_migration(
+    conn,
+    migration_file: Path,
+    *,
+    atomic_preflight=None,
+) -> None:
     """Apply one selected pending file and record its exact content identity."""
     logger.info("Running migration: %s", migration_file.name)
 
@@ -592,6 +597,8 @@ async def _apply_pending_migration(conn, migration_file: Path) -> None:
                     "atomic-bookkeeping migration cannot use CONCURRENTLY"
                 )
             async with conn.transaction():
+                if atomic_preflight is not None:
+                    await atomic_preflight(conn)
                 await conn.execute(sql)
                 await _record_migration(
                     conn,
@@ -721,8 +728,10 @@ async def run_migrations(
                 return
 
             from .reconciliation import (
+                HistoricalForwardRecoveryAtomicPreflightError,
                 historical_forward_recovery_migration_names,
                 pending_historical_forward_recovery_migration,
+                reattest_historical_forward_recovery_in_atomic_transaction,
             )
 
             forward_recovery_names = historical_forward_recovery_migration_names()
@@ -772,7 +781,26 @@ async def run_migrations(
                     "Running required historical forward recovery before ordinary pending migrations: %s",
                     recovery_file.name,
                 )
-                await _apply_pending_migration(conn, recovery_file)
+
+                async def _recovery_atomic_preflight(executor) -> None:
+                    await reattest_historical_forward_recovery_in_atomic_transaction(
+                        executor,
+                        migration_name=recovery_file.stem,
+                        migration_files=migration_catalog,
+                    )
+
+                try:
+                    await _apply_pending_migration(
+                        conn,
+                        recovery_file,
+                        atomic_preflight=_recovery_atomic_preflight,
+                    )
+                except HistoricalForwardRecoveryAtomicPreflightError as exc:
+                    raise PendingMigrationContentIntegrityError(
+                        "Refusing to apply historical forward recovery because its "
+                        "catalog changed after selection and could not be re-attested "
+                        "inside the atomic migration transaction"
+                    ) from exc
 
                 # The recovery's independent receipt and catalog effects must
                 # be visible before any ordinary pending file can run.

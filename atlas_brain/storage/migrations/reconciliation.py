@@ -68,6 +68,52 @@ class HistoricalMigrationForwardRecoveryReconciliation:
 
 
 @dataclass(frozen=True)
+class HistoricalNullDigestMigrationReceipt:
+    """One exact NULL-digest receipt required by a forward recovery."""
+
+    migration_name: str
+    migration_version: int
+    observed_applied_at: datetime
+
+
+@dataclass(frozen=True)
+class HistoricalMissingSourceForwardRecoveryReconciliation:
+    """Immutable evidence for a missing source whose catalog needs recovery.
+
+    This is deliberately distinct from a historical digest mismatch. The
+    missing source cannot be reconstructed, so Atlas admits no later SQL until
+    an independently-recorded, exact catalog recovery attests the known target.
+    """
+
+    reconciliation_id: str
+    migration_name: str
+    historical_migration_version: int
+    historical_ledger_sha256: None
+    observed_applied_at: datetime
+    successor_receipts: tuple[HistoricalNullDigestMigrationReceipt, ...]
+    legacy_function_body_sha256: str
+    recovered_function_body_template_sha256: str
+    review_decision_default_function_body_sha256: str
+    review_decision_history_guard_function_body_sha256: str
+    override_history_guard_function_body_sha256: str
+    recovery_migration_name: str
+    recovery_migration_version: int
+    recovery_packaged_sha256: str
+    schema_binding_migration_name: str
+    schema_binding_migration_version: int
+    schema_binding_packaged_sha256: str
+
+    @property
+    def source_verification(self) -> str:
+        """The unavailable historical bytes remain unavailable after recovery."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+
+class HistoricalForwardRecoveryAtomicPreflightError(RuntimeError):
+    """Raised when a selected recovery changes before its receipt can commit."""
+
+
+@dataclass(frozen=True)
 class HistoricalMissingSourceReconciliation:
     """Reviewed facts for one legacy migration whose source bytes are absent."""
 
@@ -232,6 +278,171 @@ class ForwardRecoveryMigrationReconciliationAttestation:
             "recovered_function_guard_lifecycle_read_ready": (
                 self.recovered_function_guard_lifecycle_read_ready
             ),
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True)
+class MissingSourceForwardRecoveryMigrationReconciliationAttestation:
+    """Read-only state for the one run-scoped commercial billing recovery."""
+
+    reconciliation_id: str
+    migration_name: str
+    historical_receipt_ready: bool
+    successor_receipts_ready: bool
+    recovery_source_ready: bool
+    no_recovery_ledger_row: bool
+    recovery_receipt_ready: bool
+    schema_binding_source_ready: bool
+    no_schema_binding_ledger_row: bool
+    schema_binding_receipt_ready: bool
+    reviewed_billing_catalog_ready: bool
+    required_billing_columns_ready: bool
+    no_unreviewed_billing_columns: bool
+    no_unreviewed_billing_read_interceptors: bool
+    no_unreviewed_billing_write_interceptors: bool
+    review_decision_default_trigger_ready: bool
+    review_decision_default_function_body_ready: bool
+    history_guard_function_bodies_ready: bool
+    required_billing_constraints_ready: bool
+    foreign_key_enforcement_ready: bool
+    no_unreviewed_billing_constraints: bool
+    required_billing_indexes_ready: bool
+    no_unreviewed_billing_indexes: bool
+    invoice_fence_trigger_ready: bool
+    no_unreviewed_invoice_insert_interceptors: bool
+    no_unreviewed_invoice_rewrite_interceptors: bool
+    trigger_function_execution_metadata_ready: bool
+    invoice_fence_function_schema_binding_ready: bool
+    legacy_function_body_matches: bool
+    recovered_function_body_matches: bool
+
+    @property
+    def source_verification(self) -> str:
+        """The recovery's receipt never claims the original source was found."""
+        return HISTORICAL_SOURCE_UNAVAILABLE
+
+    @property
+    def legacy_catalog_ready(self) -> bool:
+        """Return whether the exact unsafe catalog can receive only 391."""
+        return all((
+            self.reviewed_billing_catalog_ready,
+            self.invoice_fence_trigger_ready,
+            self.legacy_function_body_matches,
+        ))
+
+    @property
+    def recovered_catalog_ready(self) -> bool:
+        """Return whether the current run-scoped fence is now visible."""
+        return all((
+            self.reviewed_billing_catalog_ready,
+            self.invoice_fence_trigger_ready,
+            self.recovered_function_body_matches,
+            self.invoice_fence_function_schema_binding_ready,
+        ))
+
+    @property
+    def schema_binding_required(self) -> bool:
+        """Return whether exact recovered 391 state needs only its schema pin."""
+        return all((
+            self.historical_receipt_ready,
+            self.successor_receipts_ready,
+            self.recovery_source_ready,
+            self.schema_binding_source_ready,
+            self.recovery_receipt_ready,
+            self.no_schema_binding_ledger_row,
+            self.reviewed_billing_catalog_ready,
+            self.invoice_fence_trigger_ready,
+            self.recovered_function_body_matches,
+        ))
+
+    @property
+    def status(self) -> str:
+        if all((
+            self.historical_receipt_ready,
+            self.successor_receipts_ready,
+            self.recovery_source_ready,
+            self.schema_binding_source_ready,
+            self.no_recovery_ledger_row,
+            self.no_schema_binding_ledger_row,
+            self.legacy_catalog_ready,
+        )):
+            return "recovery_required"
+        if self.schema_binding_required:
+            return "schema_binding_required"
+        if all((
+            self.historical_receipt_ready,
+            self.successor_receipts_ready,
+            self.recovery_source_ready,
+            self.schema_binding_source_ready,
+            self.recovery_receipt_ready,
+            self.schema_binding_receipt_ready,
+            self.recovered_catalog_ready,
+        )):
+            return "attested"
+        return "not_attested"
+
+    def as_payload(self) -> dict[str, object]:
+        """Expose only state evidence, never billing rows or customer data."""
+        return {
+            "reconciliation_id": self.reconciliation_id,
+            "migration_name": self.migration_name,
+            "source_verification": self.source_verification,
+            "historical_receipt_ready": self.historical_receipt_ready,
+            "successor_receipts_ready": self.successor_receipts_ready,
+            "recovery_source_ready": self.recovery_source_ready,
+            "no_recovery_ledger_row": self.no_recovery_ledger_row,
+            "recovery_receipt_ready": self.recovery_receipt_ready,
+            "schema_binding_source_ready": self.schema_binding_source_ready,
+            "no_schema_binding_ledger_row": self.no_schema_binding_ledger_row,
+            "schema_binding_receipt_ready": self.schema_binding_receipt_ready,
+            "reviewed_billing_catalog_ready": self.reviewed_billing_catalog_ready,
+            "required_billing_columns_ready": self.required_billing_columns_ready,
+            "no_unreviewed_billing_columns": self.no_unreviewed_billing_columns,
+            "no_unreviewed_billing_read_interceptors": (
+                self.no_unreviewed_billing_read_interceptors
+            ),
+            "no_unreviewed_billing_write_interceptors": (
+                self.no_unreviewed_billing_write_interceptors
+            ),
+            "review_decision_default_trigger_ready": (
+                self.review_decision_default_trigger_ready
+            ),
+            "review_decision_default_function_body_ready": (
+                self.review_decision_default_function_body_ready
+            ),
+            "history_guard_function_bodies_ready": (
+                self.history_guard_function_bodies_ready
+            ),
+            "required_billing_constraints_ready": (
+                self.required_billing_constraints_ready
+            ),
+            "foreign_key_enforcement_ready": self.foreign_key_enforcement_ready,
+            "no_unreviewed_billing_constraints": (
+                self.no_unreviewed_billing_constraints
+            ),
+            "required_billing_indexes_ready": self.required_billing_indexes_ready,
+            "no_unreviewed_billing_indexes": self.no_unreviewed_billing_indexes,
+            "invoice_fence_trigger_ready": self.invoice_fence_trigger_ready,
+            "no_unreviewed_invoice_insert_interceptors": (
+                self.no_unreviewed_invoice_insert_interceptors
+            ),
+            "no_unreviewed_invoice_rewrite_interceptors": (
+                self.no_unreviewed_invoice_rewrite_interceptors
+            ),
+            "trigger_function_execution_metadata_ready": (
+                self.trigger_function_execution_metadata_ready
+            ),
+            "invoice_fence_function_schema_binding_ready": (
+                self.invoice_fence_function_schema_binding_ready
+            ),
+            "legacy_function_body_matches": self.legacy_function_body_matches,
+            "recovered_function_body_matches": (
+                self.recovered_function_body_matches
+            ),
+            "legacy_catalog_ready": self.legacy_catalog_ready,
+            "recovered_catalog_ready": self.recovered_catalog_ready,
+            "schema_binding_required": self.schema_binding_required,
             "status": self.status,
         }
 
@@ -605,6 +816,103 @@ MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY = (
 )
 
 
+MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY = (
+    HistoricalMissingSourceForwardRecoveryReconciliation(
+        reconciliation_id=(
+            "eom-migration-379-commercial-billing-run-fence-forward-recovery"
+        ),
+        migration_name="379_commercial_billing_candidate_review_decisions",
+        # The target records this unavailable source under a synthetic version.
+        # Preserve that historical fact; 391 is a separate forward-only receipt.
+        historical_migration_version=-10,
+        historical_ledger_sha256=None,
+        observed_applied_at=datetime(
+            2026,
+            8,
+            16,
+            18,
+            4,
+            47,
+            984_357,
+            tzinfo=timezone.utc,
+        ),
+        successor_receipts=(
+            HistoricalNullDigestMigrationReceipt(
+                migration_name="380_commercial_billing_candidate_review_decisions",
+                migration_version=380,
+                observed_applied_at=datetime(
+                    2026,
+                    8,
+                    16,
+                    18,
+                    22,
+                    56,
+                    919_633,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            HistoricalNullDigestMigrationReceipt(
+                migration_name=(
+                    "381_commercial_billing_candidate_review_decisions_recovery"
+                ),
+                migration_version=381,
+                observed_applied_at=datetime(
+                    2026,
+                    8,
+                    16,
+                    23,
+                    18,
+                    24,
+                    384_279,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+            HistoricalNullDigestMigrationReceipt(
+                migration_name="382_commercial_billing_candidate_overrides",
+                migration_version=382,
+                observed_applied_at=datetime(
+                    2026,
+                    8,
+                    17,
+                    19,
+                    9,
+                    25,
+                    208_581,
+                    tzinfo=timezone.utc,
+                ),
+            ),
+        ),
+        legacy_function_body_sha256=(
+            "b71db37ee1906ca26788be21deb716092052fc3197d4b72762d57892fbc77851"
+        ),
+        recovered_function_body_template_sha256=(
+            "04b99e4a3ff2b18f2d58d3e1e610a4b2079fcbbd0d5ce51d97c212daaefd0477"
+        ),
+        review_decision_default_function_body_sha256=(
+            "a07d01aa1ea28b8817d6e0f8d26195f653cfb39328aea0cbb54db2a44b7b4d54"
+        ),
+        review_decision_history_guard_function_body_sha256=(
+            "a417f49d8bd7c62ee4dbc80348014fb2d251809c79c4a190f2b17c34182c896c"
+        ),
+        override_history_guard_function_body_sha256=(
+            "be37fd47a94998ebe16fb8e08fc25542330af76780f2d830a10b779891058002"
+        ),
+        recovery_migration_name="391_eom_commercial_billing_run_fence_recovery",
+        recovery_migration_version=391,
+        recovery_packaged_sha256=(
+            "117cdd2c509cd89ffaae2efbc4732caf9aea7e155114910a5e5bbe1b5f7d66b7"
+        ),
+        schema_binding_migration_name=(
+            "392_eom_commercial_billing_run_fence_schema_binding"
+        ),
+        schema_binding_migration_version=392,
+        schema_binding_packaged_sha256=(
+            "737a5ef0a8c035821c108f245bfe048717d4f064daf6da8732f2756da5d67c58"
+        ),
+    )
+)
+
+
 _RECOVERED_386_TRIGGER_UPDATE_COLUMNS = frozenset(
     {"business_context_id", "contact_type", "lead_stage", "status"}
 )
@@ -749,14 +1057,22 @@ MIGRATION_022B_PRESENCE_UNKNOWN_COUNT_RECONCILIATION = (
 )
 
 
-_HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS = (
+_HISTORICAL_MISSING_SOURCE_FORWARD_RECOVERY_RECONCILIATIONS = (
+    MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY,
+)
+_HISTORICAL_MISMATCH_FORWARD_RECOVERY_RECONCILIATIONS = (
     MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY,
 )
+_HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS = (
+    *_HISTORICAL_MISSING_SOURCE_FORWARD_RECOVERY_RECONCILIATIONS,
+    *_HISTORICAL_MISMATCH_FORWARD_RECOVERY_RECONCILIATIONS,
+)
 _HISTORICAL_MISMATCH_RECONCILIATIONS = (
-    *_HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS,
+    *_HISTORICAL_MISMATCH_FORWARD_RECOVERY_RECONCILIATIONS,
     MIGRATION_387_RECONCILIATION,
 )
 _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
+    *_HISTORICAL_MISSING_SOURCE_FORWARD_RECOVERY_RECONCILIATIONS,
     MIGRATION_382_EOM_PUBLIC_ONBOARDING_TOKENS_RECONCILIATION,
     MIGRATION_067_B2B_CAMPAIGN_PARTNER_RECONCILIATION,
     MIGRATION_297_B2B_COMPANY_SIGNAL_PROMOTION_RECONCILIATION,
@@ -768,10 +1084,15 @@ _HISTORICAL_MISSING_SOURCE_RECONCILIATIONS = (
 def historical_forward_recovery_migration_names() -> frozenset[str]:
     """Return migration stems reserved for attested recovery preludes only."""
 
-    return frozenset(
+    migration_names = {
         record.recovery_migration_name
         for record in _HISTORICAL_FORWARD_RECOVERY_RECONCILIATIONS
+    }
+    migration_names.update(
+        record.schema_binding_migration_name
+        for record in _HISTORICAL_MISSING_SOURCE_FORWARD_RECOVERY_RECONCILIATIONS
     )
+    return frozenset(migration_names)
 
 
 _PRESENCE_UNKNOWN_COUNT_COLUMN = ("integer", "YES", "0")
@@ -2478,6 +2799,1198 @@ async def _migration_272_catalog_evidence(
     )
 
 
+async def _migration_379_catalog_evidence(executor: Any) -> Mapping[str, object]:
+    """Read only the reviewed commercial-billing fence metadata in one schema."""
+    evidence_row = await executor.fetchrow(
+        """
+        WITH target_relations AS (
+            SELECT relation_state.oid, relation_state.relname,
+                   relation_state.relkind, relation_state.relpersistence,
+                   relation_state.relispartition,
+                   relation_state.relrowsecurity,
+                   relation_state.relforcerowsecurity
+            FROM pg_catalog.pg_class AS relation_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = relation_state.relnamespace
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND relation_state.relname = ANY (
+                  ARRAY[
+                      'commercial_billing_candidate_review_decisions',
+                      'commercial_billing_candidate_overrides',
+                      'commercial_billing_run_candidates',
+                      'invoices'
+                  ]::text[]
+              )
+        ),
+        required_columns AS (
+            SELECT *
+            FROM (
+                VALUES
+                    ('commercial_billing_run_candidates', 'id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'billing_run_id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'candidate_key', 'varchar', 516, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'source_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'display_order', 'int4', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'snapshot', 'jsonb', -1, TRUE, TRUE),
+                    ('commercial_billing_run_candidates', 'created_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'billing_run_id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'candidate_key', 'varchar', 516, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'source_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'revision', 'int4', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decision', 'varchar', 20, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'reason', 'varchar', 1004, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'source', 'varchar', 36, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'idempotency_key', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'request_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decided_by', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'decided_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'created_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_review_decisions', 'review_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'billing_run_id', 'uuid', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'candidate_key', 'varchar', 516, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'source_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'revision', 'int4', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'review_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'effective_snapshot', 'jsonb', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'reason_code', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'reason', 'varchar', 1004, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'source', 'varchar', 36, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'idempotency_key', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'request_fingerprint', 'varchar', 68, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'overridden_by', 'varchar', 132, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'overridden_at', 'timestamptz', -1, TRUE, TRUE),
+                    ('commercial_billing_candidate_overrides', 'created_at', 'timestamptz', -1, TRUE, TRUE)
+            ) AS expected_column(
+                relation_name,
+                column_name,
+                type_name,
+                type_modifier,
+                not_null,
+                uses_type_default_collation
+            )
+        ),
+        target_columns AS (
+            SELECT relation_state.relname AS relation_name,
+                   attribute_state.attname AS column_name,
+                   type_state.typname AS type_name,
+                   attribute_state.atttypmod AS type_modifier,
+                   attribute_state.attnotnull,
+                   attribute_state.attcollation = type_state.typcollation
+                       AS uses_type_default_collation
+            FROM target_relations AS relation_state
+            JOIN pg_catalog.pg_attribute AS attribute_state
+              ON attribute_state.attrelid = relation_state.oid
+             AND attribute_state.attnum > 0
+             AND NOT attribute_state.attisdropped
+            JOIN pg_catalog.pg_type AS type_state
+              ON type_state.oid = attribute_state.atttypid
+        ),
+        billing_catalog_relations AS (
+            SELECT *
+            FROM target_relations
+            WHERE relname = ANY (
+                ARRAY[
+                    'commercial_billing_candidate_review_decisions',
+                    'commercial_billing_candidate_overrides',
+                    'commercial_billing_run_candidates'
+                ]::text[]
+            )
+        ),
+        unreviewed_columns AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_columns AS actual_column
+                JOIN billing_catalog_relations AS billing_relation
+                  ON billing_relation.relname = actual_column.relation_name
+                LEFT JOIN required_columns AS expected_column
+                  ON expected_column.relation_name = actual_column.relation_name
+                 AND expected_column.column_name = actual_column.column_name
+                WHERE expected_column.column_name IS NULL
+            ) AS no_unreviewed_billing_columns
+        ),
+        unreviewed_billing_read_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_rewrite AS rule_state
+                JOIN billing_catalog_relations AS relation_state
+                  ON relation_state.oid = rule_state.ev_class
+                WHERE rule_state.rulename <> '_RETURN'
+                UNION ALL
+                SELECT 1
+                FROM billing_catalog_relations AS relation_state
+                WHERE relation_state.relrowsecurity
+                   OR relation_state.relforcerowsecurity
+                UNION ALL
+                -- A parent-table read includes traditional inheritance children,
+                -- whose rows and mutation guards are outside this closed catalog.
+                SELECT 1
+                FROM pg_catalog.pg_inherits AS inheritance_state
+                JOIN billing_catalog_relations AS relation_state
+                  ON relation_state.oid = inheritance_state.inhparent
+                UNION ALL
+                SELECT 1
+                FROM pg_catalog.pg_policy AS policy_state
+                JOIN billing_catalog_relations AS relation_state
+                  ON relation_state.oid = policy_state.polrelid
+            ) AS no_unreviewed_billing_read_interceptors
+        ),
+        declared_constraints AS (
+            SELECT *
+            FROM (
+                -- The long review-decision FK was auto-derived while preserving
+                -- its `_fkey` suffix. Other auto names below are already
+                -- physical; required_constraints projects explicit names to 63.
+                VALUES
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_pkey', 'p', ARRAY['id']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_billing_run_id_fkey', 'f', ARRAY['billing_run_id']::text[], 'commercial_billing_runs', ARRAY['id']::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_source_fingerprint_check', 'c', ARRAY['source_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_display_order_check', 'c', ARRAY['display_order']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_run_key_key', 'u', ARRAY['billing_run_id', 'candidate_key']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_run_order_key', 'u', ARRAY['billing_run_id', 'display_order']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_pkey', 'p', ARRAY['id']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisio_billing_run_id_fkey', 'f', ARRAY['billing_run_id']::text[], 'commercial_billing_runs', ARRAY['id']::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_fingerprint_check', 'c', ARRAY['source_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_revision_check', 'c', ARRAY['revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_decision_check', 'c', ARRAY['decision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_reason_check', 'c', ARRAY['reason']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_request_fingerprint_check', 'c', ARRAY['request_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_actor_check', 'c', ARRAY['decided_by']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_source_key', 'u', ARRAY['source', 'idempotency_key']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_revision_key', 'u', ARRAY['candidate_key', 'source_fingerprint', 'revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_snapshot_fkey', 'f', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[], 'commercial_billing_run_candidates', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[]),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_review_fingerprint_check', 'c', ARRAY['review_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_pkey', 'p', ARRAY['id']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_billing_run_id_fkey', 'f', ARRAY['billing_run_id']::text[], 'commercial_billing_runs', ARRAY['id']::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_source_fingerprint_check', 'c', ARRAY['source_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_review_fingerprint_check', 'c', ARRAY['review_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_revision_check', 'c', ARRAY['revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_code_check', 'c', ARRAY['reason_code']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_check', 'c', ARRAY['reason']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_request_fingerprint_check', 'c', ARRAY['request_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_actor_check', 'c', ARRAY['overridden_by']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_source_key', 'u', ARRAY['source', 'idempotency_key']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_revision_key', 'u', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint', 'revision']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_review_key', 'u', ARRAY['review_fingerprint']::text[], NULL::text, ARRAY[]::text[]),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_snapshot_fkey', 'f', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[], 'commercial_billing_run_candidates', ARRAY['billing_run_id', 'candidate_key', 'source_fingerprint']::text[])
+            ) AS expected_constraint(
+                relation_name,
+                constraint_name,
+                constraint_type,
+                key_columns,
+                referenced_relation_name,
+                referenced_columns
+            )
+        ),
+        required_constraints AS (
+            SELECT
+                relation_name,
+                pg_catalog.left(constraint_name, 63) AS constraint_name,
+                constraint_type,
+                key_columns,
+                referenced_relation_name,
+                referenced_columns
+            FROM declared_constraints
+        ),
+        required_check_expressions AS (
+            SELECT
+                relation_name,
+                pg_catalog.left(constraint_name, 63) AS constraint_name,
+                normalized_expression
+            FROM (
+                VALUES
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_source_fingerprint_check', '((source_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_run_candidates', 'commercial_billing_run_candidates_display_order_check', '(display_order>=0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_fingerprint_check', '((source_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_revision_check', '(revision>0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_decision_check', '((decision)::text=any((array[''included''::charactervarying,''excluded''::charactervarying])::text[]))'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_reason_check', '(length(btrim((reason)::text))>0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_request_fingerprint_check', '((request_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_actor_check', '(length(btrim((decided_by)::text))>0)'),
+                    ('commercial_billing_candidate_review_decisions', 'commercial_billing_candidate_review_decisions_review_fingerprint_check', '((review_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_source_fingerprint_check', '((source_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_review_fingerprint_check', '((review_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_revision_check', '(revision>0)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_code_check', '((reason_code)::text=any((array[''one_time_service_variation''::charactervarying,''partial_or_missed_service''::charactervarying,''approved_pricing_exception''::charactervarying,''customer_credit''::charactervarying,''additional_charge''::charactervarying,''source_correction_pending''::charactervarying,''billing_delivery_exception''::charactervarying])::text[]))'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_reason_check', '(length(btrim((reason)::text))>0)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_request_fingerprint_check', '((request_fingerprint)::text~''^[0-9a-f]{64}$''::text)'),
+                    ('commercial_billing_candidate_overrides', 'commercial_billing_candidate_overrides_actor_check', '(length(btrim((overridden_by)::text))>0)')
+            ) AS expected_check(relation_name, constraint_name, normalized_expression)
+        ),
+        target_constraints AS (
+            SELECT
+                relation_state.relname AS relation_name,
+                constraint_state.conname AS constraint_name,
+                constraint_state.contype::text AS constraint_type,
+                ARRAY(
+                    SELECT attribute_state.attname::text
+                    FROM unnest(constraint_state.conkey)
+                         WITH ORDINALITY AS key_state(attnum, ordinality)
+                    JOIN pg_catalog.pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = constraint_state.conrelid
+                     AND attribute_state.attnum = key_state.attnum
+                    ORDER BY key_state.ordinality
+                ) AS key_columns,
+                referenced_relation.relname AS referenced_relation_name,
+                referenced_schema.nspname AS referenced_schema_name,
+                ARRAY(
+                    SELECT attribute_state.attname::text
+                    FROM unnest(constraint_state.confkey)
+                         WITH ORDINALITY AS key_state(attnum, ordinality)
+                    JOIN pg_catalog.pg_attribute AS attribute_state
+                      ON attribute_state.attrelid = constraint_state.confrelid
+                     AND attribute_state.attnum = key_state.attnum
+                    ORDER BY key_state.ordinality
+                ) AS referenced_columns,
+                constraint_state.confdeltype::text AS confdeltype,
+                constraint_state.confupdtype::text AS confupdtype,
+                constraint_state.confmatchtype::text AS confmatchtype,
+                constraint_state.condeferrable,
+                constraint_state.condeferred,
+                constraint_state.convalidated,
+                CASE
+                    WHEN constraint_state.contype = 'f' THEN COALESCE(
+                        (
+                            SELECT COUNT(*) = 4
+                               AND bool_and(constraint_trigger.tgisinternal)
+                               AND bool_and(
+                                   constraint_trigger.tgenabled = 'O'::"char"
+                               )
+                            FROM pg_catalog.pg_trigger AS constraint_trigger
+                            WHERE constraint_trigger.tgconstraint = constraint_state.oid
+                        ),
+                        FALSE
+                    )
+                    ELSE TRUE
+                END AS foreign_key_enforcement_ready,
+                CASE
+                    WHEN constraint_state.contype = 'c' THEN regexp_replace(
+                        lower(
+                            pg_catalog.pg_get_expr(
+                                constraint_state.conbin,
+                                constraint_state.conrelid
+                            )
+                        ),
+                        '\\s+',
+                        '',
+                        'g'
+                    )
+                END AS normalized_check_expression
+            FROM pg_catalog.pg_constraint AS constraint_state
+            JOIN billing_catalog_relations AS relation_state
+              ON relation_state.oid = constraint_state.conrelid
+            LEFT JOIN pg_catalog.pg_class AS referenced_relation
+              ON referenced_relation.oid = constraint_state.confrelid
+            LEFT JOIN pg_catalog.pg_namespace AS referenced_schema
+              ON referenced_schema.oid = referenced_relation.relnamespace
+        ),
+        required_indexes AS (
+            SELECT *
+            FROM (
+                VALUES
+                    ('commercial_billing_run_candidates', 'idx_commercial_billing_run_candidates_run_order', FALSE, 2, 'usingbtree(billing_run_id,display_order)'),
+                    ('commercial_billing_run_candidates', 'idx_commercial_billing_run_candidates_exact_source', TRUE, 3, 'usingbtree(billing_run_id,candidate_key,source_fingerprint)'),
+                    ('commercial_billing_run_candidates', 'idx_commercial_billing_run_candidates_identity', FALSE, 2, 'usingbtree(candidate_key,source_fingerprint)'),
+                    ('commercial_billing_candidate_review_decisions', 'idx_commercial_billing_candidate_review_decisions_run_candidate', FALSE, 4, 'usingbtree(billing_run_id,candidate_key,source_fingerprint,revisiondesc)'),
+                    ('commercial_billing_candidate_review_decisions', 'idx_commercial_billing_candidate_review_decisions_review', FALSE, 4, 'usingbtree(candidate_key,source_fingerprint,review_fingerprint,revisiondesc)'),
+                    ('commercial_billing_candidate_overrides', 'idx_commercial_billing_candidate_overrides_active', FALSE, 4, 'usingbtree(billing_run_id,candidate_key,source_fingerprint,revisiondesc)')
+            ) AS expected_index(
+                relation_name,
+                index_name,
+                is_unique,
+                key_attribute_count,
+                definition_fragment
+            )
+        ),
+        target_indexes AS (
+            SELECT
+                relation_state.relname AS relation_name,
+                index_relation.relname AS index_name,
+                index_state.indisunique AS is_unique,
+                index_state.indisvalid AS is_valid,
+                index_state.indisready AS is_ready,
+                index_state.indnkeyatts AS key_attribute_count,
+                index_state.indnatts AS attribute_count,
+                index_state.indpred IS NULL AS has_no_predicate,
+                regexp_replace(
+                    lower(pg_catalog.pg_get_indexdef(index_state.indexrelid)),
+                    '\\s+',
+                    '',
+                    'g'
+                ) AS normalized_definition,
+                backing_constraint.conname AS backing_constraint_name
+            FROM pg_catalog.pg_index AS index_state
+            JOIN billing_catalog_relations AS relation_state
+              ON relation_state.oid = index_state.indrelid
+            JOIN pg_catalog.pg_class AS index_relation
+              ON index_relation.oid = index_state.indexrelid
+            LEFT JOIN pg_catalog.pg_constraint AS backing_constraint
+              ON backing_constraint.conindid = index_state.indexrelid
+             AND backing_constraint.conrelid = index_state.indrelid
+        ),
+        unreviewed_constraints AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_constraints AS actual_constraint
+                LEFT JOIN required_constraints AS expected_constraint
+                  ON expected_constraint.relation_name = actual_constraint.relation_name
+                 AND expected_constraint.constraint_name = actual_constraint.constraint_name
+                WHERE expected_constraint.constraint_name IS NULL
+            ) AS no_unreviewed_billing_constraints
+        ),
+        unreviewed_indexes AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_indexes AS actual_index
+                LEFT JOIN required_indexes AS expected_index
+                  ON expected_index.relation_name = actual_index.relation_name
+                 AND expected_index.index_name = actual_index.index_name
+                LEFT JOIN required_constraints AS expected_backing_constraint
+                  ON expected_backing_constraint.relation_name = actual_index.relation_name
+                 AND expected_backing_constraint.constraint_name = actual_index.backing_constraint_name
+                WHERE (
+                    actual_index.backing_constraint_name IS NULL
+                    AND expected_index.index_name IS NULL
+                )
+                   OR (
+                    actual_index.backing_constraint_name IS NOT NULL
+                    AND expected_backing_constraint.constraint_name IS NULL
+                )
+            ) AS no_unreviewed_billing_indexes
+        ),
+        target_functions AS (
+            SELECT function_state.oid,
+                   function_state.proname,
+                   function_state.prosrc,
+                   function_state.prokind,
+                   function_state.provolatile,
+                   function_state.proisstrict,
+                   function_state.prosecdef,
+                   function_state.proleakproof,
+                   function_state.proparallel,
+                   function_state.prosupport,
+                   function_state.proconfig,
+                   language_state.lanname AS language_name
+            FROM pg_catalog.pg_proc AS function_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = function_state.pronamespace
+            JOIN pg_catalog.pg_language AS language_state
+              ON language_state.oid = function_state.prolang
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND function_state.proname IN (
+                  'default_commercial_billing_review_fingerprint',
+                  'prevent_commercial_billing_invoice_for_excluded_candidate',
+                  'prevent_commercial_billing_review_decision_mutation',
+                  'prevent_commercial_billing_candidate_override_mutation'
+              )
+              AND function_state.pronargs = 0
+              AND function_state.prorettype = 'trigger'::pg_catalog.regtype
+        ),
+        expected_invoice_fence_config AS (
+            SELECT ARRAY[
+                pg_catalog.format(
+                    'search_path=pg_catalog, %I, pg_temp',
+                    pg_catalog.current_schema()
+                )
+            ]::text[] AS function_proconfig
+        ),
+        reviewed_trigger_function_execution_metadata AS (
+            SELECT
+                COUNT(*) = 4
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM target_functions AS function_state
+                    WHERE function_state.prokind <> 'f'
+                       OR function_state.language_name <> 'plpgsql'
+                       OR function_state.provolatile <> 'v'
+                       OR function_state.proisstrict
+                       OR function_state.prosecdef
+                       OR function_state.proleakproof
+                       OR function_state.proparallel <> 'u'
+                       OR function_state.prosupport IS DISTINCT FROM 0::pg_catalog.oid
+                       OR (
+                           function_state.proname =
+                               'prevent_commercial_billing_invoice_for_excluded_candidate'
+                           AND COALESCE(
+                               function_state.proconfig,
+                               ARRAY[]::text[]
+                           ) <> ARRAY[]::text[]
+                           AND COALESCE(
+                               function_state.proconfig,
+                               ARRAY[]::text[]
+                           ) <> (
+                               SELECT function_proconfig
+                               FROM expected_invoice_fence_config
+                           )
+                       )
+                       OR (
+                           function_state.proname <>
+                               'prevent_commercial_billing_invoice_for_excluded_candidate'
+                           AND COALESCE(
+                               function_state.proconfig,
+                               ARRAY[]::text[]
+                           ) <> ARRAY[]::text[]
+                       )
+                ) AS trigger_function_execution_metadata_ready
+            FROM target_functions AS function_state
+        ),
+        target_function AS (
+            SELECT function_state.oid,
+                   function_state.prosrc,
+                   function_state.proconfig
+            FROM target_functions AS function_state
+            WHERE function_state.proname =
+                'prevent_commercial_billing_invoice_for_excluded_candidate'
+            LIMIT 1
+        ),
+        invoice_fence_schema_binding AS (
+            SELECT COALESCE(
+                (
+                    SELECT COALESCE(
+                        function_state.proconfig,
+                        ARRAY[]::text[]
+                    ) = expected_config.function_proconfig
+                    FROM target_function AS function_state
+                    JOIN expected_invoice_fence_config AS expected_config ON TRUE
+                ),
+                FALSE
+            ) AS invoice_fence_function_schema_binding_ready
+        ),
+        target_triggers AS (
+            SELECT relation_state.relname AS relation_name,
+                   trigger_state.tgname AS trigger_name,
+                   function_state.proname AS function_name,
+                   trigger_state.tgfoid,
+                   trigger_state.tgtype,
+                   trigger_state.tgenabled,
+                   trigger_state.tgqual,
+                   (trigger_state.tgtype::integer & 6) = 6
+                       AS is_before_insert
+            FROM pg_catalog.pg_trigger AS trigger_state
+            JOIN target_relations AS relation_state
+              ON relation_state.oid = trigger_state.tgrelid
+            JOIN pg_catalog.pg_proc AS function_state
+              ON function_state.oid = trigger_state.tgfoid
+            WHERE NOT trigger_state.tgisinternal
+        ),
+        required_history_triggers AS (
+            SELECT expected_trigger.relation_name,
+                   expected_trigger.trigger_name,
+                   expected_trigger.function_name,
+                   expected_function.oid AS function_oid,
+                   expected_trigger.trigger_type
+            FROM (
+                VALUES
+                    (
+                        'commercial_billing_candidate_review_decisions',
+                        'trg_prevent_commercial_billing_review_decision_mutation',
+                        'prevent_commercial_billing_review_decision_mutation',
+                        27
+                    ),
+                    (
+                        'commercial_billing_candidate_review_decisions',
+                        'trg_prevent_commercial_billing_review_decision_truncate',
+                        'prevent_commercial_billing_review_decision_mutation',
+                        34
+                    ),
+                    (
+                        'commercial_billing_candidate_overrides',
+                        'trg_prevent_commercial_billing_candidate_override_mutation',
+                        'prevent_commercial_billing_candidate_override_mutation',
+                        27
+                    ),
+                    (
+                        'commercial_billing_candidate_overrides',
+                        'trg_prevent_commercial_billing_candidate_override_truncate',
+                        'prevent_commercial_billing_candidate_override_mutation',
+                        34
+                    )
+            ) AS expected_trigger(
+                relation_name, trigger_name, function_name, trigger_type
+            )
+            LEFT JOIN target_functions AS expected_function
+              ON expected_function.proname = expected_trigger.function_name
+        ),
+        required_billing_write_triggers AS (
+            SELECT relation_name,
+                   trigger_name,
+                   function_name,
+                   function_oid,
+                   trigger_type
+            FROM required_history_triggers
+            UNION ALL
+            SELECT
+                'commercial_billing_candidate_review_decisions',
+                'trg_default_commercial_billing_review_decision_fingerprint',
+                'default_commercial_billing_review_fingerprint',
+                expected_function.oid,
+                7
+            FROM target_functions AS expected_function
+            WHERE expected_function.proname =
+                'default_commercial_billing_review_fingerprint'
+        ),
+        unreviewed_billing_write_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_triggers AS interceptor
+                JOIN billing_catalog_relations AS billing_relation
+                  ON billing_relation.relname = interceptor.relation_name
+                LEFT JOIN required_billing_write_triggers AS expected_trigger
+                  ON expected_trigger.relation_name = interceptor.relation_name
+                 AND expected_trigger.trigger_name = interceptor.trigger_name
+                 AND expected_trigger.function_name = interceptor.function_name
+                 AND expected_trigger.function_oid = interceptor.tgfoid
+                 AND expected_trigger.trigger_type = interceptor.tgtype
+                 AND interceptor.tgenabled = 'O'
+                 AND interceptor.tgqual IS NULL
+                WHERE expected_trigger.trigger_name IS NULL
+            ) AS no_unreviewed_billing_write_interceptors
+        ),
+        unreviewed_invoice_insert_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM target_triggers AS interceptor
+                WHERE interceptor.relation_name = 'invoices'
+                  AND interceptor.is_before_insert
+                  AND interceptor.trigger_name <>
+                      'trg_prevent_commercial_billing_invoice_for_excluded_candidate'
+            ) AS no_unreviewed_invoice_insert_interceptors
+        ),
+        unreviewed_invoice_rewrite_interceptors AS (
+            SELECT NOT EXISTS (
+                SELECT 1
+                FROM pg_catalog.pg_rewrite AS rule_state
+                JOIN target_relations AS relation_state
+                  ON relation_state.oid = rule_state.ev_class
+                WHERE relation_state.relname = 'invoices'
+                  AND rule_state.rulename <> '_RETURN'
+            ) AS no_unreviewed_invoice_rewrite_interceptors
+        )
+        SELECT
+            (
+                SELECT COUNT(*) = 4
+                FROM target_relations AS relation_state
+                WHERE relation_state.relkind = 'r'
+                  AND relation_state.relpersistence = 'p'
+                  AND NOT relation_state.relispartition
+            ) AS relations_ready,
+            NOT EXISTS (
+                SELECT 1
+                FROM required_columns AS expected_column
+                LEFT JOIN target_columns AS actual_column
+                  ON actual_column.relation_name = expected_column.relation_name
+                 AND actual_column.column_name = expected_column.column_name
+                WHERE actual_column.relation_name IS NULL
+                   OR actual_column.type_name <> expected_column.type_name
+                   OR actual_column.type_modifier
+                      IS DISTINCT FROM expected_column.type_modifier
+                   OR actual_column.attnotnull
+                      IS DISTINCT FROM expected_column.not_null
+                   OR actual_column.uses_type_default_collation
+                      IS DISTINCT FROM expected_column.uses_type_default_collation
+            ) AS required_columns_ready,
+            (
+                SELECT no_unreviewed_billing_columns
+                FROM unreviewed_columns
+            ) AS no_unreviewed_billing_columns,
+            (
+                SELECT no_unreviewed_billing_read_interceptors
+                FROM unreviewed_billing_read_interceptors
+            ) AS no_unreviewed_billing_read_interceptors,
+            (
+                SELECT no_unreviewed_billing_write_interceptors
+                FROM unreviewed_billing_write_interceptors
+            ) AS no_unreviewed_billing_write_interceptors,
+            (
+                NOT EXISTS (
+                    SELECT 1
+                    FROM required_constraints AS expected_constraint
+                    LEFT JOIN target_constraints AS actual_constraint
+                      ON actual_constraint.relation_name = expected_constraint.relation_name
+                     AND actual_constraint.constraint_name = expected_constraint.constraint_name
+                    WHERE actual_constraint.constraint_name IS NULL
+                       OR actual_constraint.constraint_type
+                          IS DISTINCT FROM expected_constraint.constraint_type
+                       OR actual_constraint.key_columns
+                          IS DISTINCT FROM expected_constraint.key_columns
+                       OR (
+                           expected_constraint.referenced_relation_name IS NOT NULL
+                           AND (
+                               actual_constraint.referenced_relation_name
+                                   IS DISTINCT FROM expected_constraint.referenced_relation_name
+                               OR actual_constraint.referenced_schema_name
+                                   IS DISTINCT FROM pg_catalog.current_schema()
+                               OR actual_constraint.referenced_columns
+                                   IS DISTINCT FROM expected_constraint.referenced_columns
+                               OR actual_constraint.confdeltype IS DISTINCT FROM 'r'
+                               OR actual_constraint.confupdtype IS DISTINCT FROM 'a'
+                               OR actual_constraint.confmatchtype IS DISTINCT FROM 's'
+                           )
+                       )
+                       OR actual_constraint.condeferrable
+                       OR actual_constraint.condeferred
+                       OR NOT actual_constraint.convalidated
+                       OR NOT actual_constraint.foreign_key_enforcement_ready
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM required_check_expressions AS expected_check
+                    LEFT JOIN target_constraints AS actual_constraint
+                      ON actual_constraint.relation_name = expected_check.relation_name
+                     AND actual_constraint.constraint_name = expected_check.constraint_name
+                    WHERE actual_constraint.constraint_name IS NULL
+                       OR actual_constraint.normalized_check_expression
+                          IS DISTINCT FROM expected_check.normalized_expression
+                )
+            ) AS required_billing_constraints_ready,
+            NOT EXISTS (
+                SELECT 1
+                FROM required_constraints AS expected_constraint
+                LEFT JOIN target_constraints AS actual_constraint
+                  ON actual_constraint.relation_name = expected_constraint.relation_name
+                 AND actual_constraint.constraint_name = expected_constraint.constraint_name
+                WHERE expected_constraint.constraint_type = 'f'
+                  AND (
+                      actual_constraint.constraint_name IS NULL
+                      OR actual_constraint.constraint_type IS DISTINCT FROM 'f'
+                      OR actual_constraint.foreign_key_enforcement_ready
+                         IS DISTINCT FROM TRUE
+                  )
+            ) AS foreign_key_enforcement_ready,
+            (
+                SELECT no_unreviewed_billing_constraints
+                FROM unreviewed_constraints
+            ) AS no_unreviewed_billing_constraints,
+            NOT EXISTS (
+                SELECT 1
+                FROM required_indexes AS expected_index
+                LEFT JOIN target_indexes AS actual_index
+                  ON actual_index.relation_name = expected_index.relation_name
+                 AND actual_index.index_name = expected_index.index_name
+                WHERE actual_index.index_name IS NULL
+                   OR actual_index.backing_constraint_name IS NOT NULL
+                   OR actual_index.is_unique IS DISTINCT FROM expected_index.is_unique
+                   OR NOT actual_index.is_valid
+                   OR NOT actual_index.is_ready
+                   OR actual_index.key_attribute_count
+                      IS DISTINCT FROM expected_index.key_attribute_count
+                   OR actual_index.attribute_count
+                      IS DISTINCT FROM expected_index.key_attribute_count
+                   OR NOT actual_index.has_no_predicate
+                   OR actual_index.normalized_definition NOT LIKE
+                      '%' || expected_index.definition_fragment || '%'
+            ) AS required_billing_indexes_ready,
+            (
+                SELECT no_unreviewed_billing_indexes
+                FROM unreviewed_indexes
+            ) AS no_unreviewed_billing_indexes,
+            NOT EXISTS (
+                SELECT 1
+                FROM required_history_triggers AS expected_trigger
+                LEFT JOIN target_triggers AS actual_trigger
+                  ON actual_trigger.relation_name = expected_trigger.relation_name
+                 AND actual_trigger.trigger_name = expected_trigger.trigger_name
+                 AND actual_trigger.function_name = expected_trigger.function_name
+                 AND actual_trigger.tgfoid = expected_trigger.function_oid
+                 AND actual_trigger.tgtype = expected_trigger.trigger_type
+                 AND actual_trigger.tgenabled = 'O'
+                 AND actual_trigger.tgqual IS NULL
+                WHERE actual_trigger.trigger_name IS NULL
+            ) AS immutable_history_guards_ready,
+            EXISTS (
+                SELECT 1
+                FROM target_triggers AS trigger_state
+                JOIN target_functions AS function_state
+                  ON trigger_state.tgfoid = function_state.oid
+                WHERE trigger_state.relation_name =
+                    'commercial_billing_candidate_review_decisions'
+                  AND trigger_state.trigger_name =
+                      'trg_default_commercial_billing_review_decision_fingerprint'
+                  AND trigger_state.function_name =
+                      'default_commercial_billing_review_fingerprint'
+                  AND trigger_state.tgtype = 7
+                  AND trigger_state.tgenabled = 'O'
+                  AND trigger_state.tgqual IS NULL
+            ) AS review_decision_default_trigger_ready,
+            EXISTS (
+                SELECT 1
+                FROM target_triggers AS trigger_state
+                JOIN target_function AS function_state
+                  ON trigger_state.tgfoid = function_state.oid
+                WHERE trigger_state.relation_name = 'invoices'
+                  AND trigger_state.trigger_name =
+                      'trg_prevent_commercial_billing_invoice_for_excluded_candidate'
+                  AND trigger_state.function_name =
+                      'prevent_commercial_billing_invoice_for_excluded_candidate'
+                  AND trigger_state.tgtype = 7
+                  AND trigger_state.tgenabled = 'O'
+                  AND trigger_state.tgqual IS NULL
+            ) AS invoice_fence_trigger_ready,
+            (
+                SELECT no_unreviewed_invoice_insert_interceptors
+                FROM unreviewed_invoice_insert_interceptors
+            ) AS no_unreviewed_invoice_insert_interceptors,
+            (
+                SELECT no_unreviewed_invoice_rewrite_interceptors
+                FROM unreviewed_invoice_rewrite_interceptors
+            ) AS no_unreviewed_invoice_rewrite_interceptors,
+            (
+                SELECT trigger_function_execution_metadata_ready
+                FROM reviewed_trigger_function_execution_metadata
+            ) AS trigger_function_execution_metadata_ready,
+            (
+                SELECT invoice_fence_function_schema_binding_ready
+                FROM invoice_fence_schema_binding
+            ) AS invoice_fence_function_schema_binding_ready,
+            (
+                SELECT function_state.prosrc
+                FROM target_functions AS function_state
+                WHERE function_state.proname =
+                    'default_commercial_billing_review_fingerprint'
+            ) AS review_decision_default_function_body,
+            (
+                SELECT function_state.prosrc
+                FROM target_functions AS function_state
+                WHERE function_state.proname =
+                    'prevent_commercial_billing_review_decision_mutation'
+            ) AS review_decision_history_guard_function_body,
+            (
+                SELECT function_state.prosrc
+                FROM target_functions AS function_state
+                WHERE function_state.proname =
+                    'prevent_commercial_billing_candidate_override_mutation'
+            ) AS override_history_guard_function_body,
+            (SELECT function_state.prosrc FROM target_function AS function_state)
+                AS function_body
+        """
+    )
+    # asyncpg.Record is iterable but is not registered as collections.abc.Mapping.
+    return {} if evidence_row is None else dict(evidence_row)
+
+
+async def _attest_migration_379(
+    executor: Any,
+    migration_files: Collection[Path],
+) -> MissingSourceForwardRecoveryMigrationReconciliationAttestation:
+    """Classify only the exact missing-379 legacy fence state."""
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    historical_ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256, applied_at FROM schema_migrations WHERE name = $1 LIMIT 2",
+        record.migration_name,
+    )
+    successor_ledger_rows = await executor.fetch(
+        "SELECT name, version, content_sha256, applied_at "
+        "FROM schema_migrations WHERE name = ANY($1::text[]) ORDER BY name",
+        [receipt.migration_name for receipt in record.successor_receipts],
+    )
+    recovery_ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256 FROM schema_migrations WHERE name = $1 LIMIT 2",
+        record.recovery_migration_name,
+    )
+    schema_binding_ledger_rows = await executor.fetch(
+        "SELECT version, content_sha256 FROM schema_migrations WHERE name = $1 LIMIT 2",
+        record.schema_binding_migration_name,
+    )
+    exactly_one_historical_ledger_row = len(historical_ledger_rows) == 1
+    historical_ledger_row = (
+        historical_ledger_rows[0] if exactly_one_historical_ledger_row else None
+    )
+    exactly_one_recovery_ledger_row = len(recovery_ledger_rows) == 1
+    recovery_ledger_row = (
+        recovery_ledger_rows[0] if exactly_one_recovery_ledger_row else None
+    )
+    exactly_one_schema_binding_ledger_row = len(schema_binding_ledger_rows) == 1
+    schema_binding_ledger_row = (
+        schema_binding_ledger_rows[0]
+        if exactly_one_schema_binding_ledger_row
+        else None
+    )
+    expected_successors = {
+        receipt.migration_name: receipt for receipt in record.successor_receipts
+    }
+    observed_successors = {
+        str(row["name"]): row for row in successor_ledger_rows
+    }
+    successor_receipts_ready = (
+        len(successor_ledger_rows) == len(expected_successors)
+        and set(observed_successors) == set(expected_successors)
+        and all(
+            row["version"] == expected.migration_version
+            and row["content_sha256"] is None
+            and _normalize_utc(row["applied_at"]) == expected.observed_applied_at
+            for name, expected in expected_successors.items()
+            for row in (observed_successors[name],)
+        )
+    )
+    catalog = await _migration_379_catalog_evidence(executor)
+    function_body_sha256 = _catalog_function_body_sha256(
+        catalog.get("function_body")
+    )
+    review_decision_default_function_body_ready = (
+        _catalog_function_body_sha256(
+            catalog.get("review_decision_default_function_body")
+        ) == record.review_decision_default_function_body_sha256
+    )
+    history_guard_function_bodies_ready = all((
+        _catalog_function_body_sha256(
+            catalog.get("review_decision_history_guard_function_body")
+        ) == record.review_decision_history_guard_function_body_sha256,
+        _catalog_function_body_sha256(
+            catalog.get("override_history_guard_function_body")
+        ) == record.override_history_guard_function_body_sha256,
+    ))
+    historical_receipt_ready = all((
+        exactly_one_historical_ledger_row,
+        historical_ledger_row is not None
+        and historical_ledger_row["version"] == record.historical_migration_version,
+        historical_ledger_row is not None
+        and historical_ledger_row["content_sha256"] == record.historical_ledger_sha256,
+        historical_ledger_row is not None
+        and _normalize_utc(historical_ledger_row["applied_at"])
+        == record.observed_applied_at,
+    ))
+    recovery_source_ready = all((
+        _packaged_migration_digest(migration_files, record.recovery_migration_name)
+        == record.recovery_packaged_sha256,
+        _packaged_migration_function_body_sha256(
+            migration_files, record.recovery_migration_name
+        )
+        == record.recovered_function_body_template_sha256,
+    ))
+    recovery_receipt_ready = all((
+        exactly_one_recovery_ledger_row,
+        recovery_ledger_row is not None
+        and recovery_ledger_row["version"] == record.recovery_migration_version,
+        recovery_ledger_row is not None
+        and recovery_ledger_row["content_sha256"] == record.recovery_packaged_sha256,
+    ))
+    schema_binding_source_ready = (
+        _packaged_migration_digest(
+            migration_files, record.schema_binding_migration_name
+        )
+        == record.schema_binding_packaged_sha256
+    )
+    schema_binding_receipt_ready = all((
+        exactly_one_schema_binding_ledger_row,
+        schema_binding_ledger_row is not None
+        and schema_binding_ledger_row["version"]
+        == record.schema_binding_migration_version,
+        schema_binding_ledger_row is not None
+        and schema_binding_ledger_row["content_sha256"]
+        == record.schema_binding_packaged_sha256,
+    ))
+
+    return MissingSourceForwardRecoveryMigrationReconciliationAttestation(
+        reconciliation_id=record.reconciliation_id,
+        migration_name=record.migration_name,
+        historical_receipt_ready=historical_receipt_ready,
+        successor_receipts_ready=successor_receipts_ready,
+        recovery_source_ready=recovery_source_ready,
+        no_recovery_ledger_row=not recovery_ledger_rows,
+        recovery_receipt_ready=recovery_receipt_ready,
+        schema_binding_source_ready=schema_binding_source_ready,
+        no_schema_binding_ledger_row=not schema_binding_ledger_rows,
+        schema_binding_receipt_ready=schema_binding_receipt_ready,
+        reviewed_billing_catalog_ready=all((
+            bool(catalog.get("relations_ready")),
+            bool(catalog.get("required_columns_ready")),
+            bool(catalog.get("no_unreviewed_billing_columns")),
+            bool(catalog.get("no_unreviewed_billing_read_interceptors")),
+            bool(catalog.get("no_unreviewed_billing_write_interceptors")),
+            bool(catalog.get("review_decision_default_trigger_ready")),
+            review_decision_default_function_body_ready,
+            bool(catalog.get("required_billing_constraints_ready")),
+            bool(catalog.get("foreign_key_enforcement_ready")),
+            bool(catalog.get("no_unreviewed_billing_constraints")),
+            bool(catalog.get("required_billing_indexes_ready")),
+            bool(catalog.get("no_unreviewed_billing_indexes")),
+            bool(catalog.get("immutable_history_guards_ready")),
+            history_guard_function_bodies_ready,
+            bool(catalog.get("no_unreviewed_invoice_insert_interceptors")),
+            bool(catalog.get("no_unreviewed_invoice_rewrite_interceptors")),
+            bool(catalog.get("trigger_function_execution_metadata_ready")),
+        )),
+        required_billing_columns_ready=bool(
+            catalog.get("required_columns_ready")
+        ),
+        no_unreviewed_billing_columns=bool(
+            catalog.get("no_unreviewed_billing_columns")
+        ),
+        no_unreviewed_billing_read_interceptors=bool(
+            catalog.get("no_unreviewed_billing_read_interceptors")
+        ),
+        no_unreviewed_billing_write_interceptors=bool(
+            catalog.get("no_unreviewed_billing_write_interceptors")
+        ),
+        review_decision_default_trigger_ready=bool(
+            catalog.get("review_decision_default_trigger_ready")
+        ),
+        review_decision_default_function_body_ready=(
+            review_decision_default_function_body_ready
+        ),
+        history_guard_function_bodies_ready=history_guard_function_bodies_ready,
+        required_billing_constraints_ready=bool(
+            catalog.get("required_billing_constraints_ready")
+        ),
+        foreign_key_enforcement_ready=bool(
+            catalog.get("foreign_key_enforcement_ready")
+        ),
+        no_unreviewed_billing_constraints=bool(
+            catalog.get("no_unreviewed_billing_constraints")
+        ),
+        required_billing_indexes_ready=bool(
+            catalog.get("required_billing_indexes_ready")
+        ),
+        no_unreviewed_billing_indexes=bool(
+            catalog.get("no_unreviewed_billing_indexes")
+        ),
+        invoice_fence_trigger_ready=bool(
+            catalog.get("invoice_fence_trigger_ready")
+        ),
+        no_unreviewed_invoice_insert_interceptors=bool(
+            catalog.get("no_unreviewed_invoice_insert_interceptors")
+        ),
+        no_unreviewed_invoice_rewrite_interceptors=bool(
+            catalog.get("no_unreviewed_invoice_rewrite_interceptors")
+        ),
+        trigger_function_execution_metadata_ready=bool(
+            catalog.get("trigger_function_execution_metadata_ready")
+        ),
+        invoice_fence_function_schema_binding_ready=bool(
+            catalog.get("invoice_fence_function_schema_binding_ready")
+        ),
+        legacy_function_body_matches=(
+            function_body_sha256 == record.legacy_function_body_sha256
+        ),
+        recovered_function_body_matches=(
+            function_body_sha256 == record.recovered_function_body_template_sha256
+        ),
+    )
+
+
+_MIGRATION_379_ATOMIC_FUNCTION_NAMES = (
+    "default_commercial_billing_review_fingerprint",
+    "prevent_commercial_billing_candidate_override_mutation",
+    "prevent_commercial_billing_invoice_for_excluded_candidate",
+    "prevent_commercial_billing_review_decision_mutation",
+)
+
+
+async def _migration_379_atomic_function_definitions(
+    executor: Any,
+    *,
+    expected_invoice_fence_body_sha256: str,
+) -> tuple[str, ...]:
+    """Return only owner-replayable, catalog-attested trigger definitions.
+
+    PostgreSQL deliberately does not grant a normal application/migration role
+    write-class ``LOCK TABLE`` access to ``pg_catalog.pg_proc``. Replaying the
+    exact, already-validated definition instead takes the function row lock
+    that conflicts with ``CREATE OR REPLACE FUNCTION`` and ``ALTER FUNCTION``.
+    The definition is read and validated before replay, so an untrusted catalog
+    change can never be executed as migration SQL. If concurrent function DDL
+    commits after this read but before the replay, PostgreSQL rejects the stale
+    catalog tuple update; the surrounding atomic recovery then rolls back with
+    no migration receipt instead of overwriting that newer definition.
+    """
+
+    rows = [
+        dict(row)
+        for row in await executor.fetch(
+            """
+            WITH expected_invoice_fence_config AS (
+                SELECT ARRAY[
+                    pg_catalog.format(
+                        'search_path=pg_catalog, %I, pg_temp',
+                        pg_catalog.current_schema()
+                    )
+                ]::text[] AS function_proconfig
+            )
+            SELECT function_state.proname AS function_name,
+                   function_state.prosrc AS function_body,
+                   pg_catalog.pg_get_functiondef(function_state.oid)
+                       AS function_definition,
+                   pg_catalog.pg_has_role(
+                       CURRENT_USER,
+                       function_state.proowner,
+                       'MEMBER'
+                   ) AS current_role_can_replace
+            FROM pg_catalog.pg_proc AS function_state
+            JOIN pg_catalog.pg_namespace AS namespace_state
+              ON namespace_state.oid = function_state.pronamespace
+            JOIN pg_catalog.pg_language AS language_state
+              ON language_state.oid = function_state.prolang
+            WHERE namespace_state.nspname = pg_catalog.current_schema()
+              AND function_state.proname IN (
+                  'default_commercial_billing_review_fingerprint',
+                  'prevent_commercial_billing_invoice_for_excluded_candidate',
+                  'prevent_commercial_billing_review_decision_mutation',
+                  'prevent_commercial_billing_candidate_override_mutation'
+              )
+              AND function_state.pronargs = 0
+              AND function_state.prorettype = 'trigger'::pg_catalog.regtype
+              AND function_state.prokind = 'f'
+              AND language_state.lanname = 'plpgsql'
+              AND function_state.provolatile = 'v'
+              AND NOT function_state.proisstrict
+              AND NOT function_state.prosecdef
+              AND NOT function_state.proleakproof
+              AND function_state.proparallel = 'u'
+              AND function_state.prosupport IS NOT DISTINCT FROM 0::pg_catalog.oid
+              AND (
+                  (
+                      function_state.proname =
+                          'prevent_commercial_billing_invoice_for_excluded_candidate'
+                      AND (
+                          COALESCE(function_state.proconfig, ARRAY[]::text[])
+                              = ARRAY[]::text[]
+                          OR COALESCE(function_state.proconfig, ARRAY[]::text[])
+                              = (
+                                  SELECT function_proconfig
+                                  FROM expected_invoice_fence_config
+                              )
+                      )
+                  )
+                  OR (
+                      function_state.proname <>
+                          'prevent_commercial_billing_invoice_for_excluded_candidate'
+                      AND COALESCE(function_state.proconfig, ARRAY[]::text[])
+                          = ARRAY[]::text[]
+                  )
+              )
+            ORDER BY function_state.proname
+            """
+        )
+    ]
+    observed_names = tuple(row["function_name"] for row in rows)
+    if observed_names != _MIGRATION_379_ATOMIC_FUNCTION_NAMES:
+        raise HistoricalForwardRecoveryAtomicPreflightError(
+            "the exact owner-replayable 379 trigger-function set was not present"
+        )
+
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    expected_body_sha256 = {
+        "default_commercial_billing_review_fingerprint": (
+            record.review_decision_default_function_body_sha256
+        ),
+        "prevent_commercial_billing_candidate_override_mutation": (
+            record.override_history_guard_function_body_sha256
+        ),
+        "prevent_commercial_billing_invoice_for_excluded_candidate": (
+            expected_invoice_fence_body_sha256
+        ),
+        "prevent_commercial_billing_review_decision_mutation": (
+            record.review_decision_history_guard_function_body_sha256
+        ),
+    }
+    function_definitions: list[str] = []
+    for row in rows:
+        function_name = row["function_name"]
+        if not row["current_role_can_replace"]:
+            raise HistoricalForwardRecoveryAtomicPreflightError(
+                "the migration role cannot replay the attested 379 trigger functions"
+            )
+        if (
+            _catalog_function_body_sha256(row["function_body"])
+            != expected_body_sha256[function_name]
+        ):
+            raise HistoricalForwardRecoveryAtomicPreflightError(
+                "the 379 trigger-function body changed before its atomic receipt"
+            )
+        function_definition = row["function_definition"]
+        if not isinstance(function_definition, str) or not function_definition.strip():
+            raise HistoricalForwardRecoveryAtomicPreflightError(
+                "the 379 trigger-function definition could not be safely replayed"
+            )
+        function_definitions.append(function_definition)
+    return tuple(function_definitions)
+
+
+async def reattest_historical_forward_recovery_in_atomic_transaction(
+    executor: Any,
+    *,
+    migration_name: str,
+    migration_files: Collection[Path],
+) -> None:
+    """Close the selected 391/392 catalog race inside its receipt transaction.
+
+    ``run_migrations`` holds the process-wide migration advisory lock, but that
+    lock intentionally does not govern a separate session's direct catalog DDL.
+    Relation locks stabilize tables, constraints, indexes, rules, triggers, and
+    receipts. Exact owner-replayed trigger definitions stabilize the associated
+    ``pg_proc`` rows without requiring a superuser-only system-catalog lock.
+    The canonical 379 predicate is then re-attested before the selected SQL or
+    its irreversible receipt may run.
+    """
+
+    record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    expected_recovery_state = {
+        record.recovery_migration_name: (
+            "recovery_required",
+            record.legacy_function_body_sha256,
+        ),
+        record.schema_binding_migration_name: (
+            "schema_binding_required",
+            record.recovered_function_body_template_sha256,
+        ),
+    }.get(migration_name)
+    if expected_recovery_state is None:
+        return
+    expected_status, expected_invoice_fence_body_sha256 = expected_recovery_state
+
+    await executor.execute(
+        """
+        DO $migration_379_catalog_lock$
+        DECLARE
+            schema_name TEXT := pg_catalog.current_schema();
+        BEGIN
+            IF schema_name IS NULL THEN
+                RAISE EXCEPTION
+                    'Cannot re-attest commercial billing fence without an active schema';
+            END IF;
+
+            -- SHARE ROW EXCLUSIVE excludes concurrent relation DDL and writes
+            -- through the final receipt while remaining self-compatible with
+            -- this atomic recovery's own function/trigger/ledger changes.
+            EXECUTE pg_catalog.format(
+                'LOCK TABLE '
+                || '%1$I.schema_migrations, '
+                || '%1$I.commercial_billing_candidate_overrides, '
+                || '%1$I.commercial_billing_candidate_review_decisions, '
+                || '%1$I.commercial_billing_run_candidates, '
+                || '%1$I.invoices '
+                || 'IN SHARE ROW EXCLUSIVE MODE',
+                schema_name
+            );
+        END;
+        $migration_379_catalog_lock$;
+        """
+    )
+
+    function_definitions = await _migration_379_atomic_function_definitions(
+        executor,
+        expected_invoice_fence_body_sha256=expected_invoice_fence_body_sha256,
+    )
+    for function_definition in function_definitions:
+        await executor.execute(function_definition)
+
+    attestation = await _attest_migration_379(executor, migration_files)
+    if attestation.status != expected_status:
+        raise HistoricalForwardRecoveryAtomicPreflightError(
+            "the exact 379 recovery state was not present after acquiring the "
+            f"atomic catalog locks (expected={expected_status}, "
+            f"observed={attestation.status})"
+        )
+
+    if migration_name == record.schema_binding_migration_name:
+        await executor.execute(
+            "SELECT pg_catalog.set_config("
+            "'atlas.migration_379_catalog_attestation_schema', "
+            "pg_catalog.current_schema(), TRUE)"
+        )
+
+
 async def _migration_386_catalog_evidence(executor: Any) -> Mapping[str, object]:
     """Read only the named function and trigger metadata in the active schema."""
     evidence_row = await executor.fetchrow(
@@ -2798,24 +4311,56 @@ async def pending_historical_forward_recovery_migration(
     unresolved_missing_source: Collection[str],
     pending_migration_names: Collection[str],
 ) -> str | None:
-    """Return the sole permitted prelude migration for the exact weak 386 state.
+    """Return the sole permitted prelude for an exact named recovery state.
 
     The caller provides the already-unresolved report names and its selected
     pending names. This keeps recovery source-controlled and prevents an
     `only=` caller from accidentally running an unrequested prerequisite.
     """
-    record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
-    if frozenset(unresolved_mismatched) != {record.migration_name}:
+    mismatched_names = frozenset(unresolved_mismatched)
+    missing_source_names = frozenset(unresolved_missing_source)
+    pending_names = frozenset(pending_migration_names)
+    commercial_record = MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY
+    won_loss_record = MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY
+
+    # The target that needs 391 also retains the independently-reviewed weak
+    # 386 fence. Apply only 391 first, then force a fresh runner invocation so
+    # each recovery has a committed receipt and an observable re-attestation.
+    if commercial_record.migration_name in missing_source_names:
+        if missing_source_names != {commercial_record.migration_name}:
+            return None
+        if mismatched_names - {won_loss_record.migration_name}:
+            return None
+        commercial_attestation = await _attest_migration_379(
+            executor, migration_files
+        )
+        recovery_name = {
+            "recovery_required": commercial_record.recovery_migration_name,
+            "schema_binding_required": (
+                commercial_record.schema_binding_migration_name
+            ),
+        }.get(commercial_attestation.status)
+        if recovery_name is None or recovery_name not in pending_names:
+            return None
+        if mismatched_names:
+            won_loss_attestation = await _attest_migration_386(
+                executor, migration_files
+            )
+            if won_loss_attestation.status != "recovery_required":
+                return None
+        return recovery_name
+
+    if mismatched_names != {won_loss_record.migration_name}:
         return None
-    if unresolved_missing_source:
+    if missing_source_names:
         return None
-    if record.recovery_migration_name not in frozenset(pending_migration_names):
+    if won_loss_record.recovery_migration_name not in pending_names:
         return None
 
     attestation = await _attest_migration_386(executor, migration_files)
     if attestation.status != "recovery_required":
         return None
-    return record.recovery_migration_name
+    return won_loss_record.recovery_migration_name
 
 
 async def _attest_migration_387(
@@ -3108,6 +4653,7 @@ async def attest_known_historical_migration_reconciliations(
 ) -> tuple[
     MigrationReconciliationAttestation
     | ForwardRecoveryMigrationReconciliationAttestation
+    | MissingSourceForwardRecoveryMigrationReconciliationAttestation
     | MissingSourceMigrationReconciliationAttestation
     | RenamedMissingSourceMigrationReconciliationAttestation
     | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
@@ -3131,12 +4677,18 @@ async def attest_known_historical_migration_reconciliations(
     attestations: list[
         MigrationReconciliationAttestation
         | ForwardRecoveryMigrationReconciliationAttestation
+        | MissingSourceForwardRecoveryMigrationReconciliationAttestation
         | MissingSourceMigrationReconciliationAttestation
         | RenamedMissingSourceMigrationReconciliationAttestation
         | B2BCampaignPartnerMissingSourceMigrationReconciliationAttestation
         | B2BCompanySignalPromotionMissingSourceMigrationReconciliationAttestation
         | B2BWatchlistAlertEventsMissingSourceMigrationReconciliationAttestation
     ] = []
+    if (
+        MIGRATION_379_COMMERCIAL_BILLING_RUN_FENCE_FORWARD_RECOVERY.migration_name
+        in requested_names
+    ):
+        attestations.append(await _attest_migration_379(executor, migration_files))
     if (
         MIGRATION_386_WON_LOSS_FENCE_FORWARD_RECOVERY.migration_name
         in requested_names
