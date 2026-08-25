@@ -16,6 +16,17 @@ logger = logging.getLogger("atlas.storage.migrations")
 
 MIGRATIONS_DIR = Path(__file__).parent
 
+# These migrations deliberately require a deployment-only DBA authority that
+# ordinary Atlas processes must never receive. They remain in the catalog for
+# identity verification and explicit, narrow runner selection, but generic
+# startup/MCP runs must not attempt them.
+CONTROLLED_DBA_MIGRATION_NAMES = frozenset(
+    {
+        "393_eom_missed_call_recovery_runtime_privileges",
+        "394_eom_first_clean_completion_receipts",
+    }
+)
+
 
 def _parse_migration_identity(filename: str) -> tuple[int, str]:
     """Extract the numeric prefix and canonical migration name."""
@@ -636,9 +647,11 @@ async def run_migrations(
     only: Collection[str] | None = None,
 ) -> None:
     """
-    Run all pending migrations.
+    Run all pending ordinary migrations.
 
-    Only runs migrations that haven't been applied yet.
+    Only runs migrations that haven't been applied yet. Controlled DBA
+    migrations are excluded from a generic run; their dedicated deployment
+    runner must select their exact stem through ``only``.
     Tracks applied migrations in schema_migrations table.
 
     Concurrency: the whole run holds a SESSION-level advisory lock on one
@@ -706,7 +719,20 @@ async def run_migrations(
             )
             _log_migration_content_integrity(integrity_report)
             migration_files = migration_catalog
-            if only is not None:
+            controlled_dba_pending: list[Path] = []
+            if only is None:
+                controlled_dba_pending = [
+                    migration_file
+                    for migration_file in migration_catalog
+                    if migration_file.stem in CONTROLLED_DBA_MIGRATION_NAMES
+                    and migration_file.stem not in applied
+                ]
+                migration_files = [
+                    migration_file
+                    for migration_file in migration_catalog
+                    if migration_file.stem not in CONTROLLED_DBA_MIGRATION_NAMES
+                ]
+            else:
                 requested = set(only)
                 migration_files = [
                     f for f in migration_files if f.stem in requested
@@ -716,6 +742,17 @@ async def run_migrations(
                     raise FileNotFoundError(
                         f"requested migrations not found: {sorted(missing)}"
                     )
+
+            if controlled_dba_pending:
+                logger.info(
+                    "Skipping %d controlled DBA migration(s) from generic runs; "
+                    "use the dedicated deployment runner: %s",
+                    len(controlled_dba_pending),
+                    ", ".join(
+                        migration_file.name
+                        for migration_file in controlled_dba_pending
+                    ),
+                )
 
             if not migration_files:
                 logger.info("No migration files found")

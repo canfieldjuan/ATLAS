@@ -111,8 +111,10 @@ EOM_RECEIVABLES_READINESS_MIGRATIONS: tuple[str, ...] = (
 # This worker owns EOM lead lifecycle evidence in the canonical funnel store,
 # not the global receivables pool. The set is deliberately closed: a newly
 # provisioned supported funnel database receives the columns, interaction
-# dedupe, lifecycle ledger, classification, and outbox schema it needs, while
-# unrelated Atlas migrations remain outside this slim-profile startup path.
+# dedupe, lifecycle ledger, classification, and recovery schema it needs. The
+# targeted historical recoveries 390-392 and the DBA-only ownership repair 393
+# are deliberately excluded: a normal runtime must encounter those recorded
+# already, never attempt privileged or historical repair SQL during startup.
 EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS: tuple[str, ...] = (
     "035_contacts",
     "256_contact_interaction_dedupe",
@@ -120,11 +122,6 @@ EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS: tuple[str, ...] = (
     "351_eom_lead_lifecycle_events",
     "366_contacts_customer_type",
     "389_eom_missed_call_recovery",
-    # The runner may need this explicit predecessor before 389 when the
-    # canonical target retains either reviewed historical recovery boundary.
-    "390_eom_won_loss_direct_sql_fence_recovery",
-    "391_eom_commercial_billing_run_fence_recovery",
-    "392_eom_commercial_billing_run_fence_schema_binding",
 )
 
 
@@ -320,4 +317,5 @@ async def ping() -> dict[str, str]:
 app.include_router(receivables_router, prefix="/api/v1")
 app.state.eom_funnel_crm_provider = get_eom_funnel_crm_provider
 app.state.eom_funnel_missed_call_recovery_pool = get_eom_funnel_db_pool
+app.state.eom_funnel_first_clean_completion_pool = get_eom_funnel_db_pool
 app.include_router(funnel_router, prefix="/api/v1")

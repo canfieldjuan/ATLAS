@@ -65,6 +65,31 @@ _TRACKED_RESPONSE_INTERACTIONS = frozenset(
 # with one globally unique operation key, so a retry can never move to another
 # lead or mutation kind after an interrupted browser request.
 _OPERATION_KINDS = frozenset({"no_answer", "resume", "cancel"})
+_MISSED_CALL_RECOVERY_GUARD_FUNCTION_SIGNATURES = (
+    "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)",
+    "lock_eom_missed_call_interaction_contact()",
+    "eom_missed_call_effective_recipient(UUID, TEXT)",
+    "cancel_eom_missed_call_on_recipient_change(UUID)",
+    "cancel_eom_missed_call_on_contact_change()",
+    "cancel_eom_missed_call_on_interaction()",
+    "prevent_eom_missed_call_operation_receipt_mutation()",
+    "prevent_eom_missed_call_attempt_mutation()",
+    "prevent_eom_missed_call_sequence_event_mutation()",
+    "prevent_eom_missed_call_suppression_mutation()",
+    "validate_eom_missed_call_contact_scope()",
+    "validate_eom_missed_call_sequence_scope()",
+    "eom_missed_call_has_proven_inbound_sms(JSONB)",
+)
+_MISSED_CALL_RECOVERY_DEFINER_FUNCTION_SIGNATURES = (
+    "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)",
+    "lock_eom_missed_call_interaction_contact()",
+    "eom_missed_call_effective_recipient(UUID, TEXT)",
+    "cancel_eom_missed_call_on_recipient_change(UUID)",
+    "cancel_eom_missed_call_on_contact_change()",
+    "cancel_eom_missed_call_on_interaction()",
+    "validate_eom_missed_call_contact_scope()",
+    "validate_eom_missed_call_sequence_scope()",
+)
 
 
 class EOMMissedCallRecoveryError(Exception):
@@ -407,6 +432,218 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                    AND to_regclass('eom_missed_call_sequences') IS NOT NULL
                    AND to_regclass('eom_missed_call_sequence_steps') IS NOT NULL
                    AND to_regclass('eom_missed_call_sequence_events') IS NOT NULL
+                   AND (
+                       SELECT COUNT(*) = 6
+                          AND BOOL_AND(
+                              table_owner.rolname = 'atlas_eom_handoff_owner'
+                              AND has_table_privilege(current_user, relation.oid, 'SELECT')
+                              AND has_table_privilege(current_user, relation.oid, 'INSERT')
+                              AND (
+                                  (
+                                      required_relation.requires_update
+                                      AND has_table_privilege(
+                                          current_user, relation.oid, 'UPDATE'
+                                      )
+                                  )
+                                  OR (
+                                      NOT required_relation.requires_update
+                                      AND NOT has_table_privilege(
+                                          current_user, relation.oid, 'UPDATE'
+                                      )
+                                      AND NOT has_any_column_privilege(
+                                          current_user, relation.oid, 'UPDATE'
+                                      )
+                                  )
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'DELETE'
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'TRUNCATE'
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  current_user, relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_table_privilege(
+                                  current_user, relation.oid, 'TRIGGER'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'SELECT'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'SELECT'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'INSERT'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'INSERT'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'UPDATE'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'UPDATE'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'DELETE'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'TRUNCATE'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_any_column_privilege(
+                                  'atlas_nocodb', relation.oid, 'REFERENCES'
+                              )
+                              AND NOT has_table_privilege(
+                                  'atlas_nocodb', relation.oid, 'TRIGGER'
+                              )
+                          )
+                       FROM (
+                           VALUES
+                               ('eom_missed_call_operation_receipts', TRUE),
+                               ('eom_missed_call_attempts', TRUE),
+                               ('eom_missed_call_contact_suppressions', FALSE),
+                               ('eom_missed_call_sequences', TRUE),
+                               ('eom_missed_call_sequence_steps', TRUE),
+                               ('eom_missed_call_sequence_events', FALSE)
+                       ) AS required_relation(relation_name, requires_update)
+                       JOIN pg_class AS relation
+                         ON relation.oid = to_regclass(
+                             format(
+                                 '%I.%I', current_schema(),
+                                 required_relation.relation_name
+                             )
+                         )
+                       JOIN pg_namespace AS namespace
+                         ON namespace.oid = relation.relnamespace
+                      JOIN pg_roles AS table_owner
+                         ON table_owner.oid = relation.relowner
+                      WHERE namespace.nspname = current_schema()
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM (
+                           VALUES
+                               ('eom_missed_call_operation_receipts'),
+                               ('eom_missed_call_attempts'),
+                               ('eom_missed_call_contact_suppressions'),
+                               ('eom_missed_call_sequences'),
+                               ('eom_missed_call_sequence_steps'),
+                               ('eom_missed_call_sequence_events')
+                       ) AS required_relation(relation_name)
+                       JOIN pg_class AS relation
+                         ON relation.oid = to_regclass(
+                             format(
+                                 '%I.%I', current_schema(),
+                                 required_relation.relation_name
+                             )
+                         )
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           COALESCE(
+                               relation.relacl,
+                               pg_catalog.acldefault('r', relation.relowner)
+                           )
+                       ) AS table_acl
+                       LEFT JOIN pg_roles AS grantee_role
+                         ON grantee_role.oid = table_acl.grantee
+                       WHERE table_acl.grantee = 0
+                          OR grantee_role.rolname NOT IN (
+                              'atlas_eom_handoff_owner', current_user
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM (
+                           VALUES
+                               ('eom_missed_call_operation_receipts'),
+                               ('eom_missed_call_attempts'),
+                               ('eom_missed_call_contact_suppressions'),
+                               ('eom_missed_call_sequences'),
+                               ('eom_missed_call_sequence_steps'),
+                               ('eom_missed_call_sequence_events')
+                       ) AS required_relation(relation_name)
+                       JOIN pg_class AS relation
+                         ON relation.oid = to_regclass(
+                             format(
+                                 '%I.%I', current_schema(),
+                                 required_relation.relation_name
+                             )
+                         )
+                       JOIN pg_attribute AS attribute
+                         ON attribute.attrelid = relation.oid
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           attribute.attacl
+                       ) AS column_acl
+                       WHERE attribute.attnum > 0
+                         AND NOT attribute.attisdropped
+                   )
+                   AND EXISTS (
+                       SELECT 1
+                       FROM pg_roles AS guard_role
+                       WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+                         AND NOT guard_role.rolcanlogin
+                         AND NOT guard_role.rolinherit
+                         AND NOT guard_role.rolsuper
+                         AND NOT guard_role.rolcreaterole
+                         AND NOT guard_role.rolcreatedb
+                         AND NOT guard_role.rolreplication
+                         AND NOT guard_role.rolbypassrls
+                         AND has_schema_privilege(
+                             guard_role.oid, current_schema(), 'USAGE'
+                         )
+                         AND has_schema_privilege(
+                             guard_role.oid, current_schema(), 'CREATE'
+                         )
+                         AND NOT EXISTS (
+                             SELECT 1
+                             FROM pg_roles AS member_role
+                             WHERE member_role.rolcanlogin
+                               AND NOT member_role.rolsuper
+                               AND pg_has_role(
+                                   member_role.oid, guard_role.oid, 'MEMBER'
+                               )
+                         )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_roles AS runtime_role_state
+                       WHERE runtime_role_state.rolname = current_user
+                         AND EXISTS (
+                             SELECT 1
+                             FROM pg_roles AS delegating_login
+                             WHERE delegating_login.rolcanlogin
+                               AND NOT delegating_login.rolsuper
+                               AND delegating_login.oid <> runtime_role_state.oid
+                               AND pg_has_role(
+                                   delegating_login.oid,
+                                   runtime_role_state.oid,
+                                   'MEMBER'
+                               )
+                         )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_roles AS nocodb_role
+                       WHERE nocodb_role.rolname = 'atlas_nocodb'
+                         AND EXISTS (
+                             SELECT 1
+                             FROM pg_roles AS delegating_login
+                             WHERE delegating_login.rolcanlogin
+                               AND NOT delegating_login.rolsuper
+                               AND delegating_login.oid <> nocodb_role.oid
+                               AND pg_has_role(
+                                   delegating_login.oid,
+                                   nocodb_role.oid,
+                                   'MEMBER'
+                               )
+                         )
+                   )
                    AND EXISTS (
                        SELECT 1 FROM pg_index AS idx
                        JOIN pg_class AS rel ON rel.oid = idx.indexrelid
@@ -423,26 +660,131 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                    )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
+                       WHERE trigger.tgrelid = 'eom_missed_call_operation_receipts'::regclass
+                         AND trigger.tgname = 'trg_prevent_eom_missed_call_operation_receipt_mutation'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'prevent_eom_missed_call_operation_receipt_mutation()'
+                         )
+                         AND trigger.tgtype = 27
+                         AND trigger.tgenabled = 'O'
+                         AND NOT trigger.tgisinternal
+                   )
+                   AND EXISTS (
+                       SELECT 1 FROM pg_trigger AS trigger
+                       WHERE trigger.tgrelid = 'eom_missed_call_attempts'::regclass
+                         AND trigger.tgname = 'trg_prevent_eom_missed_call_attempt_mutation'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'prevent_eom_missed_call_attempt_mutation()'
+                         )
+                         AND trigger.tgtype = 27
+                         AND trigger.tgenabled = 'O'
+                         AND NOT trigger.tgisinternal
+                   )
+                   AND (
+                       SELECT COUNT(*) = 2
+                          AND BOOL_AND(
+                              language_state.lanname = 'plpgsql'
+                              AND procedure.prosrc = expected_function.body
+                          )
+                       FROM (
+                           VALUES
+                               (
+                                   'prevent_eom_missed_call_operation_receipt_mutation()',
+                                   E'\\nBEGIN\\n    RAISE EXCEPTION ''eom_missed_call_operation_receipts is append-only'';\\nEND;\\n'
+                               ),
+                               (
+                                   'prevent_eom_missed_call_attempt_mutation()',
+                                   E'\\nBEGIN\\n    RAISE EXCEPTION ''eom_missed_call_attempts is append-only'';\\nEND;\\n'
+                               )
+                       ) AS expected_function(signature, body)
+                       JOIN pg_proc AS procedure
+                         ON procedure.oid = to_regprocedure(
+                             expected_function.signature
+                         )
+                       JOIN pg_language AS language_state
+                         ON language_state.oid = procedure.prolang
+                   )
+                   AND (
+                       SELECT COUNT(*) = cardinality($1::text[])
+                          AND BOOL_AND(
+                              function_owner.rolname = 'atlas_eom_handoff_owner'
+                          )
+                       FROM unnest($1::text[]) AS expected_function(signature)
+                       JOIN pg_proc AS procedure
+                         ON procedure.oid = to_regprocedure(
+                             format('%I.%s', current_schema(), expected_function.signature)
+                         )
+                       JOIN pg_roles AS function_owner
+                         ON function_owner.oid = procedure.proowner
+                   )
+                   AND EXISTS (
+                       SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contacts'::regclass
                          AND trigger.tgname = 'trg_cancel_eom_missed_call_on_contact_change'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'cancel_eom_missed_call_on_contact_change()'
+                         )
+                         AND trigger.tgtype = 17
+                         AND trigger.tgenabled = 'O'
                          AND NOT trigger.tgisinternal
                    )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contact_interactions'::regclass
                          AND trigger.tgname = 'trg_lock_eom_missed_call_interaction_contact'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'lock_eom_missed_call_interaction_contact()'
+                         )
+                         AND trigger.tgtype = 31
+                         AND trigger.tgenabled = 'O'
                          AND NOT trigger.tgisinternal
                    )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contact_interactions'::regclass
                          AND trigger.tgname = 'trg_cancel_eom_missed_call_on_interaction'
+                         AND trigger.tgfoid = to_regprocedure(
+                             'cancel_eom_missed_call_on_interaction()'
+                         )
+                         AND trigger.tgtype = 29
+                         AND trigger.tgenabled = 'O'
                          AND NOT trigger.tgisinternal
+                   )
+                   AND (
+                       SELECT COUNT(*) = cardinality($2::text[])
+                          AND BOOL_AND(
+                              procedure.prosecdef
+                              AND function_owner.rolname = 'atlas_eom_handoff_owner'
+                              AND COALESCE(
+                                  procedure.proconfig @> ARRAY[
+                                      format(
+                                          'search_path=pg_catalog, %I, pg_temp',
+                                          current_schema()
+                                      )
+                                  ],
+                                  FALSE
+                              )
+                              AND NOT has_function_privilege(
+                                  'atlas_nocodb', procedure.oid, 'EXECUTE'
+                              )
+                              AND NOT has_function_privilege(
+                                  current_user, procedure.oid, 'EXECUTE'
+                              )
+                          )
+                       FROM unnest($2::text[]) AS expected_function(signature)
+                       JOIN pg_proc AS procedure
+                         ON procedure.oid = to_regprocedure(
+                             format('%I.%s', current_schema(), expected_function.signature)
+                         )
+                       JOIN pg_roles AS function_owner
+                         ON function_owner.oid = procedure.proowner
                    )
                    AND to_regprocedure(
                        'eom_missed_call_has_proven_inbound_sms(jsonb)'
                    ) IS NOT NULL
-                """
+                """,
+                _MISSED_CALL_RECOVERY_GUARD_FUNCTION_SIGNATURES,
+                _MISSED_CALL_RECOVERY_DEFINER_FUNCTION_SIGNATURES,
             )
         )
     except Exception:

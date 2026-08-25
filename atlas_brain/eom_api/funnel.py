@@ -51,6 +51,10 @@ from ..services.eom_missed_call_recovery import (
     EOMMissedCallRecoveryError,
     EOMMissedCallRecoveryService,
 )
+from ..services.eom_first_clean_completion import (
+    EOMFirstCleanCompletionError,
+    EOMFirstCleanCompletionService,
+)
 from ..services.eom_public_onboarding_tokens import (
     AuthenticatedEOMPublicOnboardingToken,
     EOMPublicOnboardingTokenError,
@@ -134,6 +138,31 @@ class EOMCustomerHandoffRequest(BaseModel):
     tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
 
 
+class EOMFirstCleanCompletionRequest(BaseModel):
+    """One tracker-owned report that a first residential service completed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tracker_customer_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+    tracker_site_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+    tracker_service_kind: Literal["job", "planned_visit"]
+    tracker_service_id: Annotated[int, Field(strict=True, gt=0, le=_MAX_SIGNED_BIGINT)]
+    completed_at: datetime
+
+    @field_validator("completed_at", mode="before")
+    @classmethod
+    def _require_completed_at_string(cls, value: Any) -> Any:
+        if not isinstance(value, str) or not _RFC3339_DATETIME_PATTERN.fullmatch(value):
+            raise ValueError("must be an RFC 3339 date-time string")
+        return value
+
+    @model_validator(mode="after")
+    def _require_completed_at_timezone(self) -> "EOMFirstCleanCompletionRequest":
+        if self.completed_at.tzinfo is None:
+            raise ValueError("completed_at must include a timezone")
+        return self
+
+
 class EOMPublicOnboardingSessionRequest(BaseModel):
     """Opaque bearer supplied by the tracker after the Website reads a fragment."""
 
@@ -178,9 +207,7 @@ class EOMEstimateBookingRequest(BaseModel):
         # (epoch seconds, e.g. "3600") into UTC-aware datetimes, which would
         # pass the timezone/ordering checks as a 1970 appointment. Only
         # strings with RFC 3339 date-time syntax are valid at this boundary.
-        if not isinstance(value, str) or not _RFC3339_DATETIME_PATTERN.fullmatch(
-            value
-        ):
+        if not isinstance(value, str) or not _RFC3339_DATETIME_PATTERN.fullmatch(value):
             raise ValueError("must be an RFC 3339 date-time string")
         return value
 
@@ -445,9 +472,7 @@ class EOMContactDirectoryItem(BaseModel):
     created_at: datetime = Field(serialization_alias="createdAt")
     updated_at: datetime | None = Field(default=None, serialization_alias="updatedAt")
     editable: bool
-    edit_block_reason: str | None = Field(
-        serialization_alias="editBlockedReason"
-    )
+    edit_block_reason: str | None = Field(serialization_alias="editBlockedReason")
 
     @field_validator("edit_block_reason")
     @classmethod
@@ -551,13 +576,9 @@ class EOMOnboardingDraftItem(BaseModel):
     body: str
     status: str
     created_at: datetime = Field(serialization_alias="createdAt")
-    claimed_at: datetime | None = Field(
-        default=None, serialization_alias="claimedAt"
-    )
+    claimed_at: datetime | None = Field(default=None, serialization_alias="claimedAt")
     sent_at: datetime | None = Field(default=None, serialization_alias="sentAt")
-    revoked_at: datetime | None = Field(
-        default=None, serialization_alias="revokedAt"
-    )
+    revoked_at: datetime | None = Field(default=None, serialization_alias="revokedAt")
     approved_by_name: str | None = Field(
         default=None, serialization_alias="approvedByName"
     )
@@ -641,6 +662,23 @@ def _missed_call_recovery_dependency(request: Request) -> EOMMissedCallRecoveryS
     return EOMMissedCallRecoveryService(pool=pool, config=funnel_settings)
 
 
+def _first_clean_completion_dependency(
+    request: Request,
+) -> EOMFirstCleanCompletionService:
+    """Bind completion evidence to the same canonical funnel database."""
+
+    pool_factory = getattr(
+        request.app.state, "eom_funnel_first_clean_completion_pool", None
+    )
+    if callable(pool_factory):
+        pool = pool_factory()
+    else:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+    return EOMFirstCleanCompletionService(pool=pool)
+
+
 def _authenticated_public_onboarding_token(
     token: object,
     public_onboarding: EOMPublicOnboardingConfig,
@@ -722,7 +760,9 @@ def _public_onboarding_finalize_content(result: Mapping[str, Any]) -> dict[str, 
     """Return only completion evidence the tracker can reconcile locally."""
 
     if str(result["status"]) != "completed":
-        raise RuntimeError("CRM provider returned an invalid public onboarding completion")
+        raise RuntimeError(
+            "CRM provider returned an invalid public onboarding completion"
+        )
     return {
         "success": True,
         "status": "completed",
@@ -816,6 +856,10 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "/eom-funnel/leads/{contact_id}/first-clean-bookings",
     ),
     "lead.customer_handoff": ("POST", "/eom-funnel/customer-handoffs"),
+    "customer.first_clean_completion.record": (
+        "POST",
+        "/eom-funnel/customer-handoffs/{contact_id}/first-clean-completions",
+    ),
     "contact.operator_mutation": ("POST", "/eom-funnel/operator-contacts"),
     # Same route as contact.operator_mutation ON PURPOSE: this name versions
     # the route's SEMANTICS, not its existence. A build advertises it only by
@@ -1492,6 +1536,47 @@ async def create_customer_handoff(
 
 
 @router.post(
+    "/customer-handoffs/{contact_id}/first-clean-completions",
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def record_eom_first_clean_completion(
+    contact_id: UUID,
+    payload: EOMFirstCleanCompletionRequest,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    completion: EOMFirstCleanCompletionService = Depends(
+        _first_clean_completion_dependency
+    ),
+) -> JSONResponse:
+    """Record actual first-clean evidence; no email or card flow starts here."""
+
+    try:
+        await completion.require_schema_ready()
+        result = await completion.record_completion(
+            contact_id=contact_id,
+            tracker_customer_id=payload.tracker_customer_id,
+            tracker_site_id=payload.tracker_site_id,
+            tracker_service_kind=payload.tracker_service_kind,
+            tracker_service_id=payload.tracker_service_id,
+            completed_at=payload.completed_at,
+            operation_key=operation_key,
+            actor_id=int(actor["id"]),
+            actor_name=str(actor["name"]),
+        )
+    except EOMFirstCleanCompletionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return JSONResponse(
+        status_code=(
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
+        ),
+        content={"success": True, **result},
+    )
+
+
+@router.post(
     "/leads/{contact_id}/lost",
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_eom_funnel_api)],
@@ -1736,7 +1821,9 @@ async def finalize_eom_public_onboarding(
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return JSONResponse(
         status_code=(
-            status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
         ),
         content=_public_onboarding_finalize_content(result),
     )
@@ -1766,7 +1853,9 @@ async def recover_eom_public_onboarding(
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return JSONResponse(
         status_code=(
-            status.HTTP_200_OK if bool(result.get("idempotent")) else status.HTTP_201_CREATED
+            status.HTTP_200_OK
+            if bool(result.get("idempotent"))
+            else status.HTTP_201_CREATED
         ),
         content=_public_onboarding_recovery_content(result),
     )
@@ -1951,9 +2040,7 @@ async def approve_and_send_onboarding_draft(
                 public_onboarding.base_url if public_onboarding is not None else None
             ),
             public_onboarding_hmac_secret=(
-                public_onboarding.hmac_secret
-                if public_onboarding is not None
-                else None
+                public_onboarding.hmac_secret if public_onboarding is not None else None
             ),
         )
     except EOMOnboardingDraftError as exc:
