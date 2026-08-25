@@ -38,12 +38,27 @@ class _Acquire:
         return None
 
 
+class _Transaction:
+    def __init__(self, connection: "_Connection") -> None:
+        self._connection = connection
+
+    async def __aenter__(self) -> "_Connection":
+        state = self._connection._state
+        state.transaction_depth = getattr(state, "transaction_depth", 0) + 1
+        return self._connection
+
+    async def __aexit__(self, *_args: object) -> None:
+        state = self._connection._state
+        state.transaction_depth -= 1
+        return None
+
+
 class _Connection:
     def __init__(self, state: SimpleNamespace) -> None:
         self._state = state
 
-    def transaction(self) -> _Acquire:
-        return _Acquire(self)
+    def transaction(self) -> _Transaction:
+        return _Transaction(self)
 
     async def fetchval(self, query: str, *_args: object) -> object:
         if "pg_try_advisory_xact_lock" in query:
@@ -55,6 +70,29 @@ class _Connection:
                 "advisory_lock_available",
                 not hasattr(self._state, "executor_is_superuser"),
             )
+        if "pg_try_advisory_lock" in query:
+            self._state.migration_lock_attempts = (
+                getattr(self._state, "migration_lock_attempts", 0) + 1
+            )
+            results = getattr(self._state, "migration_lock_results", None)
+            if results:
+                acquired = bool(results.pop(0))
+            else:
+                acquired = True
+            if acquired:
+                self._state.migration_lock_depth = (
+                    getattr(self._state, "migration_lock_depth", 0) + 1
+                )
+            return acquired
+        if "pg_advisory_unlock" in query:
+            self._state.migration_lock_unlocks = (
+                getattr(self._state, "migration_lock_unlocks", 0) + 1
+            )
+            depth = getattr(self._state, "migration_lock_depth", 0)
+            if depth <= 0:
+                return False
+            self._state.migration_lock_depth = depth - 1
+            return True
         if "rolsuper" in query:
             return self._state.executor_is_superuser
         if "to_regclass" in query:
@@ -195,7 +233,9 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
     assert dba_pool.closed is True
 
 
-def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
+def test_runner_applies_only_its_named_migration_in_pinned_transaction(
+    monkeypatch,
+) -> None:
     runner = _load_runner_module()
     runtime_database_url = "postgresql://runtime@example.test/atlas"
     schema_name = "eom_canonical"
@@ -206,10 +246,12 @@ def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
         migrations_table_exists=True,
         migration_recorded=False,
         schema_name=schema_name,
+        migration_lock_results=[False, True],
     )
     runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
     dba_pool = _Pool(state)
     calls: list[tuple[object, tuple[str, ...]]] = []
+    sleep_delays: list[float] = []
 
     async def create_pool(
         database_url: str, *, schema_name: str | None = None
@@ -222,7 +264,16 @@ def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
 
     async def run_migrations(observed_pool: object, *, only: tuple[str, ...]) -> None:
         calls.append((observed_pool, only))
+        assert await observed_pool.acquire() is dba_pool._connection
+        assert state.transaction_depth == 1
+        await observed_pool.release(dba_pool._connection)
         state.migration_recorded = True
+
+    async def sleep(delay: float) -> None:
+        sleep_delays.append(delay)
+        assert state.transaction_depth == 0
+
+    monkeypatch.setattr(runner.asyncio, "sleep", sleep)
 
     args = runner._parse_args(["--apply"])
     result = asyncio.run(
@@ -239,13 +290,17 @@ def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
         )
     )
 
-    assert calls == [(dba_pool, (runner.MIGRATION_NAME,))]
+    assert [only for _pool, only in calls] == [(runner.MIGRATION_NAME,)]
     assert result["migration_recorded"] is True
     assert result["applied"] is True
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
     assert runtime_pool._connection._state.advisory_lock_attempts == 2
     assert dba_pool._connection._state.advisory_lock_attempts == 2
+    assert state.migration_lock_attempts == 2
+    assert state.migration_lock_unlocks == 1
+    assert state.migration_lock_depth == 0
+    assert sleep_delays == [0.2]
 
 
 def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:

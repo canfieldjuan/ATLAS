@@ -188,7 +188,10 @@ BEGIN
 END;
 $$;
 
-CREATE TABLE IF NOT EXISTS eom_first_clean_completion_operation_receipts (
+-- These are new guarded relations. Never adopt an existing runtime-created
+-- lookalike: the controlled migration must either install this exact schema or
+-- fail before any protected receipt state is trusted.
+CREATE TABLE eom_first_clean_completion_operation_receipts (
     operation_key VARCHAR(128) PRIMARY KEY,
     contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
     business_context_id VARCHAR(64) NOT NULL DEFAULT 'effingham_maids',
@@ -205,7 +208,7 @@ CREATE TABLE IF NOT EXISTS eom_first_clean_completion_operation_receipts (
         CHECK (request_fingerprint ~ '^[0-9a-f]{64}$')
 );
 
-CREATE TABLE IF NOT EXISTS eom_first_clean_completion_receipts (
+CREATE TABLE eom_first_clean_completion_receipts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE RESTRICT,
     handoff_id UUID NOT NULL REFERENCES eom_customer_handoffs(id)
@@ -371,6 +374,35 @@ CREATE TRIGGER trg_require_eom_first_clean_completion_receipt
     BEFORE INSERT OR UPDATE ON eom_first_clean_completion_receipts
     FOR EACH ROW
     EXECUTE FUNCTION require_eom_first_clean_completion_receipt();
+
+-- The lifecycle table and its append-only guard existed before this controlled
+-- migration. Rebuild the complete canonical guard while the DBA still owns the
+-- deployment transaction; merely transferring a previously runtime-owned
+-- function or trigger would permanently adopt a permissive implementation.
+CREATE OR REPLACE FUNCTION prevent_eom_lead_lifecycle_event_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    RAISE EXCEPTION 'eom_lead_lifecycle_events is append-only';
+END;
+$$;
+ALTER FUNCTION prevent_eom_lead_lifecycle_event_mutation() RESET ALL;
+
+DROP TRIGGER IF EXISTS trg_prevent_eom_lead_lifecycle_event_mutation
+    ON eom_lead_lifecycle_events;
+CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_mutation
+    BEFORE UPDATE OR DELETE ON eom_lead_lifecycle_events
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_eom_lead_lifecycle_event_mutation();
+
+DROP TRIGGER IF EXISTS trg_prevent_eom_lead_lifecycle_event_truncate
+    ON eom_lead_lifecycle_events;
+CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_truncate
+    BEFORE TRUNCATE ON eom_lead_lifecycle_events
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION prevent_eom_lead_lifecycle_event_mutation();
 
 DO $$
 DECLARE

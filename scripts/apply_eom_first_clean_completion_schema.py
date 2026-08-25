@@ -32,7 +32,10 @@ from atlas_brain.config import (  # noqa: E402
     EOMFirstCleanCompletionDBAConfig,
 )
 from atlas_brain.eom_api.config import EOMFunnelConfig  # noqa: E402
-from atlas_brain.storage.migrations import run_migrations  # noqa: E402
+from atlas_brain.storage.migrations import (  # noqa: E402
+    _MIGRATIONS_ADVISORY_LOCK_KEY,
+    run_migrations,
+)
 
 
 DBA_DSN_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV
@@ -57,6 +60,20 @@ class _TargetIdentity:
             self.database_name,
             self.database_oid,
         )
+
+
+class _PinnedMigrationPool:
+    """Expose one transaction-pinned connection to the canonical runner."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    async def acquire(self) -> Any:
+        return self._connection
+
+    async def release(self, connection: Any) -> None:
+        if connection is not self._connection:
+            raise RuntimeError("Controlled migration attempted to release another connection")
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -269,6 +286,56 @@ async def _migration_state(
     return executor_is_superuser, migration_recorded
 
 
+async def _run_pinned_controlled_migration(
+    pool: Any,
+    *,
+    run_migrations_fn: Callable[..., Awaitable[None]],
+) -> None:
+    """Run 394 under the canonical lock on one explicit database transaction.
+
+    ``run_migrations`` uses a session advisory lock because ordinary catalog
+    runs can contain ``CREATE INDEX CONCURRENTLY``. Migration 394 is atomic and
+    cannot contain concurrent DDL, so the controlled runner can first acquire
+    that same lock inside an explicit transaction, then pin the canonical
+    runner to that connection. A transaction-pooling proxy consequently keeps
+    the lock, migration SQL, and bookkeeping on one backend; the outer release
+    removes the extra re-entrant session lock before the transaction ends.
+    """
+
+    async with pool.acquire() as connection:
+        while True:
+            lock_acquired = False
+            async with connection.transaction():
+                lock_acquired = bool(
+                    await connection.fetchval(
+                        "SELECT pg_catalog.pg_try_advisory_lock($1)",
+                        _MIGRATIONS_ADVISORY_LOCK_KEY,
+                    )
+                )
+                if lock_acquired:
+                    try:
+                        await run_migrations_fn(
+                            _PinnedMigrationPool(connection),
+                            only=(MIGRATION_NAME,),
+                        )
+                    finally:
+                        released = bool(
+                            await connection.fetchval(
+                                "SELECT pg_catalog.pg_advisory_unlock($1)",
+                                _MIGRATIONS_ADVISORY_LOCK_KEY,
+                            )
+                        )
+                        if not released:
+                            raise RuntimeError(
+                                "Controlled migration did not release its "
+                                "database serialization lock"
+                            )
+                    return
+            # Do not wait while holding an open transaction: another ordinary
+            # migration may need that absence to finish CONCURRENTLY work.
+            await asyncio.sleep(0.2)
+
+
 async def _run(
     args: argparse.Namespace,
     *,
@@ -321,7 +388,10 @@ async def _run(
                     "refusing to run the first-clean completion schema migration"
                 )
             if args.apply and not migration_recorded:
-                await run_migrations_fn(pool, only=(MIGRATION_NAME,))
+                await _run_pinned_controlled_migration(
+                    pool,
+                    run_migrations_fn=run_migrations_fn,
+                )
                 await _attest_shared_database_lock(runtime_pool, pool)
                 _executor_is_superuser, migration_recorded = await _migration_state(
                     pool,

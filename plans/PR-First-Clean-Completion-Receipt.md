@@ -34,10 +34,14 @@ cannot be safely exercised or a route without the durable invariants it claims.
   PostgreSQL foreign-key enforcement runs under the referencing table owner,
   so its required operation-receipt key-share lookup fails even though the
   `atlas` runtime ACL is correct.
-- Review root cause: readiness accepted the lifecycle append-only triggers by
-  label and enabled state without proving their table/function implementation
-  was outside the runtime owner. Migration 351 creates that function under the
-  runtime, while migration 354 protects only the canonical-handoff boundary.
+- Review root cause: migration 394 transferred the lifecycle append-only
+  function and trigger boundary without rebuilding its canonical implementation
+  after that function had been runtime-owned. Readiness could then observe the
+  expected labels, owner, and bindings after a permissive historical body or
+  trigger definition was adopted.
+- Review root cause: the new receipt tables used `CREATE TABLE IF NOT EXISTS`,
+  so migration 394 could transfer a runtime-created lookalike while request
+  readiness checked only a subset of its eventual table/constraint shape.
 - Review root cause: the inherited handoff-finalization and two receipt-admission
   trigger functions resolve permanent source evidence through a caller-controlled
   PostgreSQL search path; a runtime temporary table can shadow an unqualified
@@ -59,6 +63,11 @@ cannot be safely exercised or a route without the durable invariants it claims.
   Unix-socket connections to null endpoints. Database OIDs are only
   cluster-local, so distinct clusters with the same database name/OID/schema
   can otherwise pass the pre-DDL identity check.
+- Review root cause: the generic migration runner's session advisory lock is
+  safe on one direct connection but is not by itself safe through a
+  transaction-pooling proxy. The controlled runner must pin its exact migration
+  run to one explicit transaction and release the re-entrant lock before that
+  transaction ends.
 
 ## Scope (this PR)
 
@@ -92,21 +101,26 @@ Max files: 13
     customer fails closed instead of rewriting the receipt; tests prove the
     original receipt remains unchanged.
   - Migration `394_eom_first_clean_completion_receipts` requires a PostgreSQL
-    superuser and an explicitly unprivileged Atlas login, creates the
-    foreign-keyed receipt tables in a trusted no-login guard-owned schema, revokes
-    direct runtime/NocoDB guard membership, rejects an inherited guard path,
-    preserves the guard owner's foreign-key check access, moves the lifecycle
-    append-only table/function boundary to that same guard, pins the inherited
+    superuser and an explicitly unprivileged Atlas login, refuses pre-existing
+    receipt relations rather than adopting them, creates the foreign-keyed
+    receipt tables in a trusted no-login guard-owned schema, rebuilds the
+    lifecycle append-only function and both exact trigger definitions before
+    ownership transfer, revokes direct runtime/NocoDB guard membership, rejects
+    an inherited guard path, preserves the guard owner's foreign-key check
+    access, moves the lifecycle append-only table/function boundary to that same
+    guard, pins the inherited
     handoff-finalization and both receipt-evidence trigger functions to
     `pg_catalog`, then the guarded schema, and then `pg_temp`,
     and grants the Atlas runtime only schema/table access ordinary writers and
     future migrations need;
     database tests prove that owner/ACL state, the pinned path, elevated-runtime
     rejection, and a non-superuser executor are rejected before DDL. The
-    dedicated runner binds every DBA connection to a typed canonical schema and
-    refuses a schema/name/OID mismatch or failed live cross-connection advisory
-    lock proof with the effective EOM funnel runtime before it runs migration
-    394 or accepts its post-migration ledger result.
+    dedicated runner binds every DBA connection to a typed canonical schema,
+    pins the exact canonical migration run and its serialization lock to one
+    explicit transaction for transaction-pooling deployments, and refuses a
+    schema/name/OID mismatch or failed live cross-connection advisory lock proof
+    with the effective EOM funnel runtime before it runs migration 394 or
+    accepts its post-migration ledger result.
   - The service requires the guarded receipt schema and prerequisite
     handoff/lifecycle integrity triggers before serving; route tests prove a
     missing, owner-mismatched, disabled, or append-only trigger becomes a safe
@@ -361,6 +375,38 @@ Max files: 13
 - Max files: 13.
 - Parked hardening: none.
 
+### Current P1 migration-admission and transaction-affinity disposition preflight
+
+- Root decision: reject any pre-existing new receipt relation instead of
+  adopting it, rebuild the inherited lifecycle append-only implementation and
+  both trigger events before its guard-owner transfer, and keep controlled
+  migration serialization on one transaction-pinned connection.
+- Source trace: runtime schema `CREATE` before 394 -> `CREATE TABLE IF NOT
+  EXISTS` adopts a lookalike -> later owner/ACL transfer makes it appear ready;
+  pre-394 runtime-owned lifecycle function/trigger -> ownership transfer without
+  reconstruction -> permissive update path remains guard-owned; generic
+  session advisory lock -> transaction-pooling backend may change between
+  standalone statements -> lock, DDL, and bookkeeping can diverge.
+- Upstream files:
+  `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
+  `scripts/apply_eom_first_clean_completion_schema.py`,
+  `tests/test_eom_first_clean_completion.py`,
+  `tests/test_eom_first_clean_completion_dba_runner.py`, the existing DBA
+  runbook, and this plan.
+- Fix strategy: upstream-root. The controlled migration uses exact `CREATE
+  TABLE` statements for its new relations, reconstructs the canonical lifecycle
+  function/trigger boundary before ownership transfer, and calls the canonical
+  runner through a one-connection adapter while an explicit transaction holds
+  the shared serialization lock. Failed lock attempts leave their transaction
+  before retrying.
+- Blocking predicate: security.
+- Disposition: fix in this PR.
+- Allowed files: the listed upstream files only. No new migration number,
+  public API, customer workflow, generic migration-runner behavior, or runtime
+  privilege is added.
+- Max files: 13.
+- Parked hardening: none.
+
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
@@ -399,14 +445,17 @@ original receipt; any conflicting key/source/contact/timestamp/actor fails with
 
 Migration 394 is a controlled DBA-only operation because it creates foreign
 keys to the guarded handoff table and transfers the containing schema, its two
-receipt tables, lifecycle table/ordering sequence, and trigger functions to
+new receipt tables, lifecycle table/ordering sequence, and trigger functions to
 `atlas_eom_handoff_owner`. It first requires migration 354's guarded handoff
 table/protected functions and migration 363's canonical lifecycle default,
 rejects every direct or inherited guard path held by a non-superuser login,
 preserves the guard owner's operation-table access needed by PostgreSQL
 foreign-key checks, and grants the direct runtime only schema `USAGE, CREATE`,
 lifecycle table reads/inserts/row-lock `UPDATE`, plus sequence `USAGE` for that
-default. The target `atlas` login
+default. It refuses to adopt either receipt relation if it already exists and
+rebuilds the inherited lifecycle append-only function plus both trigger events
+before transfer, so a formerly runtime-owned permissive implementation cannot
+become the guard. The target `atlas` login
 must be a direct nonprivileged runtime, and the prerequisite handoff-finalization
 function plus the two receipt-admission functions pin `pg_catalog` first, their
 guarded schema second, and `pg_temp` explicitly last, so a caller's temporary
@@ -433,7 +482,9 @@ The shared migration runner reserves migration 394 from every default startup
 and MCP migration pass, so a normal non-superuser process continues applying
 ordinary pending migrations without acquiring DBA authority. The dedicated
 runner explicitly selects only migration 394 after its protected-DSN and
-superuser preflight succeed.
+superuser preflight succeed, holds the canonical migration lock in an explicit
+transaction, and pins the generic runner to that same connection so a
+transaction-pooling proxy cannot split lock, DDL, and migration bookkeeping.
 
 ## Intentional
 
@@ -474,7 +525,11 @@ an automatic completion source and is intentionally left outside this slice.
   - Ruff passed for the controlled runner, readiness service, and their two
     focused test modules.
   - `pytest -q tests/test_eom_first_clean_completion_dba_runner.py` — `16 passed`.
+    The pinned-runner regression proves a failed initial serialization-lock
+    attempt ends its transaction before retry and that the canonical runner
+    receives the same connection while the successful transaction is active.
   - `pytest -q tests/test_eom_first_clean_completion.py -k 'runtime_and_dba_connections_share_advisory_lock_namespace or handoff_finalization_trigger_rejects_runtime_temp_shadowing'` — `2 skipped, 59 deselected`: the disposable DBA/runtime PostgreSQL URLs are intentionally absent locally.
+  - `pytest -q tests/test_eom_first_clean_completion.py -k 'completion_migration_refuses_preexisting_runtime_receipt_relation or completion_migration_rebuilds_lifecycle_guard_before_transfer'` — `3 skipped, 61 deselected`: the same isolated PostgreSQL URLs are intentionally absent locally. GitHub must prove the new migration refuses both runtime-created receipt relations and reconstructs the lifecycle guard before transfer.
   - The runner probe proves a same-name/OID clone cannot acquire the shared
     runtime lock and reaches no migration call; the isolated PostgreSQL probe
     confirms the configured runtime/DBA pair shares that lock namespace. The

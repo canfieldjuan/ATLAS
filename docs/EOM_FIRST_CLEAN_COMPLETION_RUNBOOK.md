@@ -36,6 +36,10 @@ only the dedicated runner's explicit selection may apply it.
    `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING`; the runner reads that runtime schema
    before it opens the DBA pool, pins every DBA pool connection to the declared
    schema, and fails before migration when either value is absent or differs.
+5. Neither `eom_first_clean_completion_operation_receipts` nor
+   `eom_first_clean_completion_receipts` may already exist. They are new
+   guard-owned relations; migration 394 refuses a pre-existing relation instead
+   of adopting a runtime-created lookalike.
 
 ## Apply
 
@@ -61,10 +65,16 @@ Then apply only migration 394:
 python scripts/apply_eom_first_clean_completion_schema.py --apply --json
 ```
 
-The migration atomically records its ledger row, requires the pre-existing
+The controlled runner holds the canonical migration serialization lock, the
+migration SQL, and its bookkeeping on one explicit transaction-pinned
+connection. That keeps the apply safe through a transaction-pooling proxy while
+still releasing the session lock before the transaction ends. The migration
+atomically records its ledger row, requires the pre-existing
 handoff table and its protected functions to be guard-owned, transfers the
 schema plus the two receipt tables, lifecycle table, lifecycle ordering
-sequence, and their trigger functions to `atlas_eom_handoff_owner`, rejects any
+sequence, and their trigger functions to `atlas_eom_handoff_owner`, rebuilds
+the lifecycle append-only function and both of its trigger definitions before
+that ownership transfer, rejects any
 direct or inherited guard path held by a non-superuser login, and grants the
 Atlas runtime only schema `USAGE, CREATE`, table `SELECT, INSERT, UPDATE` for
 row locking and receipt creation, plus sequence `USAGE` needed by the lifecycle
@@ -108,6 +118,11 @@ as a workaround. If the configured and observed runtime/DBA schema, database
 identity, or live cross-connection attestation fails, correct the typed schema
 configuration or the funnel/DBA DSN deployment setting; do not override
 `search_path` ad hoc on a command line.
+
+If apply reports that either new receipt relation already exists, do not force
+the migration, transfer ownership, or reuse that relation. Treat it as
+untrusted state, retain it for DBA investigation, and establish a reviewed
+recovery plan before any destructive action.
 
 If application code must be rolled back after a successful apply, remove or
 disable the completion consumer/route first and retain the append-only receipt

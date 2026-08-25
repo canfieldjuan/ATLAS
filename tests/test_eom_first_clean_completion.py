@@ -794,6 +794,114 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("relation_name", "other_relation"),
+    (
+        (
+            "eom_first_clean_completion_operation_receipts",
+            "eom_first_clean_completion_receipts",
+        ),
+        (
+            "eom_first_clean_completion_receipts",
+            "eom_first_clean_completion_operation_receipts",
+        ),
+    ),
+)
+async def test_completion_migration_refuses_preexisting_runtime_receipt_relation(
+    relation_name: str,
+    other_relation: str,
+) -> None:
+    """Migration 394 never adopts a runtime-created receipt lookalike."""
+
+    async with _test_store(
+        migrations=_COMPLETION_SCHEMA_MIGRATIONS[:-1]
+    ) as (pool, _schema):
+        await pool._runtime_connection.execute(
+            f"CREATE TABLE {_quote_ident(relation_name)} (id BIGINT PRIMARY KEY)"
+        )
+        completion_sql = (
+            MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+        ).read_text()
+
+        with pytest.raises(asyncpg.DuplicateTableError):
+            async with pool._connection.transaction():
+                await pool._connection.execute(completion_sql)
+
+        assert await pool._connection.fetchval(
+            "SELECT pg_catalog.to_regclass($1) IS NULL",
+            other_relation,
+        )
+
+
+@pytest.mark.asyncio
+async def test_completion_migration_rebuilds_lifecycle_guard_before_transfer() -> None:
+    """A pre-394 permissive lifecycle guard cannot survive the DBA migration."""
+
+    async with _test_store(
+        migrations=_COMPLETION_SCHEMA_MIGRATIONS[:-1]
+    ) as (pool, _schema):
+        await pool._connection.execute(
+            """
+            CREATE OR REPLACE FUNCTION prevent_eom_lead_lifecycle_event_mutation()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path TO pg_temp
+            AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$;
+
+            DROP TRIGGER IF EXISTS trg_prevent_eom_lead_lifecycle_event_mutation
+                ON eom_lead_lifecycle_events;
+            CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_mutation
+                BEFORE INSERT ON eom_lead_lifecycle_events
+                FOR EACH ROW
+                EXECUTE FUNCTION prevent_eom_lead_lifecycle_event_mutation();
+
+            DROP TRIGGER IF EXISTS trg_prevent_eom_lead_lifecycle_event_truncate
+                ON eom_lead_lifecycle_events;
+            CREATE TRIGGER trg_prevent_eom_lead_lifecycle_event_truncate
+                BEFORE DELETE ON eom_lead_lifecycle_events
+                FOR EACH ROW
+                EXECUTE FUNCTION prevent_eom_lead_lifecycle_event_mutation();
+            """
+        )
+        completion_sql = (
+            MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+        ).read_text()
+        async with pool._connection.transaction():
+            await pool._connection.execute(completion_sql)
+
+        assert await first_clean_completion_schema_ready(pool) is True
+        assert await pool._connection.fetchval(
+            """
+            SELECT NOT protected_function.prosecdef
+               AND protected_function.proconfig IS NULL
+            FROM pg_proc AS protected_function
+            WHERE protected_function.oid =
+                'prevent_eom_lead_lifecycle_event_mutation()'::regprocedure
+            """
+        )
+        contact_id, _customer_id, _site_id = await _insert_customer(pool)
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="eom_lead_lifecycle_events is append-only",
+        ):
+            await pool._runtime_connection.execute(
+                "UPDATE eom_lead_lifecycle_events SET actor = actor "
+                "WHERE contact_id = $1",
+                contact_id,
+            )
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="eom_lead_lifecycle_events is append-only",
+        ):
+            await pool._connection.execute("TRUNCATE eom_lead_lifecycle_events")
+
+
+@pytest.mark.asyncio
 async def test_runtime_and_dba_connections_share_advisory_lock_namespace() -> None:
     """The controlled runner's live target proof holds across real connections."""
 
