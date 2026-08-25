@@ -7,6 +7,7 @@ never contact a calendar, email provider, Stripe, or real EOM customer.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -119,6 +120,23 @@ async def _provision_nocodb_login(connection: Any) -> None:
         )
         """
     )
+
+
+async def _grant_completion_runtime_dml_as_guard(connection: Any) -> None:
+    """Restore the migration's durable runtime grant without changing ownership."""
+
+    await connection.execute("SET ROLE atlas_eom_handoff_owner")
+    try:
+        await connection.execute(
+            "GRANT SELECT, INSERT, UPDATE "
+            "ON TABLE eom_first_clean_completion_operation_receipts TO atlas"
+        )
+        await connection.execute(
+            "GRANT SELECT, INSERT, UPDATE "
+            "ON TABLE eom_first_clean_completion_receipts TO atlas"
+        )
+    finally:
+        await connection.execute("RESET ROLE")
 
 
 async def _apply_schema(
@@ -467,11 +485,15 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
                 "SELECT",
                 "UPDATE",
             },
-            "eom_first_clean_completion_receipts": {"INSERT", "SELECT", "UPDATE"},
+            "eom_first_clean_completion_receipts": {
+                "INSERT",
+                "SELECT",
+                "UPDATE",
+            },
         }
-        unexpected_acl_rows = await pool._connection.fetch(
+        guard_acl_rows = await pool._connection.fetch(
             """
-            SELECT relation.relname, acl.grantee, acl.privilege_type
+            SELECT relation.relname, acl.privilege_type
             FROM pg_class AS relation
             JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
             CROSS JOIN LATERAL aclexplode(
@@ -479,7 +501,55 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             ) AS acl
             WHERE namespace.nspname = current_schema()
               AND relation.relname = ANY($1::text[])
-              AND acl.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'atlas')
+              AND acl.grantee = (
+                  SELECT oid FROM pg_roles WHERE rolname = 'atlas_eom_handoff_owner'
+              )
+            ORDER BY relation.relname, acl.privilege_type
+            """,
+            [
+                "eom_first_clean_completion_operation_receipts",
+                "eom_first_clean_completion_receipts",
+            ],
+        )
+        guard_acl: dict[str, set[str]] = {}
+        for row in guard_acl_rows:
+            guard_acl.setdefault(row["relname"], set()).add(row["privilege_type"])
+        assert guard_acl == {
+            "eom_first_clean_completion_operation_receipts": {
+                "DELETE",
+                "INSERT",
+                "REFERENCES",
+                "SELECT",
+                "TRIGGER",
+                "TRUNCATE",
+                "UPDATE",
+            },
+            "eom_first_clean_completion_receipts": {
+                "DELETE",
+                "INSERT",
+                "REFERENCES",
+                "SELECT",
+                "TRIGGER",
+                "TRUNCATE",
+                "UPDATE",
+            },
+        }
+        unexpected_acl_rows = await pool._connection.fetch(
+            """
+            SELECT relation.relname, grantee.rolname, acl.privilege_type,
+                   acl.is_grantable
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            CROSS JOIN LATERAL aclexplode(
+                COALESCE(relation.relacl, ARRAY[]::aclitem[])
+            ) AS acl
+            JOIN pg_roles AS grantee ON grantee.oid = acl.grantee
+            WHERE namespace.nspname = current_schema()
+              AND relation.relname = ANY($1::text[])
+              AND (
+                  grantee.rolname NOT IN ('atlas', 'atlas_eom_handoff_owner')
+                  OR acl.is_grantable
+              )
             """,
             [
                 "eom_first_clean_completion_operation_receipts",
@@ -487,6 +557,28 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             ],
         )
         assert unexpected_acl_rows == []
+        guard_fk_access = await pool._connection.fetchrow(
+            """
+            SELECT has_schema_privilege(
+                       'atlas_eom_handoff_owner', current_schema(), 'USAGE'
+                   ) AS schema_usage,
+                   has_table_privilege(
+                       'atlas_eom_handoff_owner',
+                       'eom_first_clean_completion_operation_receipts',
+                       'SELECT'
+                   ) AS operation_select,
+                   has_table_privilege(
+                       'atlas_eom_handoff_owner',
+                       'eom_first_clean_completion_operation_receipts',
+                       'UPDATE'
+                   ) AS operation_update
+            """
+        )
+        assert dict(guard_fk_access) == {
+            "schema_usage": True,
+            "operation_select": True,
+            "operation_update": True,
+        }
         assert not await _has_guard_membership(pool, "atlas")
 
 
@@ -585,13 +677,26 @@ async def test_schema_readiness_rejects_non_guard_table_ownership() -> None:
                 OWNER TO atlas_eom_handoff_owner
                 """
             )
-            await pool._connection.execute(
-                """
-                GRANT SELECT, INSERT, UPDATE
-                ON TABLE eom_first_clean_completion_receipts TO atlas
-                """
-            )
+            await _grant_completion_runtime_dml_as_guard(pool._connection)
         assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_guard_fk_access_stripped_by_acl_cleanup() -> (
+    None
+):
+    async with _test_store() as (pool, _schema):
+        await pool._connection.execute("SET ROLE atlas_eom_handoff_owner")
+        try:
+            await pool._connection.execute(
+                "REVOKE SELECT, UPDATE ON TABLE "
+                "eom_first_clean_completion_operation_receipts "
+                "FROM atlas_eom_handoff_owner"
+            )
+        finally:
+            await pool._connection.execute("RESET ROLE")
+
+        assert await first_clean_completion_schema_ready(pool) is False
 
 
 @pytest.mark.asyncio
@@ -803,9 +908,13 @@ async def test_record_completion_persists_one_receipt_and_lifecycle_evidence() -
         assert lifecycle is not None
         assert lifecycle["source"] == "time_tracker"
         assert lifecycle["operation_key"]
-        assert lifecycle["metadata"]["completion_receipt_id"] == result["receiptId"]
-        assert lifecycle["metadata"]["handoff_id"] == result["handoffId"]
-        assert lifecycle["metadata"]["tracker_service_id"] == 6001
+        metadata = lifecycle["metadata"]
+        if isinstance(metadata, str):
+            metadata = json.loads(metadata)
+        assert isinstance(metadata, dict)
+        assert metadata["completion_receipt_id"] == result["receiptId"]
+        assert metadata["handoff_id"] == result["handoffId"]
+        assert metadata["tracker_service_id"] == 6001
 
 
 @pytest.mark.asyncio

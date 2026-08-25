@@ -29,6 +29,11 @@ cannot be safely exercised or a route without the durable invariants it claims.
   public onboarding tokens, customer-handoff semantics, calendar behavior,
   email delivery, Stripe/card collection, or any tracker/Website UI. This slice
   records no customer-facing side effect.
+- CI root cause: after transferring the receipt tables to the guard owner,
+  migration 394's ACL-cleanup loop also revokes that owner's ordinary access.
+  PostgreSQL foreign-key enforcement runs under the referencing table owner,
+  so its required operation-receipt key-share lookup fails even though the
+  `atlas` runtime ACL is correct.
 
 ## Scope (this PR)
 
@@ -64,9 +69,10 @@ Max files: 10
   - Migration `394_eom_first_clean_completion_receipts` requires a PostgreSQL
     superuser, creates the foreign-keyed receipt tables as a trusted no-login
     guard owner, revokes direct runtime/NocoDB guard membership, rejects an
-    inherited guard path, and grants the Atlas runtime only `SELECT`, `INSERT`,
-    and `UPDATE`; database tests prove that owner/ACL state and that a
-    non-superuser executor is rejected before DDL.
+    inherited guard path, preserves the guard owner's foreign-key check access,
+    and grants the Atlas runtime only `SELECT`, `INSERT`, and `UPDATE`; database
+    tests prove that owner/ACL state and that a non-superuser executor is
+    rejected before DDL.
   - The service requires the guarded receipt schema and prerequisite
     handoff/lifecycle integrity triggers before serving; route tests prove a
     missing, owner-mismatched, disabled, or append-only trigger becomes a safe
@@ -121,6 +127,28 @@ Max files: 10
   transaction; operation-key binding occurs before lifecycle/receipt insertion;
   no external provider call exists in this slice.
 
+### Fix-loop disposition preflight
+
+- Root decision: preserve the guard owner's operation-table key-share access
+  while removing every external completion-table ACL.
+- Source trace: migration 394 ownership transfer -> ACL-cleanup loop revokes
+  guard owner -> PostgreSQL FK `SELECT … FOR KEY SHARE` -> isolated EOM
+  PostgreSQL job fails with `permission denied`.
+- Upstream files: `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
+  `atlas_brain/services/eom_first_clean_completion.py`,
+  `tests/test_eom_first_clean_completion.py`, and this plan.
+- Fix strategy: upstream-root.
+- Blocking predicate: CI/data correctness.
+- Disposition: fix in this PR.
+- Allowed files: `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
+  `atlas_brain/services/eom_first_clean_completion.py`,
+  `tests/test_eom_first_clean_completion.py`,
+  `plans/PR-First-Clean-Completion-Receipt.md`, and
+  `SESSION_STATE.codex-eom-first-clean-completion.local.md`.
+- Max files: 10 (the existing PR-wide file budget; this repair may modify only
+  the four listed files).
+- Parked hardening: none.
+
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
@@ -158,9 +186,12 @@ Migration 394 is a controlled DBA-only operation because it creates foreign
 keys to the guarded handoff table and transfers its two receipt tables plus
 trigger functions to `atlas_eom_handoff_owner`. It first requires migration
 354's guarded handoff table and protected functions, revokes direct
-runtime/NocoDB guard membership, rejects inherited membership, and grants Atlas
-only `SELECT`, `INSERT`, and `UPDATE` for the row locks and writes the service
-needs. The route refuses to serve if receipt ownership/ACLs/triggers or the
+runtime/NocoDB guard membership, rejects inherited membership, preserves the
+guard owner's operation-table access needed by PostgreSQL foreign-key checks,
+and grants Atlas only `SELECT`, `INSERT`, and `UPDATE` for the row locks and
+writes the service needs. Readiness attests both the exact trusted owner ACL and
+the runtime's limited ACL. The route refuses to serve if receipt
+ownership/ACLs/triggers or the
 prerequisite handoff ownership/functions/triggers and lifecycle integrity
 triggers are not exactly ready, so deploying code before the DBA apply is safe.
 Actor validation derives the serialized lifecycle value before the transaction
@@ -203,20 +234,28 @@ an automatic completion source and is intentionally left outside this slice.
 
 ## Verification
 
-- Local fast checks passed:
-  - `ruff format` and `ruff check` passed for
-    `atlas_brain/services/eom_first_clean_completion.py` and
-    `tests/test_eom_first_clean_completion.py`.
-  - `python -m py_compile atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py`
-  - `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py`
-    (`15 passed, 24 skipped`; the skipped cases require the deliberately absent
+- Current repair fast checks passed:
+  - Formatter: clean for the completion service and its focused test module.
+  - Command: ruff check atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py
+  - Command: `python -m py_compile atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py`
+  - Command: `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py`
+    (`15 passed, 25 skipped`; the skipped cases require the deliberately absent
     `ATLAS_MIGRATION_TEST_DATABASE_URL`).
-  - `git diff --check`
+  - Isolated PostgreSQL probe: the migration ownership/ACL catalog, real receipt
+    write, owner-restoration readiness, and stripped-guard readiness cases passed
+    (`4 passed`) against a disposable local PostgreSQL 16 container.
+  - Command: `python scripts/sync_pr_plan.py plans/PR-First-Clean-Completion-Receipt.md origin/main`
+  - Command: `python scripts/audit_plan_doc.py plans/PR-First-Clean-Completion-Receipt.md`
+  - Command: `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-First-Clean-Completion-Receipt.md`
+  - Command: `git diff --check`
 - The standalone Ruff target for `atlas_brain/main_eom.py` reports existing
   `E402` findings because that entrypoint intentionally loads local environment
   files before module imports; this slice leaves that bootstrap ordering intact.
-- GitHub owns the full/unit and database-backed migration runs. No local test
-  contacted Resend, Stripe, Google Calendar, or a real customer.
+- GitHub run `32798333370` exposed the prior ACL failure: ten focused receipt
+  cases failed because the FK key-share check could not read the operation
+  table. GitHub owns the authoritative EOM lead-pipeline rerun after this
+  repair. No local test contacted Resend, Stripe, Google Calendar, or a real
+  customer.
 
 ## Estimated diff size
 
@@ -225,11 +264,11 @@ an automatic completion source and is intentionally left outside this slice.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 12 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 766 |
-| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 431 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 844 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 435 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 85 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 235 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 274 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
-| `tests/test_eom_first_clean_completion.py` | 1443 |
+| `tests/test_eom_first_clean_completion.py` | 1552 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **3423** |
+| **Total** | **3653** |

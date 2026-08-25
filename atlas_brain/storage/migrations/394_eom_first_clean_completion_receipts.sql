@@ -405,6 +405,10 @@ BEGIN
               JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
              WHERE namespace.nspname = schema_name
                AND relation.relname = table_name
+               -- Foreign-key enforcement runs under the referencing table's
+               -- owner. Do not revoke the new guard owner's implicit access
+               -- to the operation receipt it must key-share lock.
+               AND grantee_role.rolname <> 'atlas_eom_handoff_owner'
         LOOP
             EXECUTE format(
                 'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM %I',

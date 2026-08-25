@@ -290,6 +290,29 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           )
                           AND acl.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE')
                    )
+                   AND (
+                       SELECT COUNT(*) = 14
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname IN (
+                              'eom_first_clean_completion_operation_receipts',
+                              'eom_first_clean_completion_receipts'
+                          )
+                          AND acl.grantee = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                          AND acl.privilege_type IN (
+                              'SELECT', 'INSERT', 'UPDATE', 'DELETE',
+                              'TRUNCATE', 'REFERENCES', 'TRIGGER'
+                          )
+                   )
                    AND NOT EXISTS (
                        SELECT 1
                          FROM pg_class AS relation
@@ -303,9 +326,64 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                               'eom_first_clean_completion_operation_receipts',
                               'eom_first_clean_completion_receipts'
                           )
-                          AND acl.grantee <> (
-                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+                          AND acl.grantee = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
                           )
+                          AND acl.privilege_type NOT IN (
+                              'SELECT', 'INSERT', 'UPDATE', 'DELETE',
+                              'TRUNCATE', 'REFERENCES', 'TRIGGER'
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname IN (
+                              'eom_first_clean_completion_operation_receipts',
+                              'eom_first_clean_completion_receipts'
+                          )
+                          AND acl.grantee NOT IN (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname IN (
+                                   'atlas', 'atlas_eom_handoff_owner'
+                               )
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname IN (
+                              'eom_first_clean_completion_operation_receipts',
+                              'eom_first_clean_completion_receipts'
+                          )
+                          AND acl.is_grantable
+                   )
+                   AND has_schema_privilege(
+                       'atlas_eom_handoff_owner', current_schema(), 'USAGE'
+                   )
+                   AND has_table_privilege(
+                       'atlas_eom_handoff_owner',
+                       'eom_first_clean_completion_operation_receipts',
+                       'SELECT'
+                   )
+                   AND has_table_privilege(
+                       'atlas_eom_handoff_owner',
+                       'eom_first_clean_completion_operation_receipts',
+                       'UPDATE'
                    )
                    AND has_table_privilege(
                        current_user,
