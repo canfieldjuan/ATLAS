@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import os
 import re
 import runpy
@@ -16,6 +17,7 @@ OPS_MODULE = runpy.run_path(str(OPS), run_name="atlas_ops_contract_test")
 DATABASE_INSPECTIONS = OPS_MODULE["DATABASE_INSPECTIONS"]
 DATABASE_CONFIG_KEYS = OPS_MODULE["DATABASE_CONFIG_KEYS"]
 TEST_DATABASE_URL_KEYS = OPS_MODULE["TEST_DATABASE_URL_KEYS"]
+OpsError = OPS_MODULE["OpsError"]
 database_inspection_command = OPS_MODULE["database_inspection_command"]
 database_runtime_environment = OPS_MODULE["database_runtime_environment"]
 
@@ -131,6 +133,68 @@ def test_database_runtime_environment_overrides_dotenv(
     assert child_env["ATLAS_DB_HOST"] == "runtime.example"
 
 
+def test_database_probe_degrades_when_project_dotenv_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ATLAS_DB_HOST=localhost\n", encoding="utf-8")
+    monkeypatch.setenv("ATLAS_OPS_ENV_FILES", str(env_file))
+    for key in DATABASE_CONFIG_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    real_import = builtins.__import__
+
+    def import_without_dotenv(name: str, *args: object, **kwargs: object) -> object:
+        if name == "dotenv":
+            raise ImportError("dependency intentionally unavailable")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_dotenv)
+
+    assert OPS_MODULE["database_probe"]() == (
+        "UNAVAILABLE",
+        "project Python is missing python-dotenv",
+    )
+    with pytest.raises(OpsError, match="missing python-dotenv"):
+        database_runtime_environment()
+
+
+def test_brain_health_never_returns_the_configured_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured_url = (
+        "https://operator:canary-password@brain.example.invalid/api/v1/ping"
+        "?token=canary-secret#credential-fragment"
+    )
+    requested: list[str] = []
+
+    class FakeResponse:
+        status = 204
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    def fake_urlopen(url: str, **_kwargs: object) -> FakeResponse:
+        requested.append(url)
+        return FakeResponse()
+
+    function_globals = OPS_MODULE["brain_health"].__globals__
+    monkeypatch.setenv("ATLAS_OPS_BRAIN_URL", configured_url)
+    monkeypatch.delenv("ATLAS_OPS_OFFLINE", raising=False)
+    monkeypatch.setitem(function_globals, "urlopen", fake_urlopen)
+
+    state, detail = OPS_MODULE["brain_health"]()
+
+    assert state == "OK"
+    assert requested == [configured_url]
+    assert configured_url not in detail
+    assert "canary-password" not in detail
+    assert "canary-secret" not in detail
+
+
 def test_git_snapshot_never_reads_or_prints_raw_origin(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -172,8 +236,69 @@ def test_integration_guard_admits_each_canonical_database_variable(
     monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
     monkeypatch.setitem(function_globals, "exec_command", fake_exec)
 
-    assert OPS_MODULE["test_command"](["integration", "tests/example.py", "-q"]) == 0
-    assert calls and calls[0][-2:] == ["tests/example.py", "-q"]
+    target = "tests/test_agent_operations_contract.py::test_doctor_runs_without_live_provider_access"
+    assert OPS_MODULE["test_command"](["integration", target, "-q"]) == 0
+    assert calls and calls[0][-2:] == [target, "-q"]
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "-q",
+        ".",
+        "tests",
+        "tests/",
+        "README.md",
+        "tests/does_not_exist.py",
+        "../tests/test_agent_operations_contract.py",
+    ),
+)
+def test_integration_guard_rejects_unbounded_or_invalid_targets(
+    target: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        TEST_DATABASE_URL_KEYS[0],
+        "postgresql://disposable.invalid/atlas_test",
+    )
+    monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
+    calls: list[list[str]] = []
+
+    function_globals = OPS_MODULE["test_command"].__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
+    monkeypatch.setitem(
+        function_globals,
+        "exec_command",
+        lambda args, **_kwargs: calls.append(args) or 0,
+    )
+
+    with pytest.raises(OpsError, match="existing Python file under tests"):
+        OPS_MODULE["test_command"](["integration", target])
+    assert calls == []
+
+
+def test_integration_guard_rejects_additional_positional_targets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        TEST_DATABASE_URL_KEYS[0],
+        "postgresql://disposable.invalid/atlas_test",
+    )
+    monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
+    calls: list[list[str]] = []
+    target = "tests/test_agent_operations_contract.py"
+
+    function_globals = OPS_MODULE["test_command"].__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
+    monkeypatch.setitem(
+        function_globals,
+        "exec_command",
+        lambda args, **_kwargs: calls.append(args) or 0,
+    )
+
+    with pytest.raises(OpsError, match="pytest option tokens"):
+        OPS_MODULE["test_command"](["integration", target, "tests/"])
+    assert calls == []
 
 
 def test_unit_mode_removes_database_urls_from_child_environment(
@@ -302,6 +427,8 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
     assert capabilities["database"]["arbitrary_query"].startswith("unavailable")
     assert capabilities["deployment"]["brain"]["provider"] == "local systemd user service"
     assert capabilities["deployment"]["frontend"]["provider"] == "Vercel"
+    assert "./ops doctor" in capabilities["project"]["source_of_truth"]
+    assert "./ops runtime inspection" not in capabilities["project"]["source_of_truth"]
 
 
 def test_fresh_agent_documentation_contract_is_complete() -> None:

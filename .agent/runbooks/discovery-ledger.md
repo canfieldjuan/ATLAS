@@ -217,3 +217,33 @@ Failure notes:
 Do not replace dotenv parsing with shell sourcing, and do not assume
 `-m "not integration"` excludes every database-writing test. Keep database
 URLs out of unit-mode subprocesses by construction.
+
+## Fresh-agent wrapper boundaries
+
+Problem:
+A fresh checkout is told to run `./ops doctor` before installing Python
+dependencies, configured health endpoints can contain credentials, and pytest
+falls back to broad collection when integration arguments do not name a file.
+
+Finding:
+Orientation must degrade an unavailable database probe without weakening
+explicit database commands. Health checks may consume a configured URL but must
+never echo it. Integration mode needs both disposable-database confirmation and
+a bounded file/node target; argument count alone is not a test boundary.
+
+Canonical method:
+Run `./ops doctor` before installation and treat an unavailable database line as
+an expected partial result. Run integration tests only as
+`./ops test integration tests/test_file.py[::node] [pytest-options]`; use
+`--option=value` for valued options.
+
+Verified:
+2026-08-24: focused boundary tests simulated missing `python-dotenv`, a
+credential-bearing configured health URL, option-only/directory/out-of-tree
+integration inputs, and valid file/node targets.
+
+Failure notes:
+Do not make `doctor` import application dependencies merely to orient a new
+agent. Do not print `ATLAS_OPS_BRAIN_URL`, even after a successful request. Do
+not bypass the bounded-target guard with direct pytest when database credentials
+are present.

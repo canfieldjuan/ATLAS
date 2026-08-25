@@ -122,6 +122,47 @@ would leave an incomplete and unverified operational path between PRs.
   configuration is unchanged; integration mode retains its separate explicit
   URL plus disposable-database confirmation gate.
 
+### Contract revision 4
+
+- New evidence: current-head review proved four bounded gaps in the operations
+  entrypoints. `doctor` aborts before dependencies are installed because its
+  database probe imports `python-dotenv`; a configured Brain health URL is
+  echoed after a successful probe; integration mode accepts option-only or
+  directory-wide pytest arguments; and the capability map names a nonexistent
+  runtime command.
+- Revised root cause: the operations layer did not preserve its orientation
+  command's dependency-free failure boundary, treated a credential-bearing URL
+  as safe status detail, checked only that integration arguments were nonempty,
+  and carried one unverified command label into the capability map.
+- Revised required change surface: make database status probing report an
+  unavailable dependency without aborting `doctor` while explicit database
+  commands retain actionable failure; report configured/local Brain endpoint
+  success without echoing the URL; require integration mode's first pytest
+  argument to resolve to an existing Python test file under `tests/`; replace
+  the nonexistent capability command; and add direct boundary regressions and
+  concise durable failure notes.
+- Revised non-scope: do not add a runtime command, install or vendor
+  dependencies, change database configuration, broaden pytest argument parsing,
+  change application health behavior, run integration tests, or touch CI,
+  provider, deployment, schema, or product code.
+- Revised verification plan: focused tests cover missing `python-dotenv`, a
+  canary-bearing configured health URL, option-only/directory/out-of-tree versus
+  file/node integration targets, and capability-command existence; then run
+  compile, plan/documentation audits, live dependency-free `doctor`, and the
+  guarded push while GitHub retains the full unit gate.
+
+#### Integration target closure declaration
+
+- Membership is **CLOSED** by the command grammar: the first argument after
+  `integration` is a path, optionally followed by a pytest `::node`, whose file
+  resolves under the repository's `tests/` directory, has a `.py` suffix, and
+  exists as a regular file. Later arguments must be pytest option tokens; use
+  `--option=value` when an option takes a value.
+- Empty, option-first, directory, missing, non-Python, and out-of-tree targets
+  take the safe default and are rejected before database credentials are handed
+  to pytest. This closes the repo-wide fallback without inventing a general
+  pytest parser.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
@@ -174,17 +215,23 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
 
 - Boundary path/seam: `./ops db inspect` named-inspection admission and
   read-only execution; integration-test database-variable admission; unit-test
-  database-environment isolation; `./ops env keys` secret-value suppression.
+  database-environment isolation; integration-test target admission;
+  dependency-free database status fallback; Brain health-detail redaction; and
+  `./ops env keys` secret-value suppression.
 - Replaced-path behaviors: N/A - no existing runtime path is replaced.
 - Guard-relevant fields: inspection name, complete PostgreSQL connection string,
   the canonical disposable-test URL set, open `*_DATABASE_URL` environment-key
   class, Git origin userinfo, environment assignment key/value split, and
-  subprocess output redaction.
+  subprocess output redaction; configured Brain URL; integration target path,
+  node suffix, and trailing pytest arguments.
 - Caller x input shape: shell caller x fixed connectivity/migrations names;
   shell caller x arbitrary/unknown query names; test caller x each canonical
   disposable database URL independently; unit caller x current/novel database
   URL keys plus an unrelated key; Git origin x credential-bearing URL; env files
-  x blank/comment/export/quoted/escaped/interpolated/canary-secret assignments.
+  x blank/comment/export/quoted/escaped/interpolated/canary-secret assignments;
+  fresh system Python x missing `python-dotenv`; configured Brain endpoint x
+  credential-bearing URL; integration caller x file/node/option-only/directory/
+  missing/out-of-tree/additional-positional targets.
 
 ### Deployed-config probing
 
@@ -197,8 +244,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Explicit value probe: tests pass fixed inspection names, a complete DSN with
   TLS/socket parameters, each canonical disposable-test URL, a novel
   database-URL-shaped key, and fixture env paths with dotenv quoting/comments,
-  escapes, and interpolation; safe live probes use the current authenticated
-  CLIs where available.
+  escapes, and interpolation; tests also pass a credential-bearing configured
+  health URL and bounded/unbounded integration targets; safe live probes use the
+  current authenticated CLIs where available.
 - Absent value probe: doctor and status report UNKNOWN/unavailable when a CLI,
   auth context, linked project, env file, or database is absent.
 - Default-session/default-context probe: run from the dedicated worktree, where
@@ -208,7 +256,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   client receives SQL; the exact DSN remains in the child environment rather
   than argv; unit-mode database URLs are removed before pytest starts; Git
   output selects the canonical identifier before printing; env rendering
-  extracts keys before any output is produced.
+  extracts keys before any output is produced; integration target validation
+  occurs before pytest or database admission; health output selects a fixed
+  label rather than the configured URL.
 
 ### Files touched
 
@@ -263,15 +313,20 @@ Parked hardening: none.
 
 ## Verification
 
-- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile ops` - pass.
+- `python -m py_compile ops tests/test_agent_operations_contract.py` - pass.
 - PyYAML `safe_load(.agent/capabilities.yaml)` - schema version `1` parsed.
 - New dotenv/unit-isolation regression nodes failed before implementation with
   undecoded dotenv text and a missing sanitized child environment.
-- `./ops test focused tests/test_agent_operations_contract.py -q` - 19 passed.
+- The four new boundary regression groups failed before implementation with
+  `10 failed`, covering missing dependency, configured-URL disclosure,
+  unbounded integration targets, and the nonexistent capability command.
+- `./ops test focused tests/test_agent_operations_contract.py -q` - 29 passed.
 - `./ops test focused tests/test_eom_render_profile.py::test_database_config_prefers_connection_string_for_asyncpg_kwargs -q` - 1 passed.
 - `./ops doctor` - pass; live systemd/Brain ping, Docker, Vercel, Render CLI,
   PostgreSQL fixed inspection, GitHub auth, and environment-source discovery
   reported without secret values.
+- `/usr/bin/python3 ./ops doctor` with `python-dotenv` unavailable - pass;
+  database status reported `UNAVAILABLE` while the remaining snapshot completed.
 - `./ops db inspect connectivity` and `./ops db migrations` - pass through the
   Atlas `DatabaseConfig`/asyncpg path.
 - `./ops db inspect connectivity` - pass again after switching selected `.env`
@@ -291,18 +346,18 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.agent/capabilities.yaml` | 289 |
+| `.agent/capabilities.yaml` | 290 |
 | `.agent/runbooks/ci.md` | 65 |
 | `.agent/runbooks/database.md` | 85 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 219 |
+| `.agent/runbooks/discovery-ledger.md` | 249 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
-| `.agent/runbooks/testing.md` | 92 |
+| `.agent/runbooks/testing.md` | 101 |
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 793 |
-| `plans/PR-Agent-Operations-Contract.md` | 308 |
-| `tests/test_agent_operations_contract.py` | 341 |
-| **Total** | **2539** |
+| `ops` | 827 |
+| `plans/PR-Agent-Operations-Contract.md` | 363 |
+| `tests/test_agent_operations_contract.py` | 468 |
+| **Total** | **2795** |

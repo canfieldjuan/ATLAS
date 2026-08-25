@@ -307,7 +307,10 @@ def run_database_inspection(
 
 
 def database_probe() -> tuple[str, str]:
-    result = run_database_inspection("connectivity", capture=True)
+    try:
+        result = run_database_inspection("connectivity", capture=True)
+    except OpsError as exc:
+        return "UNAVAILABLE", str(exc)
     assert isinstance(result, subprocess.CompletedProcess)
     if result.returncode != 0:
         return "FAIL", "fixed connectivity inspection failed"
@@ -370,7 +373,12 @@ def brain_health() -> tuple[str, str]:
         try:
             with urlopen(url, timeout=3) as response:  # noqa: S310 - fixed/local URL
                 if 200 <= response.status < 300:
-                    return "OK", url
+                    detail = (
+                        "configured ping endpoint responded"
+                        if configured
+                        else "local ping endpoint responded"
+                    )
+                    return "OK", detail
         except Exception:
             continue
     return "FAIL", "no configured/local ping endpoint responded"
@@ -657,6 +665,31 @@ def unit_test_environment() -> dict[str, str]:
     return child_env
 
 
+def validate_integration_target(root: Path, pytest_args: list[str]) -> None:
+    target = pytest_args[0]
+    file_target = target.partition("::")[0]
+    try:
+        resolved = (root / file_target).resolve(strict=False)
+        resolved.relative_to((root / "tests").resolve())
+    except (OSError, ValueError):
+        resolved = Path()
+    if (
+        target.startswith("-")
+        or not file_target
+        or resolved.suffix != ".py"
+        or not resolved.is_file()
+    ):
+        raise OpsError(
+            "integration target must be an existing Python file under tests/ "
+            "(optionally followed by ::node)"
+        )
+    if any(not argument.startswith("-") for argument in pytest_args[1:]):
+        raise OpsError(
+            "additional integration arguments must be pytest option tokens; "
+            "use --option=value for options that take values"
+        )
+
+
 def test_command(args: list[str]) -> int:
     if not args:
         raise OpsError("usage: ./ops test {unit|focused|integration|frontend|local-review}")
@@ -683,6 +716,7 @@ def test_command(args: list[str]) -> int:
     if action == "integration":
         if len(args) < 2:
             raise OpsError("name a focused integration test target")
+        validate_integration_target(root, args[1:])
         if not any(os.environ.get(key) for key in TEST_DATABASE_URL_KEYS):
             raise OpsError(
                 "integration tests require one explicit disposable test database URL; "

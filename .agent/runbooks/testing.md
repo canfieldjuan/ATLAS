@@ -44,10 +44,19 @@ environment configuration is preserved in unit mode.
 ## Database and integration tests
 
 Integration tests can create, migrate, truncate, or drop objects. `./ops`
-requires a focused target, an explicit test URL, and
+requires an existing Python file under `tests/` as the first target, an
+explicit test URL, and
 `ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1` before it will run them. Follow
 `.agent/runbooks/database.md`. Do not use the live `atlas` database and do not
 run concurrent suites against one test database.
+
+```bash
+./ops test integration tests/test_file.py::test_name -q
+```
+
+Directory, option-only, missing, and out-of-tree targets are rejected. Later
+arguments must be pytest option tokens; write valued options as
+`--option=value` so a second positional target cannot widen the run.
 
 ## Frontend tests
 

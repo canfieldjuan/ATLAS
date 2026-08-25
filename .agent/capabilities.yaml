@@ -6,7 +6,7 @@ project:
   verified_at: "2026-08-24"
   operational_entrypoint: ./ops doctor
   source_of_truth:
-    - ./ops runtime inspection
+    - ./ops doctor
     - executable configuration and current code
     - .agent/runbooks
     - README.md and CLAUDE.md only where they agree with the above
@@ -78,7 +78,7 @@ testing:
   integration:
     status: available-with-explicit-disposable-database
     provider: pytest plus PostgreSQL 16
-    command: ./ops test integration <focused-test-target>
+    command: ./ops test integration <tests/test_file.py[::node]> [pytest-options]
     authentication: one of ATLAS_MIGRATION_TEST_DATABASE_URL, ATLAS_RECEIVABLES_TEST_DATABASE_URL, or ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
     current_session_capable: false-until-a-disposable-url-is-exported
     mutation: destructive within the explicitly confirmed disposable database
@@ -86,6 +86,7 @@ testing:
     likely_failures:
       - pointing tests at the live atlas database
       - omitting ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1
+      - omitting a concrete existing test file or passing a directory-wide target
       - running multiple DB-backed suites against one shared database
     runbook: .agent/runbooks/testing.md
 
