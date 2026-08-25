@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import http.client
 import itertools
 import json
 import os
@@ -453,6 +454,25 @@ def test_active_unhealthy_service_alerts_without_restart(tmp_path):
     assert _state(settings) == {"consecutive": 1, "status": "down"}
 
 
+def test_http_protocol_failure_becomes_a_down_observation(tmp_path):
+    settings = _settings(tmp_path)
+    sent: list[tuple] = []
+
+    result = healthcheck.run_healthcheck(
+        settings,
+        runner=_Runner(active=True),
+        opener=lambda *args, **kwargs: (_ for _ in ()).throw(
+            http.client.BadStatusLine("malformed status")
+        ),
+        notifier=lambda *args: (sent.append(args), True)[1],
+        sleeper=lambda _: None,
+    )
+
+    assert result == healthcheck.EXIT_DOWN
+    assert "BadStatusLine" in sent[0][3]
+    assert _state(settings) == {"consecutive": 1, "status": "down"}
+
+
 @pytest.mark.parametrize(
     ("runner", "expected_detail"),
     [
@@ -886,6 +906,32 @@ def test_publish_reports_an_unavailable_desktop_notification(monkeypatch, capsys
     assert "WARNING desktop notification failed: FileNotFoundError" in capsys.readouterr().err
 
 
+def test_publish_treats_an_http_protocol_failure_as_undelivered(monkeypatch, capsys):
+    commands: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        healthcheck.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            http.client.BadStatusLine("malformed status")
+        ),
+    )
+    monkeypatch.setattr(
+        healthcheck.subprocess,
+        "run",
+        lambda command, **kwargs: (
+            commands.append(tuple(command)),
+            subprocess.CompletedProcess(command, 0),
+        )[1],
+    )
+
+    assert not healthcheck.publish(
+        "https://ntfy.test", "private-topic", "Title", "Body", "urgent", "warning"
+    )
+    assert "WARNING alert delivery failed: BadStatusLine" in capsys.readouterr().out
+    assert commands == [("notify-send", "-u", "critical", "Title", "Body")]
+
+
 def test_missing_ntfy_topic_still_preserves_desktop_notification(monkeypatch):
     commands: list[tuple[str, ...]] = []
 
@@ -909,7 +955,40 @@ def test_service_template_uses_installed_script_and_private_environment():
     assert "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" in service
     assert "ATLAS_API_HEALTHCHECK_NTFY_TOPIC=<private-topic>" in service
     assert "eom-atlas-api-health-" not in service
+    assert "SuccessExitStatus=0 2 4" in service
     assert "OnUnitActiveSec=5min" in timer
+
+
+@pytest.mark.parametrize(
+    ("argument", "expected_action"),
+    [
+        ("--enter-maintenance", "enter-maintenance"),
+        ("--exit-maintenance", "exit-maintenance"),
+    ],
+)
+def test_maintenance_actions_ignore_invalid_healthcheck_numeric_environment(
+    monkeypatch, argument, expected_action
+):
+    monkeypatch.setenv("ATLAS_API_HEALTHCHECK_REALERT_EVERY", "bad")
+    monkeypatch.setenv("ATLAS_API_HEALTHCHECK_RECOVERY_ATTEMPTS", "bad")
+    monkeypatch.setenv("ATLAS_API_HEALTHCHECK_RECOVERY_INTERVAL_SECONDS", "bad")
+
+    settings, action = healthcheck._settings_from_args([argument])
+
+    assert action == expected_action
+    assert settings.realert_every == healthcheck.DEFAULT_REALERT_EVERY
+    assert settings.recovery_attempts == healthcheck.DEFAULT_RECOVERY_ATTEMPTS
+    assert (
+        settings.recovery_interval_seconds
+        == healthcheck.DEFAULT_RECOVERY_INTERVAL_SECONDS
+    )
+
+
+def test_healthcheck_action_rejects_invalid_numeric_environment(monkeypatch):
+    monkeypatch.setenv("ATLAS_API_HEALTHCHECK_REALERT_EVERY", "bad")
+
+    with pytest.raises(ValueError, match="realert-every must be an integer"):
+        healthcheck._settings_from_args([])
 
 
 def test_installer_deploys_source_and_invokes_enabled_timer_path(tmp_path):

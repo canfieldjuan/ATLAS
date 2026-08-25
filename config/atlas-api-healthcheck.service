@@ -15,4 +15,5 @@ EnvironmentFile=-%h/.config/atlas/atlas-api-healthcheck.env
 Environment=DISPLAY=:0
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 # 2 means an inactive provider was recovered and re-probed successfully.
-SuccessExitStatus=0 2
+# 4 means the outcome is durable but its remote alert remains queued for retry.
+SuccessExitStatus=0 2 4

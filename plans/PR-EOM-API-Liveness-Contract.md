@@ -205,6 +205,33 @@ not exactly-once.
   file plus `flock` is the smaller closed local surface; its admitted duplicate
   boundary is explicit above.
 
+### Contract revision: deployed boundary outcomes
+
+- New evidence: the systemd service accepts recovery exit `2` but rejects exit
+  `4`, even though exit `4` means the same recovery/observation is durably
+  recorded with only remote notification delivery pending. Separately,
+  `http.client.HTTPException` is outside both HTTP catch sets, and numeric
+  healthcheck environment defaults are converted before maintenance action
+  selection.
+- Revised root cause: the monitor classifies internal recovery and persistence
+  states, but its systemd, HTTP, and CLI boundaries do not preserve those
+  classifications. A queued alert is mistaken for failed recovery, malformed
+  HTTP escapes instead of becoming an existing failure outcome, and unrelated
+  healthcheck configuration can disable the supported maintenance boundary.
+- Revised required change surface: admit exit `4` as a successful systemd
+  oneshot completion while retaining its journal/outbox evidence; convert
+  `HTTPException` at probe and notification boundaries into the existing down
+  and undelivered outcomes; select maintenance mode before converting
+  healthcheck-only numeric settings; cover all three boundaries in the focused
+  suite.
+- Revised explicit non-scope: do not change exit-code meanings, outbox or retry
+  semantics, timer cadence, notification destination, installer transaction
+  behavior, funnel/CRM APIs, schemas, dependencies, or live deployment.
+- Revised verification plan: focused tests for queued-delivery service status,
+  malformed HTTP at both boundaries, invalid numeric environment on both
+  maintenance actions and the healthcheck path; syntax, systemd verification,
+  focused maturity, plan sync, and diff audit. GitHub runs the full unit gate.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -315,10 +342,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `config/atlas-api-healthcheck.service` | 18 |
+| `config/atlas-api-healthcheck.service` | 19 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 324 |
-| `scripts/atlas_api_healthcheck.py` | 624 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 351 |
+| `scripts/atlas_api_healthcheck.py` | 642 |
 | `scripts/install_atlas_api_healthcheck.py` | 472 |
-| `tests/test_atlas_api_healthcheck.py` | 1262 |
-| **Total** | **2710** |
+| `tests/test_atlas_api_healthcheck.py` | 1341 |
+| **Total** | **2835** |

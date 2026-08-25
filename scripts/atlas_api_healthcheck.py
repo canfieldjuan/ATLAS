@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import http.client
 import json
 import os
 import subprocess
@@ -183,7 +184,7 @@ def probe_lead_intake(probe_url: str, opener: Opener) -> tuple[bool, str]:
     try:
         with opener(request, timeout=8) as response:
             status = int(response.status)
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
         return False, f"lead-intake probe failed: {type(exc).__name__}"
     if status in (200, 204):
         return True, f"lead-intake probe returned HTTP {status}"
@@ -482,7 +483,7 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
                 delivered = 200 <= int(response.status) < 300
-        except (urllib.error.URLError, OSError, ValueError) as exc:
+        except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
             print(f"WARNING alert delivery failed: {type(exc).__name__}")
     try:
         subprocess.run(
@@ -576,18 +577,42 @@ def _settings_from_args(argv: Sequence[str] | None) -> tuple[Settings, str]:
     parser.add_argument("--ntfy-topic", default=os.environ.get("ATLAS_API_HEALTHCHECK_NTFY_TOPIC", ""))
     parser.add_argument("--state-dir", default=os.environ.get("ATLAS_API_HEALTHCHECK_STATE_DIR", str(DEFAULT_STATE_DIR)))
     parser.add_argument("--maintenance-lock", default=os.environ.get("ATLAS_API_HEALTHCHECK_MAINTENANCE_LOCK", str(DEFAULT_MAINTENANCE_LOCK)))
-    parser.add_argument("--realert-every", type=int, default=int(os.environ.get("ATLAS_API_HEALTHCHECK_REALERT_EVERY", DEFAULT_REALERT_EVERY)))
-    parser.add_argument("--recovery-attempts", type=int, default=int(os.environ.get("ATLAS_API_HEALTHCHECK_RECOVERY_ATTEMPTS", DEFAULT_RECOVERY_ATTEMPTS)))
-    parser.add_argument("--recovery-interval-seconds", type=float, default=float(os.environ.get("ATLAS_API_HEALTHCHECK_RECOVERY_INTERVAL_SECONDS", DEFAULT_RECOVERY_INTERVAL_SECONDS)))
+    parser.add_argument("--realert-every", default=os.environ.get("ATLAS_API_HEALTHCHECK_REALERT_EVERY", str(DEFAULT_REALERT_EVERY)))
+    parser.add_argument("--recovery-attempts", default=os.environ.get("ATLAS_API_HEALTHCHECK_RECOVERY_ATTEMPTS", str(DEFAULT_RECOVERY_ATTEMPTS)))
+    parser.add_argument("--recovery-interval-seconds", default=os.environ.get("ATLAS_API_HEALTHCHECK_RECOVERY_INTERVAL_SECONDS", str(DEFAULT_RECOVERY_INTERVAL_SECONDS)))
     parser.add_argument("--no-alert", action="store_true")
     args = parser.parse_args(argv)
+    selected_action = (
+        "enter-maintenance"
+        if args.enter_maintenance
+        else "exit-maintenance"
+        if args.exit_maintenance
+        else "healthcheck"
+    )
     if not args.service.strip():
         raise ValueError("service must not be blank")
-    if args.realert_every < 0:
+    if selected_action == "healthcheck":
+        try:
+            realert_every = int(args.realert_every)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("realert-every must be an integer") from exc
+        try:
+            recovery_attempts = int(args.recovery_attempts)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("recovery-attempts must be an integer") from exc
+        try:
+            recovery_interval_seconds = float(args.recovery_interval_seconds)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("recovery-interval-seconds must be numeric") from exc
+    else:
+        realert_every = DEFAULT_REALERT_EVERY
+        recovery_attempts = DEFAULT_RECOVERY_ATTEMPTS
+        recovery_interval_seconds = DEFAULT_RECOVERY_INTERVAL_SECONDS
+    if realert_every < 0:
         raise ValueError("realert-every must not be negative")
-    if args.recovery_attempts < 1:
+    if recovery_attempts < 1:
         raise ValueError("recovery-attempts must be at least one")
-    if args.recovery_interval_seconds < 0:
+    if recovery_interval_seconds < 0:
         raise ValueError("recovery-interval-seconds must not be negative")
     settings = Settings(
         service=args.service,
@@ -596,17 +621,10 @@ def _settings_from_args(argv: Sequence[str] | None) -> tuple[Settings, str]:
         ntfy_topic=args.ntfy_topic,
         state_dir=Path(args.state_dir),
         maintenance_lock=Path(args.maintenance_lock),
-        realert_every=args.realert_every,
-        recovery_attempts=args.recovery_attempts,
-        recovery_interval_seconds=args.recovery_interval_seconds,
+        realert_every=realert_every,
+        recovery_attempts=recovery_attempts,
+        recovery_interval_seconds=recovery_interval_seconds,
         no_alert=args.no_alert,
-    )
-    selected_action = (
-        "enter-maintenance"
-        if args.enter_maintenance
-        else "exit-maintenance"
-        if args.exit_maintenance
-        else "healthcheck"
     )
     return settings, selected_action
 
