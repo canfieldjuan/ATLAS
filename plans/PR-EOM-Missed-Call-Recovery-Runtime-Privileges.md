@@ -44,7 +44,7 @@ can report a structurally present but unusable schema as ready.
 
 Ownership lane: eom/missed-call-recovery-runtime-privileges
 Slice phase: Production hardening
-Max files: 10
+Max files: 11
 
 1. Add the additive recovery-ACL migration and security-definer trigger bridge.
 2. Make readiness fail closed when the runtime role cannot execute the service's
@@ -370,6 +370,73 @@ Max files: 10
   retain their prior allowed/denied operations when no unsafe delegation
   exists.
 
+### Controlled-runner config and target-attestation contract (current review round)
+
+- Root cause: the controlled runner accepts independent protected-DBA and EOM
+  runtime DSNs, but it reads them directly from `os.environ` and uses the
+  runtime DSN only to parse a username. It consequently bypasses the supported
+  `.env`/`.env.local` settings boundary and has no evidence that the DBA pool
+  mutates the runtime database, cluster, or schema. A valid runtime DSN can
+  therefore point at a different target from the DBA DSN while `--apply`
+  reports the wrong target repaired.
+- Correct fix must touch/change: define a dedicated typed `SecretStr` DBA
+  setting under the canonical `ATLAS_EOM_MISSED_CALL_RECOVERY_*` namespace and
+  reuse `EOMFunnelConfig` for the runtime DSN. Before any extension or
+  migration mutation, connect to the runtime target read-only, record its
+  schema/database/session identity, bind the DBA pool to that schema, and
+  require both pools to contend on one transaction-scoped random advisory lock.
+  Re-attest the DBA pool's schema/database identity before and after controlled
+  migration work. Extend the DBA-runner tests to prove valid same-target
+  execution, typed `.env` loading, mismatched runtime/DBA database or schema
+  rejection, and same-name clone rejection before any `pgcrypto` or migration
+  call.
+- Must not change: do not change migration 393 SQL, recovery-table/function
+  ACL policy, the ordinary EOM runtime tuple, generic migration runner,
+  first-clean runner, route/provider/billing behavior, existing production
+  environment values, database contents, or role grants. Do not make the normal
+  application runtime load or require the protected DBA secret. Preserve the
+  runner's `--apply`/`--json` behavior and redacted target result; only remove
+  the newly introduced arbitrary environment-variable indirection in favor of
+  the canonical typed configuration.
+- Assumptions: the controlled DBA target must be the runtime target's exact
+  current schema and database identity, and an advisory-lock contention probe
+  distinguishes a live shared PostgreSQL cluster from a same-named clone. The
+  runtime DSN must establish its direct configured login; the existing funnel
+  setting is typed and `.env` aware but intentionally remains a plain string.
+- Acceptance criteria: deployment values supplied through the supported typed
+  settings files are accepted without exposing a DSN; a wrong database, schema,
+  cluster, or runtime session identity is rejected before any mutable call;
+  matching runtime/DBA targets retain the existing preflight/apply path and
+  redacted output.
+
+### Contract revision: transaction-pooled target attestation
+
+- New evidence: the adjacent controlled first-clean DBA runner disables
+  asyncpg's prepared-statement cache on both pools because acquire/release
+  boundaries can cross PostgreSQL backends under transaction pooling
+  (`scripts/apply_eom_first_clean_completion_schema.py`). The missed-call
+  runner now holds a transaction-scoped advisory lock across two controlled
+  pools, so the same backend-switching risk applies to its new attestation
+  queries.
+- Revised required change surface: disable asyncpg's statement cache in the
+  controlled missed-call runtime and DBA pools while preserving their one-slot
+  pool bounds; bind only the DBA pool's validated runtime schema through startup
+  settings.
+- Explicit non-scope remains unchanged: this does not change the normal Atlas
+  application pool or any generic migration-pool configuration.
+
+### Contract revision: executable-runner test import
+
+- New evidence: `scripts/` is not an importable Python package in this
+  repository, while the disposable-role test needs the runner's admission
+  helper as a direct unit under test.
+- Revised required test surface: load that executable file through an explicit
+  `importlib` file-spec fixture in the test instead of relying on package
+  import discovery.
+- Explicit non-scope remains unchanged: do not create `scripts/__init__.py`,
+  alter Python packaging, or change the command's CLI behavior merely to make
+  its internal helper importable.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -504,6 +571,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
+- `atlas_brain/config.py`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_missed_call_recovery.py`
 - `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql`
@@ -580,8 +648,10 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest -q tests/test_eom_missed_call_privilege_runner.py` — `17
-  passed` locally, including the controlled prelude admission boundary.
+- `pytest tests/test_eom_missed_call_privilege_runner.py -q` — `28 passed`
+  locally, including typed `.env`/`.env.local` loading, exact target/schema
+  binding, direct-runtime-session rejection, database/OID mismatch rejection,
+  and same-name clone rejection before any mutable call.
 - `ATLAS_MIGRATION_TEST_DATABASE_URL=... python -m pytest -q
   tests/test_eom_missed_call_recovery.py` — `72 passed` locally against the
   disposable PostgreSQL database. The new proof creates a non-superuser
@@ -589,16 +659,16 @@ Parked hardening: none.
   direct and transitive `pg_has_role(..., 'MEMBER')` plus actual `SET ROLE`,
   then proves migration/runner rejection before privilege mutation and
   readiness rejection/re-admission for both admitted identities.
-- `python -m pytest -q tests/test_eom_render_profile.py` — `64 passed` locally.
+- `pytest tests/test_eom_render_profile.py -q` — `64 passed, 1 warning`
+  locally.
 - `python -m compileall -q scripts/apply_eom_missed_call_recovery_runtime_privileges.py
-  atlas_brain/services/eom_missed_call_recovery.py
+  atlas_brain/config.py
   tests/test_eom_missed_call_privilege_runner.py
   tests/test_eom_missed_call_recovery.py` — passed locally.
-- `python -m ruff format --check` for the changed Python sources — passed.
-  The file-wide `ruff check` remains non-green on its existing lint baseline;
-  a `HEAD` comparison of `tests/test_eom_missed_call_recovery.py` reports `11`
-  pre-existing errors. This privilege-boundary repair does not broaden into a
-  lint-baseline rewrite.
+- `ruff check` for the changed Python sources and `ruff format --check` for
+  the runner/test sources — passed locally. `atlas_brain/config.py` retains
+  its existing repository formatting: a whole-file format check would rewrite
+  unrelated baseline lines, so that churn was deliberately not applied.
 - `git diff --check` and `python scripts/check_guard_class_closure.py --base
   origin/main --strict`, plus `python scripts/audit_plan_doc.py` — passed
   locally. The repository mechanical review wrapper remains required before
@@ -610,16 +680,17 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
+| `atlas_brain/config.py` | 23 |
 | `atlas_brain/main_eom.py` | 11 |
 | `atlas_brain/services/eom_missed_call_recovery.py` | 344 |
 | `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 988 |
-| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 630 |
-| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 465 |
-| `tests/test_eom_missed_call_privilege_runner.py` | 547 |
-| `tests/test_eom_missed_call_recovery.py` | 1634 |
+| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 81 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 701 |
+| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 634 |
+| `tests/test_eom_missed_call_privilege_runner.py` | 923 |
+| `tests/test_eom_missed_call_recovery.py` | 1655 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **4709** |
+| **Total** | **5374** |
 
 ## Diff size rationale
 

@@ -13,6 +13,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "apply_eom_missed_call_recovery_runtime_privileges.py"
+TEST_DBA_DSN = "postgresql://operator:test-only@example.test:5432/atlas"
+TEST_RUNTIME_DSN = "postgresql://atlas_funnel:test-only@example.test:5432/atlas"
 
 
 def _load_runner_module() -> ModuleType:
@@ -42,11 +44,41 @@ class _Acquire:
         return _connection().__await__()
 
 
+class _Transaction:
+    def __init__(self, connection: "_Connection") -> None:
+        self._connection = connection
+
+    async def __aenter__(self) -> "_Connection":
+        state = self._connection._state
+        state.transaction_depth = getattr(state, "transaction_depth", 0) + 1
+        return self._connection
+
+    async def __aexit__(self, *_args: object) -> None:
+        state = self._connection._state
+        state.transaction_depth -= 1
+        if state.transaction_depth == 0:
+            lock_state = getattr(state, "advisory_lock_state", state)
+            lock_state.advisory_lock_held = False
+        return None
+
+
 class _Connection:
     def __init__(self, state: SimpleNamespace) -> None:
         self._state = state
 
-    async def fetchval(self, query: str, *args: object) -> bool:
+    def transaction(self) -> _Transaction:
+        return _Transaction(self)
+
+    async def fetchval(self, query: str, *args: object) -> object:
+        if "pg_try_advisory_xact_lock" in query:
+            self._state.advisory_lock_attempts = (
+                getattr(self._state, "advisory_lock_attempts", 0) + 1
+            )
+            lock_state = getattr(self._state, "advisory_lock_state", self._state)
+            if getattr(lock_state, "advisory_lock_held", False):
+                return False
+            lock_state.advisory_lock_held = True
+            return True
         if "rolsuper" in query:
             return self._state.executor_is_superuser
         if "to_regclass" in query:
@@ -56,7 +88,15 @@ class _Connection:
             return args[0] in self._state.recorded_migrations
         raise AssertionError(f"unexpected query: {query}")
 
-    async def fetchrow(self, query: str, *args: object) -> dict[str, bool]:
+    async def fetchrow(self, query: str, *args: object) -> object:
+        if "current_schema() AS schema_name" in query:
+            return {
+                "schema_name": getattr(self._state, "schema_name", "public"),
+                "database_name": getattr(self._state, "database_name", "atlas"),
+                "database_oid": getattr(self._state, "database_oid", 16_384),
+                "current_user": getattr(self._state, "current_user", "atlas_funnel"),
+                "session_user": getattr(self._state, "session_user", "atlas_funnel"),
+            }
         assert "atlas:eom-missed-call-recovery-role-admission" in query
         assert args == ("atlas_funnel",)
         self._state.role_admission_calls = getattr(
@@ -94,15 +134,19 @@ class _Pool:
 @pytest.fixture(autouse=True)
 def _configured_runtime_dsn(monkeypatch) -> None:
     monkeypatch.setenv(
+        "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL",
+        TEST_DBA_DSN,
+    )
+    monkeypatch.setenv(
         "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING",
-        "postgresql://atlas_funnel:test-only@example.test:5432/atlas",
+        TEST_RUNTIME_DSN,
     )
 
 
 def test_privilege_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
     runner = _load_runner_module()
     monkeypatch.setenv(
-        "TEST_EOM_DBA_DSN",
+        runner.DBA_DSN_ENV,
         "postgresql://operator:secret@example.test:5432/atlas?sslmode=require",
     )
     state = SimpleNamespace(
@@ -113,13 +157,13 @@ def test_privilege_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> 
     pool = _Pool(state)
     calls: list[object] = []
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(*_args: object, **_kwargs: object) -> None:
         calls.append(object())
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN"])
+    args = runner._parse_args([])
     result = asyncio.run(
         runner._run(
             args,
@@ -147,7 +191,7 @@ def test_privilege_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> 
 
 def test_privilege_runner_requires_superuser_before_apply(monkeypatch) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=False,
         migrations_table_exists=True,
@@ -155,10 +199,10 @@ def test_privilege_runner_requires_superuser_before_apply(monkeypatch) -> None:
     )
     pool = _Pool(state)
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     with pytest.raises(RuntimeError, match="not a PostgreSQL superuser"):
         asyncio.run(runner._run(args, create_pool=create_pool))
     assert pool.closed is True
@@ -166,12 +210,19 @@ def test_privilege_runner_requires_superuser_before_apply(monkeypatch) -> None:
 
 def test_privilege_runner_rejects_missing_runtime_dsn(monkeypatch) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     monkeypatch.delenv("ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING")
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN"])
-    with pytest.raises(RuntimeError, match="Missing configured EOM runtime DSN"):
-        asyncio.run(runner._run(args))
+    args = runner._parse_args([])
+    with pytest.raises(
+        RuntimeError, match="Missing EOM funnel runtime DSN configuration"
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                funnel_config_factory=lambda: SimpleNamespace(db_connection_string=""),
+            )
+        )
 
 
 def test_runtime_role_migration_pool_binds_the_configured_role() -> None:
@@ -197,7 +248,7 @@ def test_runtime_role_migration_pool_binds_the_configured_role() -> None:
 
 def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
@@ -206,7 +257,7 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
     pool = _Pool(state)
     calls: list[tuple[object, tuple[str, ...]]] = []
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(observed_pool: object, *, only: tuple[str, ...]) -> None:
@@ -216,7 +267,7 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
         else:
             assert only == runner.HISTORICAL_PRELUDE_MIGRATION_NAMES
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     result = asyncio.run(
         runner._run(
             args,
@@ -272,7 +323,7 @@ def test_privilege_runner_refuses_apply_without_prerequisite_receipt(
     recorded_migrations: frozenset[str],
 ) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=migrations_table_exists,
@@ -281,7 +332,7 @@ def test_privilege_runner_refuses_apply_without_prerequisite_receipt(
     pool = _Pool(state)
     calls: list[tuple[str, ...]] = []
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(*_args: object, **kwargs: object) -> None:
@@ -289,7 +340,7 @@ def test_privilege_runner_refuses_apply_without_prerequisite_receipt(
         assert isinstance(only, tuple)
         calls.append(only)
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     with pytest.raises(
         RuntimeError,
         match="389_eom_missed_call_recovery is not recorded",
@@ -316,7 +367,7 @@ def test_privilege_runner_applies_historical_preludes_before_privilege_repair(
     monkeypatch,
 ) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
@@ -326,7 +377,7 @@ def test_privilege_runner_applies_historical_preludes_before_privilege_repair(
     calls: list[tuple[str, ...]] = []
     prelude_names = iter(runner.HISTORICAL_PRELUDE_MIGRATION_NAMES)
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
@@ -338,7 +389,7 @@ def test_privilege_runner_applies_historical_preludes_before_privilege_repair(
         else:  # pragma: no cover - regression guard for this controlled runner
             raise AssertionError(f"unexpected migration selection: {only}")
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     result = asyncio.run(
         runner._run(
             args,
@@ -366,7 +417,7 @@ def test_privilege_runner_provisions_pgcrypto_before_historical_preludes(
     monkeypatch,
 ) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
@@ -375,7 +426,7 @@ def test_privilege_runner_provisions_pgcrypto_before_historical_preludes(
     )
     pool = _Pool(state)
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
@@ -385,7 +436,7 @@ def test_privilege_runner_provisions_pgcrypto_before_historical_preludes(
         elif only == (runner.MIGRATION_NAME,):
             state.recorded_migrations.add(runner.MIGRATION_NAME)
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     asyncio.run(
         runner._run(
             args,
@@ -415,7 +466,7 @@ def test_privilege_runner_rejects_invalid_role_admission_before_pgcrypto(
     invalid_admission: str,
 ) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
@@ -425,13 +476,13 @@ def test_privilege_runner_rejects_invalid_role_admission_before_pgcrypto(
     pool = _Pool(state)
     calls: list[tuple[str, ...]] = []
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
         calls.append(only)
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     with pytest.raises(RuntimeError, match="role admission failed"):
         asyncio.run(
             runner._run(
@@ -453,7 +504,7 @@ def test_privilege_runner_continues_after_committed_historical_progress_stop(
     """A committed prelude receipt authorizes retrying the exact selector."""
 
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
@@ -463,7 +514,7 @@ def test_privilege_runner_continues_after_committed_historical_progress_stop(
     calls: list[tuple[str, ...]] = []
     prelude_names = iter(runner.HISTORICAL_PRELUDE_MIGRATION_NAMES)
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
@@ -479,7 +530,7 @@ def test_privilege_runner_continues_after_committed_historical_progress_stop(
         else:  # pragma: no cover - regression guard for this controlled runner
             raise AssertionError(f"unexpected migration selection: {only}")
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     result = asyncio.run(
         runner._run(
             args,
@@ -507,7 +558,7 @@ def test_privilege_runner_reraises_non_prelude_progress_stop(
     """Only a newly recorded authorized prelude may absorb the stop."""
 
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
@@ -516,7 +567,7 @@ def test_privilege_runner_reraises_non_prelude_progress_stop(
     pool = _Pool(state)
     calls: list[tuple[str, ...]] = []
 
-    async def create_pool(_database_url: str) -> _Pool:
+    async def create_pool(_database_url: str, **_kwargs: object) -> _Pool:
         return pool
 
     async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
@@ -529,7 +580,7 @@ def test_privilege_runner_reraises_non_prelude_progress_stop(
             "historical prelude did not advance"
         )
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     with pytest.raises(
         runner.PendingMigrationContentIntegrityError,
         match="historical prelude did not advance",
@@ -545,3 +596,328 @@ def test_privilege_runner_reraises_non_prelude_progress_stop(
     assert calls == [runner.HISTORICAL_PRELUDE_MIGRATION_NAMES]
     assert runner.MIGRATION_NAME in state.recorded_migrations
     assert pool.closed is True
+
+
+def test_create_pool_binds_the_attested_runtime_schema(monkeypatch) -> None:
+    """The controlled DBA pool must not depend on its DSN default search path."""
+
+    runner = _load_runner_module()
+    calls: list[dict[str, object]] = []
+    created_pool = object()
+
+    async def create_pool(**kwargs: object) -> object:
+        calls.append(dict(kwargs))
+        return created_pool
+
+    monkeypatch.setitem(
+        sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool)
+    )
+
+    runtime_pool = asyncio.run(runner._create_pool(TEST_RUNTIME_DSN))
+    dba_pool = asyncio.run(
+        runner._create_pool(TEST_DBA_DSN, schema_name="eom_canonical")
+    )
+
+    assert runtime_pool is created_pool
+    assert dba_pool is created_pool
+    assert calls == [
+        {
+            "dsn": TEST_RUNTIME_DSN,
+            "min_size": 1,
+            "max_size": 1,
+            "statement_cache_size": 0,
+        },
+        {
+            "dsn": TEST_DBA_DSN,
+            "min_size": 1,
+            "max_size": 1,
+            "statement_cache_size": 0,
+            "server_settings": {"search_path": '"eom_canonical", pg_catalog'},
+        },
+    ]
+
+
+@pytest.mark.parametrize("env_filename", (".env", ".env.local"))
+def test_typed_dba_config_loads_the_canonical_dsn_from_supported_env_file(
+    monkeypatch,
+    tmp_path: Path,
+    env_filename: str,
+) -> None:
+    runner = _load_runner_module()
+    monkeypatch.delenv(runner.DBA_DSN_ENV, raising=False)
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / env_filename
+    env_file.write_text(f"{runner.DBA_DSN_ENV}={TEST_DBA_DSN}\n", encoding="utf-8")
+
+    config = runner.EOMMissedCallRecoveryDBAConfig()
+
+    assert config.database_url.get_secret_value() == TEST_DBA_DSN
+    assert TEST_DBA_DSN not in repr(config)
+
+
+def test_privilege_runner_rejects_missing_typed_dba_dsn_before_pool(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    monkeypatch.delenv(runner.DBA_DSN_ENV, raising=False)
+    pool_calls: list[str] = []
+
+    async def create_pool(database_url: str, **_kwargs: object) -> _Pool:
+        pool_calls.append(database_url)
+        raise AssertionError("missing DBA DSN must fail before opening a pool")
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"Missing protected DBA DSN configuration {runner.DBA_DSN_ENV}",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMMissedCallRecoveryDBAConfig(
+                    _env_file=None
+                ),
+            )
+        )
+    assert pool_calls == []
+
+
+def test_privilege_runner_attests_matching_runtime_target_before_apply() -> None:
+    """A matching live runtime target reaches the existing controlled apply path."""
+
+    runner = _load_runner_module()
+    lock_state = SimpleNamespace()
+    runtime_pool = _Pool(
+        SimpleNamespace(
+            schema_name="eom_canonical",
+            advisory_lock_state=lock_state,
+        )
+    )
+    dba_state = SimpleNamespace(
+        schema_name="eom_canonical",
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
+        advisory_lock_state=lock_state,
+    )
+    dba_pool = _Pool(dba_state)
+    pool_calls: list[tuple[str, str | None]] = []
+    migration_calls: list[tuple[str, ...]] = []
+
+    async def create_pool(
+        database_url: str,
+        *,
+        schema_name: str | None = None,
+    ) -> _Pool:
+        pool_calls.append((database_url, schema_name))
+        if database_url == TEST_RUNTIME_DSN:
+            assert schema_name is None
+            return runtime_pool
+        assert database_url == TEST_DBA_DSN
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
+        migration_calls.append(only)
+        if only == (runner.MIGRATION_NAME,):
+            dba_state.recorded_migrations.add(runner.MIGRATION_NAME)
+        else:
+            assert only == runner.HISTORICAL_PRELUDE_MIGRATION_NAMES
+
+    result = asyncio.run(
+        runner._run(
+            runner._parse_args(["--apply"]),
+            create_pool=create_pool,
+            run_migrations_fn=run_migrations,
+            funnel_config_factory=lambda: SimpleNamespace(
+                db_connection_string=TEST_RUNTIME_DSN
+            ),
+        )
+    )
+
+    assert pool_calls == [
+        (TEST_RUNTIME_DSN, None),
+        (TEST_DBA_DSN, "eom_canonical"),
+    ]
+    assert migration_calls == [
+        runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        (runner.MIGRATION_NAME,),
+    ]
+    assert result["applied"] is True
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
+def test_privilege_runner_rejects_non_direct_runtime_login_before_dba_pool() -> None:
+    runner = _load_runner_module()
+    runtime_pool = _Pool(
+        SimpleNamespace(
+            schema_name="eom_canonical",
+            current_user="other_runtime",
+            session_user="atlas_funnel",
+        )
+    )
+    pool_calls: list[tuple[str, str | None]] = []
+
+    async def create_pool(
+        database_url: str,
+        *,
+        schema_name: str | None = None,
+    ) -> _Pool:
+        pool_calls.append((database_url, schema_name))
+        assert database_url == TEST_RUNTIME_DSN
+        assert schema_name is None
+        return runtime_pool
+
+    with pytest.raises(
+        RuntimeError,
+        match="runtime connection must use its direct configured login",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args(["--apply"]),
+                create_pool=create_pool,
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=TEST_RUNTIME_DSN
+                ),
+            )
+        )
+
+    assert pool_calls == [(TEST_RUNTIME_DSN, None)]
+    assert runtime_pool.closed is True
+
+
+@pytest.mark.parametrize(
+    ("dba_schema_name", "dba_database_name", "dba_database_oid", "error"),
+    (
+        (
+            "other_schema",
+            "atlas",
+            16_384,
+            "did not resolve to the EOM funnel runtime schema",
+        ),
+        (
+            "eom_canonical",
+            "other_atlas",
+            16_384,
+            "does not target the EOM funnel runtime database",
+        ),
+        (
+            "eom_canonical",
+            "atlas",
+            16_385,
+            "does not target the EOM funnel runtime database",
+        ),
+    ),
+)
+def test_privilege_runner_rejects_dba_target_mismatch_before_mutation(
+    dba_schema_name: str,
+    dba_database_name: str,
+    dba_database_oid: int,
+    error: str,
+) -> None:
+    runner = _load_runner_module()
+    lock_state = SimpleNamespace()
+    runtime_pool = _Pool(
+        SimpleNamespace(
+            schema_name="eom_canonical",
+            advisory_lock_state=lock_state,
+        )
+    )
+    dba_state = SimpleNamespace(
+        schema_name=dba_schema_name,
+        database_name=dba_database_name,
+        database_oid=dba_database_oid,
+        advisory_lock_state=lock_state,
+    )
+    dba_pool = _Pool(dba_state)
+    migration_calls: list[object] = []
+
+    async def create_pool(
+        database_url: str,
+        *,
+        schema_name: str | None = None,
+    ) -> _Pool:
+        if database_url == TEST_RUNTIME_DSN:
+            assert schema_name is None
+            return runtime_pool
+        assert database_url == TEST_DBA_DSN
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    async def run_migrations(*args: object, **_kwargs: object) -> None:
+        migration_calls.append(args)
+
+    with pytest.raises(RuntimeError, match=error):
+        asyncio.run(
+            runner._run(
+                runner._parse_args(["--apply"]),
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=TEST_RUNTIME_DSN
+                ),
+            )
+        )
+
+    assert getattr(dba_state, "executed", []) == []
+    assert migration_calls == []
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
+def test_privilege_runner_rejects_same_named_clone_before_mutation() -> None:
+    """Name/OID equality alone is not enough when clusters do not share a lock."""
+
+    runner = _load_runner_module()
+    runtime_pool = _Pool(SimpleNamespace(schema_name="eom_canonical"))
+    dba_state = SimpleNamespace(
+        schema_name="eom_canonical",
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
+    )
+    dba_pool = _Pool(dba_state)
+    migration_calls: list[object] = []
+
+    async def create_pool(
+        database_url: str,
+        *,
+        schema_name: str | None = None,
+    ) -> _Pool:
+        if database_url == TEST_RUNTIME_DSN:
+            assert schema_name is None
+            return runtime_pool
+        assert database_url == TEST_DBA_DSN
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    async def run_migrations(*args: object, **_kwargs: object) -> None:
+        migration_calls.append(args)
+
+    with pytest.raises(
+        RuntimeError,
+        match="does not share the EOM funnel runtime database",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args(["--apply"]),
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=TEST_RUNTIME_DSN
+                ),
+            )
+        )
+
+    assert getattr(dba_state, "executed", []) == []
+    assert migration_calls == []
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
+def test_privilege_runner_rejects_caller_selected_dsn_environment_name() -> None:
+    runner = _load_runner_module()
+
+    with pytest.raises(SystemExit):
+        runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN"])

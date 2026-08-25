@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from hashlib import sha256
+import importlib.util
 import json
 import os
 import re
@@ -16,6 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from itertools import product
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -49,12 +51,31 @@ from atlas_brain.templates.email.estimate_confirmation import (  # noqa: E402
 from atlas_brain.templates.email.missed_call_recovery import (  # noqa: E402
     render_missed_call_recovery_email,
 )
-from scripts.apply_eom_missed_call_recovery_runtime_privileges import (
-    _require_role_admission_before_mutation,
-)
 
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _load_privilege_runner() -> Any:
+    """Load the executable controlled runner without packaging ``scripts``."""
+
+    module_name = "test_eom_missed_call_recovery_privilege_runner"
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        ROOT / "scripts" / "apply_eom_missed_call_recovery_runtime_privileges.py",
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+_require_role_admission_before_mutation = (
+    _load_privilege_runner()._require_role_admission_before_mutation
+)
+
+
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
 DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 _EOM_CONTEXT = "effingham_maids"

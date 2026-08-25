@@ -73,10 +73,15 @@ claim or send a step.
 
    The first command is read-only and reports the configured runtime role, the
    390-392 historical-prelude receipts, plus the migration-389 prerequisite and
-   migration-393 repair receipts. The second requires a PostgreSQL superuser.
-   It derives only the username from the EOM funnel DSN--it never prints that
-   DSN--and fails closed if the resulting role is absent, elevated, or a guard
-   member. If 393 is absent, it first establishes the stock PostgreSQL
+   migration-393 repair receipts. Both DSNs are loaded only through their
+   typed settings boundaries. Before either command can mutate anything, it
+   reads the live runtime schema/database/session identity, binds the DBA pool
+   to that schema, and proves both pools contend on one transaction-scoped
+   advisory lock; a wrong database, schema, cluster, or delegated runtime
+   session fails closed. The second requires a PostgreSQL superuser. It derives
+   only the username from the EOM funnel DSN--it never prints that DSN--and
+   fails closed if the resulting role is absent, elevated, or a guard member.
+   If 393 is absent, it first establishes the stock PostgreSQL
    `pgcrypto` extension through the protected DBA connection, then gives the
    existing selector only 390-392 and refuses to run 393 until
    `389_eom_missed_call_recovery` is recorded. It never applies 389. Once 389

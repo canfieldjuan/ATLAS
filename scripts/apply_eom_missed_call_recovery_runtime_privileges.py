@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 import json
-import os
+import secrets
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 import sys
@@ -25,14 +26,19 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from atlas_brain.config import (  # noqa: E402
+    EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL_ENV,
+    EOMMissedCallRecoveryDBAConfig,
+)
+from atlas_brain.eom_api.config import EOMFunnelConfig  # noqa: E402
 from atlas_brain.storage.migrations import (  # noqa: E402
     PendingMigrationContentIntegrityError,
     run_migrations,
 )
 
 
-DEFAULT_DSN_ENV = "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL"
-DEFAULT_RUNTIME_DATABASE_URL_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
+DBA_DSN_ENV = EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL_ENV
+FUNNEL_DSN_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
 RUNTIME_ROLE_SETTING = "atlas.eom_missed_call_recovery_runtime_role"
 PREREQUISITE_MIGRATION_NAME = "389_eom_missed_call_recovery"
 MIGRATION_NAME = "393_eom_missed_call_recovery_runtime_privileges"
@@ -50,28 +56,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     )
     parser.add_argument(
-        "--database-url-env",
-        default=DEFAULT_DSN_ENV,
-        help=(
-            "Environment variable holding the protected DBA PostgreSQL DSN "
-            f"(default: {DEFAULT_DSN_ENV})."
-        ),
-    )
-    parser.add_argument(
         "--apply",
         action="store_true",
         help=(
             "Apply an exact historical EOM recovery prelude if required, then "
             "run migration 393 after the read-only DBA preflight."
-        ),
-    )
-    parser.add_argument(
-        "--runtime-database-url-env",
-        default=DEFAULT_RUNTIME_DATABASE_URL_ENV,
-        help=(
-            "Environment variable holding the configured EOM funnel PostgreSQL "
-            "DSN; its username selects the runtime role granted by migration 393 "
-            f"(default: {DEFAULT_RUNTIME_DATABASE_URL_ENV})."
         ),
     )
     parser.add_argument(
@@ -107,14 +96,148 @@ def _runtime_role_from_database_url(database_url: str) -> str:
     return runtime_role
 
 
-async def _create_pool(database_url: str) -> Any:
+def _require_schema_name(value: object, *, source: str) -> str:
+    """Accept one canonical PostgreSQL identifier from a trusted query result."""
+
+    if not isinstance(value, str):
+        raise RuntimeError(f"Missing or invalid schema from {source}")
+    schema_name = value.strip()
+    if not schema_name or not schema_name.isascii() or not schema_name.isidentifier():
+        raise RuntimeError(f"Missing or invalid schema from {source}")
+    return schema_name
+
+
+def _schema_search_path(schema_name: str) -> str:
+    """Render the validated schema for an asyncpg startup setting."""
+
+    return f'"{schema_name}", pg_catalog'
+
+
+def _require_database_name(value: object, *, source: str) -> str:
+    """Reject a missing database name rather than comparing an ambiguous target."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Missing or invalid database identity from {source}")
+    return value
+
+
+def _require_database_oid(value: object, *, source: str) -> int:
+    """Accept only one positive PostgreSQL database OID."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeError(f"Missing or invalid database identity from {source}")
+    return value
+
+
+def _require_role_name(value: object, *, source: str) -> str:
+    """Require a non-empty PostgreSQL role name from a catalog identity row."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Missing or invalid session identity from {source}")
+    return value
+
+
+@dataclass(frozen=True)
+class _TargetIdentity:
+    """One connection's canonical EOM database and schema target."""
+
+    schema_name: str
+    database_name: str
+    database_oid: int
+    current_user: str
+    session_user: str
+
+    @property
+    def database_identity(self) -> tuple[str, int]:
+        """Return only fields that must match across runtime and DBA pools."""
+
+        return (self.database_name, self.database_oid)
+
+
+async def _create_pool(
+    database_url: str,
+    *,
+    schema_name: str | None = None,
+) -> Any:
     try:
         import asyncpg
     except ImportError as exc:  # pragma: no cover - host dependency
         raise RuntimeError(
             "asyncpg is required to run the DBA migration preflight"
         ) from exc
-    return await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
+    pool_kwargs: dict[str, Any] = {
+        "dsn": database_url,
+        "min_size": 1,
+        "max_size": 1,
+        "statement_cache_size": 0,
+    }
+    if schema_name is not None:
+        pool_kwargs["server_settings"] = {
+            "search_path": _schema_search_path(schema_name)
+        }
+    return await asyncpg.create_pool(**pool_kwargs)
+
+
+async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
+    """Read the current schema and database identity without DDL."""
+
+    async with pool.acquire() as connection:
+        row = await connection.fetchrow(
+            """
+            SELECT pg_catalog.current_schema() AS schema_name,
+                   pg_catalog.current_database() AS database_name,
+                   CURRENT_USER AS current_user,
+                   SESSION_USER AS session_user,
+                   (
+                       SELECT oid
+                         FROM pg_catalog.pg_database
+                        WHERE datname = pg_catalog.current_database()
+                   ) AS database_oid
+            """
+        )
+    if row is None:
+        raise RuntimeError(f"Missing or invalid database identity from {source}")
+    return _TargetIdentity(
+        schema_name=_require_schema_name(
+            row["schema_name"],
+            source=f"{source} current_schema()",
+        ),
+        database_name=_require_database_name(row["database_name"], source=source),
+        database_oid=_require_database_oid(row["database_oid"], source=source),
+        current_user=_require_role_name(row["current_user"], source=source),
+        session_user=_require_role_name(row["session_user"], source=source),
+    )
+
+
+async def _attest_shared_database_lock(runtime_pool: Any, dba_pool: Any) -> None:
+    """Require both pools to contend on one unpredictable advisory lock."""
+
+    for _attempt in range(3):
+        lock_key = secrets.randbits(63)
+        async with runtime_pool.acquire() as runtime_connection:
+            async with runtime_connection.transaction():
+                runtime_acquired = bool(
+                    await runtime_connection.fetchval(
+                        "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                        lock_key,
+                    )
+                )
+                if not runtime_acquired:
+                    continue
+                async with dba_pool.acquire() as dba_connection:
+                    dba_acquired = bool(
+                        await dba_connection.fetchval(
+                            "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                            lock_key,
+                        )
+                    )
+                    if dba_acquired:
+                        raise RuntimeError(
+                            "Controlled DBA pool does not share the EOM "
+                            "funnel runtime database"
+                        )
+                return
+    raise RuntimeError("Could not reserve a fresh EOM funnel target-attestation lock")
 
 
 class _RuntimeRoleMigrationPool:
@@ -258,8 +381,23 @@ async def _require_role_admission_before_mutation(pool: Any, runtime_role: str) 
 
 async def _migration_state(
     pool: Any,
+    *,
+    expected_target: _TargetIdentity,
 ) -> tuple[bool, bool, bool, bool, dict[str, bool]]:
-    """Return executor, ledger, and exact EOM migration state without writes."""
+    """Return executor and ledger state after re-attesting the DBA target."""
+
+    observed_target = await _target_identity(
+        pool,
+        source="controlled DBA pool",
+    )
+    if observed_target.schema_name != expected_target.schema_name:
+        raise RuntimeError(
+            "Controlled DBA pool did not resolve to the EOM funnel runtime schema"
+        )
+    if observed_target.database_identity != expected_target.database_identity:
+        raise RuntimeError(
+            "Controlled DBA pool does not target the EOM funnel runtime database"
+        )
 
     async with pool.acquire() as connection:
         executor_is_superuser = bool(
@@ -315,6 +453,7 @@ async def _migration_state(
 async def _apply_required_historical_prelude(
     pool: Any,
     *,
+    expected_target: _TargetIdentity,
     migration_pool: Any,
     run_migrations_fn: Callable[..., Awaitable[None]],
 ) -> None:
@@ -328,7 +467,10 @@ async def _apply_required_historical_prelude(
     """
 
     for _ in HISTORICAL_PRELUDE_MIGRATION_NAMES:
-        _, _, _, _, before = await _migration_state(pool)
+        _, _, _, _, before = await _migration_state(
+            pool,
+            expected_target=expected_target,
+        )
         try:
             await run_migrations_fn(
                 migration_pool,
@@ -339,14 +481,20 @@ async def _apply_required_historical_prelude(
             # recovery, then raises while another evidence gap remains. Admit
             # only that exact committed-progress stop; every no-progress
             # integrity failure remains fail-closed.
-            _, _, _, _, after = await _migration_state(pool)
+            _, _, _, _, after = await _migration_state(
+                pool,
+                expected_target=expected_target,
+            )
             if not any(
                 not before[name] and after[name]
                 for name in HISTORICAL_PRELUDE_MIGRATION_NAMES
             ):
                 raise
             continue
-        _, _, _, _, after = await _migration_state(pool)
+        _, _, _, _, after = await _migration_state(
+            pool,
+            expected_target=expected_target,
+        )
         if all(
             after[name] == before[name] for name in HISTORICAL_PRELUDE_MIGRATION_NAMES
         ):
@@ -356,93 +504,114 @@ async def _apply_required_historical_prelude(
 async def _run(
     args: argparse.Namespace,
     *,
-    create_pool: Callable[[str], Awaitable[Any]] = _create_pool,
+    create_pool: Callable[..., Awaitable[Any]] = _create_pool,
     run_migrations_fn: Callable[..., Awaitable[None]] = run_migrations,
+    config_factory: Callable[[], EOMMissedCallRecoveryDBAConfig] = (
+        EOMMissedCallRecoveryDBAConfig
+    ),
+    funnel_config_factory: Callable[[], EOMFunnelConfig] = EOMFunnelConfig,
 ) -> dict[str, object]:
-    database_url = os.environ.get(args.database_url_env, "").strip()
+    config = config_factory()
+    database_url = config.database_url.get_secret_value().strip()
     if not database_url:
-        raise RuntimeError(
-            f"Missing protected DBA DSN environment variable {args.database_url_env}"
-        )
-    runtime_database_url = os.environ.get(args.runtime_database_url_env, "").strip()
+        raise RuntimeError(f"Missing protected DBA DSN configuration {DBA_DSN_ENV}")
+    runtime_database_url = funnel_config_factory().db_connection_string.strip()
     if not runtime_database_url:
         raise RuntimeError(
-            "Missing configured EOM runtime DSN environment variable "
-            f"{args.runtime_database_url_env}"
+            f"Missing EOM funnel runtime DSN configuration {FUNNEL_DSN_ENV}"
         )
     runtime_role = _runtime_role_from_database_url(runtime_database_url)
 
-    pool = await create_pool(database_url)
-    migration_pool = _RuntimeRoleMigrationPool(pool, runtime_role)
+    runtime_pool = await create_pool(runtime_database_url)
     try:
-        (
-            executor_is_superuser,
-            migrations_table_exists,
-            prerequisite_migration_recorded,
-            migration_recorded,
-            historical_prelude_migration_records,
-        ) = await _migration_state(pool)
-        result: dict[str, object] = {
-            "target": _safe_target_label(database_url),
-            "executor_is_superuser": executor_is_superuser,
-            "runtime_role": runtime_role,
-            "historical_prelude_migrations": historical_prelude_migration_records,
-            "prerequisite_migration": PREREQUISITE_MIGRATION_NAME,
-            "prerequisite_migration_recorded": prerequisite_migration_recorded,
-            "migration": MIGRATION_NAME,
-            "migration_recorded": migration_recorded,
-            "applied": False,
-        }
-        if not executor_is_superuser:
+        runtime_target = await _target_identity(
+            runtime_pool,
+            source="EOM funnel runtime",
+        )
+        if (
+            runtime_target.current_user != runtime_role
+            or runtime_target.session_user != runtime_role
+        ):
             raise RuntimeError(
-                "Configured DBA connection is not a PostgreSQL superuser; "
-                "refusing to run the privilege repair"
+                "EOM funnel runtime connection must use its direct configured login"
             )
-        if args.apply and migrations_table_exists and not migration_recorded:
-            await _require_role_admission_before_mutation(pool, runtime_role)
-            await _ensure_pgcrypto(pool)
-            await _apply_required_historical_prelude(
-                pool,
-                migration_pool=migration_pool,
-                run_migrations_fn=run_migrations_fn,
-            )
+        pool = await create_pool(database_url, schema_name=runtime_target.schema_name)
+        migration_pool = _RuntimeRoleMigrationPool(pool, runtime_role)
+        try:
+            await _attest_shared_database_lock(runtime_pool, pool)
             (
-                _,
-                _,
+                executor_is_superuser,
+                migrations_table_exists,
                 prerequisite_migration_recorded,
                 migration_recorded,
                 historical_prelude_migration_records,
-            ) = await _migration_state(pool)
-            result["historical_prelude_migrations"] = (
-                historical_prelude_migration_records
-            )
-        if args.apply and not prerequisite_migration_recorded:
-            raise RuntimeError(
-                f"Migration {PREREQUISITE_MIGRATION_NAME} is not recorded; "
-                "run the slim EOM bootstrap before the privilege repair"
-            )
-        if args.apply and not migration_recorded:
-            await run_migrations_fn(migration_pool, only=(MIGRATION_NAME,))
-            (
-                _,
-                _,
-                _,
-                migration_recorded,
-                historical_prelude_migration_records,
-            ) = await _migration_state(pool)
-            if not migration_recorded:
+            ) = await _migration_state(pool, expected_target=runtime_target)
+            result: dict[str, object] = {
+                "target": _safe_target_label(database_url),
+                "executor_is_superuser": executor_is_superuser,
+                "runtime_role": runtime_role,
+                "historical_prelude_migrations": historical_prelude_migration_records,
+                "prerequisite_migration": PREREQUISITE_MIGRATION_NAME,
+                "prerequisite_migration_recorded": prerequisite_migration_recorded,
+                "migration": MIGRATION_NAME,
+                "migration_recorded": migration_recorded,
+                "applied": False,
+            }
+            if not executor_is_superuser:
                 raise RuntimeError(
-                    "Migration runner returned without recording the EOM "
-                    "missed-call recovery privilege repair"
+                    "Configured DBA connection is not a PostgreSQL superuser; "
+                    "refusing to run the privilege repair"
                 )
-            result["migration_recorded"] = True
-            result["historical_prelude_migrations"] = (
-                historical_prelude_migration_records
-            )
-            result["applied"] = True
-        return result
+            if args.apply and migrations_table_exists and not migration_recorded:
+                await _require_role_admission_before_mutation(pool, runtime_role)
+                await _ensure_pgcrypto(pool)
+                await _apply_required_historical_prelude(
+                    pool,
+                    expected_target=runtime_target,
+                    migration_pool=migration_pool,
+                    run_migrations_fn=run_migrations_fn,
+                )
+                await _attest_shared_database_lock(runtime_pool, pool)
+                (
+                    _,
+                    _,
+                    prerequisite_migration_recorded,
+                    migration_recorded,
+                    historical_prelude_migration_records,
+                ) = await _migration_state(pool, expected_target=runtime_target)
+                result["historical_prelude_migrations"] = (
+                    historical_prelude_migration_records
+                )
+            if args.apply and not prerequisite_migration_recorded:
+                raise RuntimeError(
+                    f"Migration {PREREQUISITE_MIGRATION_NAME} is not recorded; "
+                    "run the slim EOM bootstrap before the privilege repair"
+                )
+            if args.apply and not migration_recorded:
+                await run_migrations_fn(migration_pool, only=(MIGRATION_NAME,))
+                await _attest_shared_database_lock(runtime_pool, pool)
+                (
+                    _,
+                    _,
+                    _,
+                    migration_recorded,
+                    historical_prelude_migration_records,
+                ) = await _migration_state(pool, expected_target=runtime_target)
+                if not migration_recorded:
+                    raise RuntimeError(
+                        "Migration runner returned without recording the EOM "
+                        "missed-call recovery privilege repair"
+                    )
+                result["migration_recorded"] = True
+                result["historical_prelude_migrations"] = (
+                    historical_prelude_migration_records
+                )
+                result["applied"] = True
+            return result
+        finally:
+            await pool.close()
     finally:
-        await pool.close()
+        await runtime_pool.close()
 
 
 async def _main(argv: list[str] | None = None) -> int:
