@@ -488,6 +488,6 @@ an automatic completion source and is intentionally left outside this slice.
 | `plans/PR-First-Clean-Completion-Receipt.md` | 493 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 251 |
 | `tests/test_eom_first_clean_completion.py` | 2407 |
-| `tests/test_eom_first_clean_completion_dba_runner.py` | 445 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 481 |
 | `tests/test_migrations_runner.py` | 39 |
-| **Total** | **5645** |
+| **Total** | **5681** |
