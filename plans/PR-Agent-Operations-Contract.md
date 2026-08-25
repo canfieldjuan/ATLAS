@@ -55,7 +55,7 @@ would leave an incomplete and unverified operational path between PRs.
 ## Scope (this PR)
 
 Ownership lane: agent-operations
-Slice phase: operations contract
+Slice phase: workflow/process
 
 1. Establish one verified, versioned operational knowledge path for a fresh
    agent without replacing existing subsystem-specific runbooks.
