@@ -712,6 +712,7 @@ def integration_test_environment(confirmed_key: str) -> dict[str, str]:
         if (
             key == "DATABASE_URL"
             or key.endswith("_DATABASE_URL")
+            or key.startswith("PG")
             or key in DATABASE_CONFIG_KEYS
         ):
             child_env.pop(key)

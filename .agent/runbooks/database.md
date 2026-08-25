@@ -85,12 +85,13 @@ export ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1
 ```
 
 After confirmation, `./ops` constructs a database-isolated child environment.
-It removes every inherited `DATABASE_URL`/`*_DATABASE_URL` and Atlas
-application database setting, then exposes the one confirmed DSN under the
-selected canonical key, `DATABASE_URL`, `EXTRACTED_DATABASE_URL`, and
-`ATLAS_DB_CONNECTION_STRING`. These aliases contain the same credential; they
-let current test consumers use their existing interface without inheriting a
-second database. The DSN is never placed in process arguments or output.
+It removes every inherited `DATABASE_URL`/`*_DATABASE_URL`, uppercase libpq
+`PG*` variable, and Atlas application database setting, then exposes the one
+confirmed DSN under the selected canonical key, `DATABASE_URL`,
+`EXTRACTED_DATABASE_URL`, and `ATLAS_DB_CONNECTION_STRING`. These aliases
+contain the same credential; they let current test consumers use their existing
+interface without inheriting a second database. The DSN is never placed in
+process arguments or output.
 
 Never point those variables at the live `atlas` database. Run only a focused
 database test target and do not run concurrent DB-backed suites against the

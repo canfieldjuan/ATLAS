@@ -320,6 +320,23 @@ def test_integration_guard_admits_each_canonical_database_variable(
     monkeypatch.setenv(database_key, confirmed_url)
     for key in ("DATABASE_URL", "EXTRACTED_DATABASE_URL", "FUTURE_DATABASE_URL"):
         monkeypatch.setenv(key, unconfirmed_url)
+    libpq_keys = (
+        "PGHOST",
+        "PGDATABASE",
+        "PGUSER",
+        "PGPASSWORD",
+        "PGPASSFILE",
+        "PGSERVICE",
+        "PGSERVICEFILE",
+        "PGSSLKEY",
+        "PGSSLCERT",
+        "PGSSLROOTCERT",
+        "PGCHANNELBINDING",
+        "PGTARGETSESSIONATTRS",
+        "PGFUTURE_CREDENTIAL",
+    )
+    for key in libpq_keys:
+        monkeypatch.setenv(key, unconfirmed_url)
     for key in DATABASE_CONFIG_KEYS:
         monkeypatch.setenv(key, unconfirmed_url)
     monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
@@ -345,6 +362,8 @@ def test_integration_guard_admits_each_canonical_database_variable(
     assert child_env["ATLAS_DB_CONNECTION_STRING"] == confirmed_url
     assert child_env["ATLAS_INTEGRATION_CANARY"] == "preserved"
     assert "FUTURE_DATABASE_URL" not in child_env
+    assert all(key not in child_env for key in libpq_keys)
+    assert not any(key.startswith("PG") for key in child_env)
     for key in DATABASE_CONFIG_KEYS - {"ATLAS_DB_CONNECTION_STRING"}:
         assert key not in child_env
     assert unconfirmed_url not in child_env.values()

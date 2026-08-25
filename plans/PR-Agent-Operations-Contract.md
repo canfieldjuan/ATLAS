@@ -275,9 +275,9 @@ would leave an incomplete and unverified operational path between PRs.
 #### Integration credential closure declaration
 
 - Credential membership is **OPEN** for URL-shaped environment keys and
-  **CLOSED** for Atlas application database settings. Every `DATABASE_URL` and
-  `*_DATABASE_URL` key plus every `DATABASE_CONFIG_KEYS` member is removed from
-  the inherited child environment.
+  libpq's uppercase `PG*` class, and **CLOSED** for Atlas application database
+  settings. Every `DATABASE_URL`, `*_DATABASE_URL`, `PG*`, and
+  `DATABASE_CONFIG_KEYS` member is removed from the inherited child environment.
 - Exactly one canonical member of `TEST_DATABASE_URL_KEYS` is admitted. Its
   value is restored under that key and adapted to the two generic URL aliases
   and Atlas's connection-string key, so all supported current test consumers
@@ -307,6 +307,27 @@ would leave an incomplete and unverified operational path between PRs.
   Python/shell syntax, capability parsing, plan synchronization, and diff
   checks. Do not invoke the local unit gate or full unit suite; GitHub owns that
   result.
+
+### Contract revision 9
+
+- New current-head blocker: PostgreSQL's libpq interface can select a database
+  through inherited `PG*` variables even after every URL-shaped and Atlas
+  application credential is removed.
+- Revised root cause: the credential-isolation boundary enumerates application
+  and URL interfaces but leaves libpq's open environment-key class authorized,
+  so confirmation and subprocess authority can still describe different
+  databases.
+- Revised required change surface: remove the entire inherited uppercase `PG*`
+  class before restoring the one confirmed disposable DSN through the supported
+  URL/application aliases; add current and novel libpq canaries; update the
+  capability, database/testing runbooks, and discovery ledger.
+- Revised non-scope: do not change database configuration parsing, selected env
+  file error behavior, project-interpreter selection, pytest targets, hosted CI,
+  or the hosted-only unit-gate boundary.
+- Revised verification plan: rerun the single focused integration-environment
+  matrix, the focused operations-contract file, syntax/schema/plan/diff audits,
+  and the mechanical push. Do not run the local unit gate or a database-backed
+  test.
 
 ## Scope (this PR)
 
@@ -403,8 +424,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   shared/systemd context plus process override; Docker x CLI missing/offline/
   daemon unavailable/object absent/object present/empty successful inspect;
   integration credential execution x one confirmed canonical URL plus ambient
-  generic/novel/application database credentials and an unrelated environment
-  key.
+  generic/novel/application/libpq database credentials and an unrelated
+  environment key.
 
 ### Deployed-config probing
 
@@ -429,7 +450,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   root to `/home/juan-canfield/Desktop/Atlas`.
 - Side-effect ordering: fixed inspection selection occurs before the database
   client receives SQL; the exact DSN remains in the child environment rather
-  than argv; unit-mode database URLs are removed before pytest starts; Git
+  than argv; local full-unit execution is unavailable; Git
   output selects the canonical identifier before printing; env rendering
   extracts keys before any output is produced; integration target validation
   and exact database-URL cardinality occur before the integration child
@@ -482,13 +503,20 @@ redaction, and command-boundary behavior without requiring live providers.
 - Provider deployment mutations remain operator-initiated; a future slice may
   add a separately consented, confirmation-gated deployment command if repeated
   operational evidence justifies it.
+- Selected dotenv decoding through the project interpreter is deferred as an
+  availability improvement; the current head's explicit database commands
+  remain read-only and the operator directed this pass to stop at blockers.
+- Fail-closed handling for unreadable selected database configuration is
+  deferred as read-only inspection hardening; it does not change the current
+  hosted-only unit boundary or disposable integration credential authority.
 
 Parking predicate: provider-specific conveniences, optional formatting, and
 additional mutating operations that are not required to answer the operator's
 fresh-agent questions are parked unless current verification proves they block
 the contract or create a security/data-safety defect.
 
-Parked hardening: none.
+Parked hardening: project-interpreter dotenv decoding and unreadable selected
+database-configuration rejection, as listed above.
 
 ## Verification
 
@@ -509,6 +537,9 @@ Parked hardening: none.
   across explicit/worktree/shared/systemd contexts, both shared-root path
   shapes, Docker CLI/offline/daemon/object states, and single-credential
   integration subprocess isolation across all 3 canonical URL keys.
+- Focused integration child-environment matrix - 3 passed; each canonical URL
+  case removes current libpq credentials and the novel `PGFUTURE_CREDENTIAL`
+  class member before pytest while preserving the unrelated canary.
 - Focused hosted-only unit boundary nodes across
   `tests/test_agent_operations_contract.py` and `tests/test_local_pr_review.py`
   - 9 passed; selected/empty/full/failing/missing checker states never invoke
@@ -551,18 +582,18 @@ Parked hardening: none.
 |---|---:|
 | `.agent/capabilities.yaml` | 299 |
 | `.agent/runbooks/ci.md` | 67 |
-| `.agent/runbooks/database.md` | 120 |
+| `.agent/runbooks/database.md` | 121 |
 | `.agent/runbooks/deployment.md` | 103 |
 | `.agent/runbooks/discovery-ledger.md` | 313 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
-| `.agent/runbooks/testing.md` | 99 |
+| `.agent/runbooks/testing.md` | 101 |
 | `AGENTS.md` | 17 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 893 |
-| `plans/PR-Agent-Operations-Contract.md` | 568 |
+| `ops` | 894 |
+| `plans/PR-Agent-Operations-Contract.md` | 599 |
 | `scripts/local_pr_review.sh` | 132 |
-| `tests/test_agent_operations_contract.py` | 656 |
+| `tests/test_agent_operations_contract.py` | 675 |
 | `tests/test_local_pr_review.py` | 131 |
-| **Total** | **3629** |
+| **Total** | **3683** |

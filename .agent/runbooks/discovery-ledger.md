@@ -153,9 +153,9 @@ is not fresh-applicable because later files depend on out-of-band
 and pass test-specific URL variables. Local integration admission requires
 exactly one canonical test URL so stale credentials cannot compete for which
 destructive suite target pytest inherits. Pytest receives an isolated child
-environment: ambient URL-shaped and Atlas application database settings are
-removed, and the one confirmed DSN is adapted to every supported current test
-interface.
+environment: ambient URL-shaped, uppercase libpq `PG*`, and Atlas application
+database settings are removed, and the one confirmed DSN is adapted to every
+supported current test interface.
 
 Canonical method:
 Inspect `atlas_brain/storage/migrations/__init__.py`, use
@@ -171,8 +171,8 @@ matrix admitted only one canonical variable and rejected every other
 cardinality before the pytest executor.
 2026-08-25: focused credential-isolation tests proved each canonical URL is the
 sole DSN exposed through the canonical, generic, and Atlas application
-interfaces; unconfirmed and novel database credentials do not reach argv or
-the child environment.
+interfaces; unconfirmed URL-shaped, application, current libpq, and novel `PG*`
+credentials do not reach argv or the child environment.
 
 Failure notes:
 A skipped DB test is not proof. Never apply the full chain to a fresh target as

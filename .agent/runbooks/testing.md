@@ -46,7 +46,9 @@ requires an existing Python file under `tests/` as the first target, an
 explicit test URL, and
 `ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1` before it will run them. Follow
 `.agent/runbooks/database.md`. Do not use the live `atlas` database and do not
-run concurrent suites against one test database.
+run concurrent suites against one test database. Integration mode removes all
+inherited URL-shaped, Atlas application, and libpq `PG*` database credentials
+before adapting the confirmed disposable DSN to supported test interfaces.
 
 ```bash
 ./ops test integration tests/test_file.py::test_name -q
