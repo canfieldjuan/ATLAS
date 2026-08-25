@@ -919,6 +919,37 @@ def test_database_config_preserves_split_host_port_kwargs_without_connection_str
     assert config.connection_kwargs(command_timeout=60)["command_timeout"] == 60
 
 
+def test_database_config_uses_socket_path_for_dsn_and_asyncpg_kwargs():
+    from atlas_brain.storage.config import DatabaseConfig
+
+    config = DatabaseConfig(
+        connection_string=" ",
+        host="postgres.internal",
+        port=6543,
+        database="atlas_prod",
+        user="atlas_user",
+        password="atlas_pass",
+        socket_path="/var/run/postgresql",
+        connect_timeout=5.0,
+        command_timeout=17.0,
+    )
+
+    assert config.dsn == (
+        "postgresql://atlas_user:atlas_pass@/atlas_prod"
+        "?host=/var/run/postgresql&port=6543"
+    )
+    assert config.connection_kwargs() == {
+        "host": "/var/run/postgresql",
+        "port": 6543,
+        "database": "atlas_prod",
+        "user": "atlas_user",
+        "password": "atlas_pass",
+        "timeout": 5.0,
+        "command_timeout": 17.0,
+    }
+    assert config.connection_kwargs(command_timeout=60)["command_timeout"] == 60
+
+
 def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
     from atlas_brain.storage.config import DatabaseConfig
     from atlas_brain.storage import database

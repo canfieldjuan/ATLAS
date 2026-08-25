@@ -47,6 +47,153 @@ generic query command is unavailable until Atlas has a privilege-restricted
 inspection role. Do not paste customer content or identifiers into chat or
 GitHub, and do not substitute the live application role as an ad hoc read role.
 
+## Unix-socket peer and loopback SCRAM cutover
+
+This is a production-mutating operation. Perform it only from an owned,
+merged-and-deployed hardening slice. A Brain restart can run migration checks;
+read the migration section below first. Do not add a database password or a
+systemd credential for this cutover: the service is a non-root user service,
+and the correct boundary is the operating-system identity already available to
+PostgreSQL over its Unix socket.
+
+The source revision for this runbook makes
+`DatabaseConfig.connection_kwargs()` honour `ATLAS_DB_SOCKET_PATH`. That is
+required before changing the live setting: the generic pool and fixed
+`./ops db inspect` path both call that method. The service will connect as the
+existing `atlas` PostgreSQL role through `/var/run/postgresql` on port `5433`.
+`pg_ident.conf` maps only the actual service OS account to that role, and an
+HBA rule scoped to database `atlas` and role `atlas` selects peer
+authentication. The existing `postgres` Unix-socket peer rule remains the
+break-glass path.
+
+1. Revalidate the exact deployed source, service identity, PostgreSQL paths,
+   active local clients, and current health. Do not print `.env` values or a
+   database URL:
+
+   ```bash
+   ./ops deploy status
+   ./ops db inspect connectivity
+   id -un
+   sudo -u postgres psql -d atlas -At -F '|' -c \
+     "SHOW hba_file; SHOW ident_file; SHOW unix_socket_directories;"
+   sudo -u postgres psql -d atlas -At -F '|' -c \
+     "SELECT application_name, usename, client_addr, state \
+      FROM pg_stat_activity \
+      WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
+   sudo -u postgres psql -d atlas -At -c \
+     "SELECT count(*) FROM pg_stat_replication;"
+   ```
+
+   For the current single-user deployment, the service account is
+   `juan-canfield`, the HBA file is `/etc/postgresql/16/main/pg_hba.conf`, the
+   identity-map file is `/etc/postgresql/16/main/pg_ident.conf`, and the socket
+   directory is `/var/run/postgresql`. Stop if the live results differ; derive
+   the map/rules from the returned topology rather than copying these values
+   blindly.
+
+2. Preserve only the two PostgreSQL authentication files before editing them:
+
+   ```bash
+   if sudo test -e /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer \
+     || sudo test -e /etc/postgresql/16/main/pg_ident.conf.pre-atlas-peer; then
+     printf '%s\n' 'existing peer-cutover backup found; inspect it before retrying' >&2
+     exit 1
+   fi
+   sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf \
+     /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer
+   sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_ident.conf \
+     /etc/postgresql/16/main/pg_ident.conf.pre-atlas-peer
+   ```
+
+   Then add this exact map with `sudoedit /etc/postgresql/16/main/pg_ident.conf`:
+
+   ```text
+   atlas_app    juan-canfield    atlas
+   ```
+
+   Add this exact rule with `sudoedit /etc/postgresql/16/main/pg_hba.conf`
+   **above** the generic `local   all   all   peer` rule. Do not change the
+   existing `local   all   postgres   peer` rule:
+
+   ```text
+   local   atlas   atlas                         peer map=atlas_app
+   ```
+
+   ```bash
+   sudo systemctl reload postgresql@16-main
+   sudo -u postgres psql -d atlas -At -c \
+     "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL;"
+   ```
+
+   The final query must return `0`; otherwise restore both saved files and
+   reload PostgreSQL before continuing. The service still uses TCP at this
+   point, so a valid scoped peer rule can be proved without removing the
+   existing path.
+
+3. In the shared application configuration read by `atlas-api.service`, add
+   exactly this non-secret setting with an editor; do not copy or print the
+   rest of the file:
+
+   ```text
+   ATLAS_DB_SOCKET_PATH=/var/run/postgresql
+   ```
+
+   Restart the user service, then prove that the application has changed its
+   real connection path before any TCP trust rule is removed:
+
+   ```bash
+   systemctl --user restart atlas-api.service
+   ./ops deploy status
+   ./ops db inspect connectivity
+   ```
+
+   Perform one read-only authenticated EOM CRM Contacts-page refresh. A health
+   response alone is insufficient: the generic pool can initialize lazily, so
+   the CRM read proves the application data path. If either proof fails,
+   restore the two saved PostgreSQL files, remove only the exact non-secret
+   setting just added, reload PostgreSQL, and restart `atlas-api.service`.
+
+4. Only after the socket-peer proof succeeds, replace **all four** loopback
+   TCP `trust` entries in `pg_hba.conf` with `scram-sha-256` using `sudoedit`:
+
+   ```text
+   host    all             all             127.0.0.1/32            scram-sha-256
+   host    all             all             ::1/128                 scram-sha-256
+   host    replication     all             127.0.0.1/32            scram-sha-256
+   host    replication     all             ::1/128                 scram-sha-256
+   ```
+
+   Do not alter any non-loopback rule. Reload PostgreSQL and repeat the
+   service, fixed-inspection, and authenticated CRM proofs from step 3.
+
+5. Verify both sides of the new boundary. The passwordless TCP probe must fail;
+   the retained `postgres` socket peer probe must succeed:
+
+   ```bash
+   if env -u PGPASSWORD -u ATLAS_DB_PASSWORD PGPASSFILE=/dev/null \
+     psql -w -h 127.0.0.1 -p 5433 -U atlas -d atlas -Atc 'SELECT 1'; then
+     printf '%s\n' 'unexpected passwordless loopback TCP access' >&2
+     exit 1
+   fi
+   sudo -u postgres psql -d atlas -Atc 'SELECT current_user'
+   ```
+
+   The second command must print `postgres`. The first must reject
+   authentication without prompting. Do not use an existing `.pgpass` file or
+   a secret-bearing shell environment as a substitute test.
+
+6. If a step fails after the HBA conversion, restore both saved authentication
+   files, reload PostgreSQL, and restart `atlas-api.service`. If the service
+   still cannot reconnect, remove only the added `ATLAS_DB_SOCKET_PATH` line
+   from shared configuration and restart again. Re-run the fixed inspection and
+   CRM read before declaring rollback complete. Do not edit roles, passwords,
+   migration ledger rows, or database data as part of rollback.
+
+`./ops db inspect` remains fixed-query-only. It already selects the same
+socket-path configuration as the application and uses a `READ ONLY`
+transaction. This cutover does not create a generic command runner or expose a
+credential.
+
 ## Migrations
 
 Atlas does not use Alembic even though an `alembic` executable is installed.

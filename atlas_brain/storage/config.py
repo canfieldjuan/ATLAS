@@ -81,7 +81,10 @@ class DatabaseConfig(BaseSettings):
             return self.connection_string.strip()
         if self.socket_path:
             # Unix socket connection (lowest latency)
-            return f"postgresql://{self.user}:{self.password}@/{self.database}?host={self.socket_path}"
+            return (
+                f"postgresql://{self.user}:{self.password}@/{self.database}"
+                f"?host={self.socket_path}&port={self.port}"
+            )
         else:
             # TCP connection
             return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
@@ -122,7 +125,7 @@ class DatabaseConfig(BaseSettings):
                 **timeout_kwargs,
             }
         return {
-            "host": self.host,
+            "host": self.socket_path or self.host,
             "port": self.port,
             "database": self.database,
             "user": self.user,

@@ -38,11 +38,11 @@ bytes verified, and the read-only preflight continues to report that mismatch.
 
    - `verified` and `legacy_unverified` can proceed under the normal runner
      policy. Legacy null hashes remain visible; they are not silently repaired.
-   - `unresolved_drift` with a matching known record may be admissible only when
-     every entry in `known_reconciliation_evidence` for that reported name is
-     `attested`, there is no `missing_source`, and there are no additional
-     mismatched names. The preflight still exits 2 to preserve forensic truth;
-     do not treat exit 2 alone as approval.
+   - `unresolved_drift` may be admissible only when every reported mismatched
+     **and** missing-source name has matching known reconciliation evidence,
+     every reported evidence entry is `attested`, and no unknown or
+     non-attested discrepancy remains. The preflight still exits 2 to preserve
+     forensic truth; do not treat exit 2 alone as approval.
    - Any unknown mismatch, missing source, a known record that is currently
      reported as mismatched but has absent/non-attested evidence, target
      mismatch, or `could_not_determine` result is a stop condition. Do not
