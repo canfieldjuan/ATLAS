@@ -315,12 +315,19 @@ def test_integration_guard_admits_each_canonical_database_variable(
 ) -> None:
     for key in TEST_DATABASE_URL_KEYS:
         monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv(database_key, "postgresql://disposable.invalid/atlas_test")
+    confirmed_url = f"postgresql://confirmed.invalid/{database_key.lower()}"
+    unconfirmed_url = "postgresql://unconfirmed.invalid/must-not-reach-pytest"
+    monkeypatch.setenv(database_key, confirmed_url)
+    for key in ("DATABASE_URL", "EXTRACTED_DATABASE_URL", "FUTURE_DATABASE_URL"):
+        monkeypatch.setenv(key, unconfirmed_url)
+    for key in DATABASE_CONFIG_KEYS:
+        monkeypatch.setenv(key, unconfirmed_url)
     monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
-    calls: list[list[str]] = []
+    monkeypatch.setenv("ATLAS_INTEGRATION_CANARY", "preserved")
+    calls: list[tuple[list[str], dict[str, object]]] = []
 
-    def fake_exec(args: list[str], **_kwargs: object) -> int:
-        calls.append(args)
+    def fake_exec(args: list[str], **kwargs: object) -> int:
+        calls.append((args, kwargs))
         return 0
 
     function_globals = OPS_MODULE["test_command"].__globals__
@@ -329,7 +336,20 @@ def test_integration_guard_admits_each_canonical_database_variable(
 
     target = "tests/test_agent_operations_contract.py::test_doctor_runs_without_live_provider_access"
     assert OPS_MODULE["test_command"](["integration", target, "-q"]) == 0
-    assert calls and calls[0][-2:] == [target, "-q"]
+    assert calls and calls[0][0][-2:] == [target, "-q"]
+    child_env = calls[0][1]["env"]
+    assert isinstance(child_env, dict)
+    assert child_env[database_key] == confirmed_url
+    assert child_env["DATABASE_URL"] == confirmed_url
+    assert child_env["EXTRACTED_DATABASE_URL"] == confirmed_url
+    assert child_env["ATLAS_DB_CONNECTION_STRING"] == confirmed_url
+    assert child_env["ATLAS_INTEGRATION_CANARY"] == "preserved"
+    assert "FUTURE_DATABASE_URL" not in child_env
+    for key in DATABASE_CONFIG_KEYS - {"ATLAS_DB_CONNECTION_STRING"}:
+        assert key not in child_env
+    assert unconfirmed_url not in child_env.values()
+    assert all(confirmed_url not in argument for argument in calls[0][0])
+    assert all(unconfirmed_url not in argument for argument in calls[0][0])
 
 
 @pytest.mark.parametrize("active_count", (0, 2, 3))

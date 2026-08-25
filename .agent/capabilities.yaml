@@ -3,7 +3,7 @@ schema_version: 1
 project:
   name: Atlas
   repository: canfieldjuan/ATLAS
-  verified_at: "2026-08-24"
+  verified_at: "2026-08-25"
   operational_entrypoint: ./ops doctor
   source_of_truth:
     - ./ops doctor
@@ -80,12 +80,14 @@ testing:
     provider: pytest plus PostgreSQL 16
     command: ./ops test integration <tests/test_file.py[::node]> [pytest-options]
     authentication: exactly one of ATLAS_MIGRATION_TEST_DATABASE_URL, ATLAS_RECEIVABLES_TEST_DATABASE_URL, or ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
+    credential_isolation: pytest receives only the confirmed DSN, adapted to the selected canonical key, DATABASE_URL, EXTRACTED_DATABASE_URL, and ATLAS_DB_CONNECTION_STRING; other database credentials are removed
     current_session_capable: false-until-a-disposable-url-is-exported
     mutation: destructive within the explicitly confirmed disposable database
     safe_verify: use the matching GitHub Actions workflow when no disposable local database is prepared
     likely_failures:
       - pointing tests at the live atlas database
       - exporting multiple canonical test database URLs at once
+      - assuming an ambient generic or Atlas application database credential is passed through unchanged
       - omitting ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1
       - omitting a concrete existing test file or passing a directory-wide target
       - running multiple DB-backed suites against one shared database

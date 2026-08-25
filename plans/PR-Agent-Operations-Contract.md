@@ -243,6 +243,48 @@ would leave an incomplete and unverified operational path between PRs.
   unavailable, and daemon available. Only after a successful daemon probe can
   an inspect miss mean `absent`; a successful empty inspect is `UNKNOWN`.
 
+### Contract revision 7
+
+- New evidence: the exact-one canonical integration URL guard still hands
+  pytest the unfiltered parent environment. Current integration targets can
+  select `EXTRACTED_DATABASE_URL`, `DATABASE_URL`, or Atlas application
+  database settings instead of the confirmed canonical URL, and the cited
+  ticket-FAQ test applies migration SQL and performs writes/deletes through
+  that unconfirmed credential.
+- Revised root cause: integration admission validates credential cardinality
+  but does not bind subprocess authority to the credential that passed the
+  confirmation gate. Validation and execution therefore operate on different
+  database environments.
+- Revised required change surface: construct an integration-only child
+  environment that removes every inherited `DATABASE_URL`/`*_DATABASE_URL` and
+  Atlas application database setting, restores the single confirmed canonical
+  URL, and adapts that same value to `DATABASE_URL`,
+  `EXTRACTED_DATABASE_URL`, and `ATLAS_DB_CONNECTION_STRING`; pass that child
+  environment explicitly to pytest; update the capability/runbook/ledger
+  claims; and add negative proof that no unconfirmed credential reaches argv or
+  the child environment.
+- Revised non-scope: do not add target registries, parse test source, provision
+  databases, execute database-backed tests, alter pytest targets/markers,
+  change application configuration, add credentials, modify CI/provider/schema/
+  product code, or revisit earlier resolved review decisions.
+- Revised verification plan: prove the focused credential-isolation regression
+  fails before implementation, then run the focused operations-contract test
+  file, Python compile, YAML/plan/diff audits, and the guarded push with the
+  local full unit mirror skipped; GitHub owns the full unit gate.
+
+#### Integration credential closure declaration
+
+- Credential membership is **OPEN** for URL-shaped environment keys and
+  **CLOSED** for Atlas application database settings. Every `DATABASE_URL` and
+  `*_DATABASE_URL` key plus every `DATABASE_CONFIG_KEYS` member is removed from
+  the inherited child environment.
+- Exactly one canonical member of `TEST_DATABASE_URL_KEYS` is admitted. Its
+  value is restored under that key and adapted to the two generic URL aliases
+  and Atlas's connection-string key, so all supported current test consumers
+  receive one identical confirmed credential. No database value enters argv.
+- Unknown future URL-shaped keys and every non-selected canonical key take the
+  safe default and remain absent. Unrelated environment keys remain inherited.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
@@ -285,6 +327,10 @@ Max files: 14
   - Container status proves Docker daemon access before classifying objects as
     present or absent; settled by CLI/offline/daemon/object state tests and a
     live `./ops status` invocation.
+  - Integration pytest receives one confirmed disposable credential across the
+    canonical, generic, and Atlas application interfaces while every other
+    database credential is absent; settled by child-environment and argv
+    canary assertions without executing a database-backed test.
 - Reachability proof: run the real `./ops doctor`, `./ops env keys`,
   `./ops db status`, `./ops deploy status`, `./ops ci status`, and focused test
   entrypoints and observe their redacted terminal output/exit status.
@@ -307,7 +353,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   dependency-free database status fallback; Brain health-detail redaction; and
   `./ops env keys` secret-value suppression; Git common-directory shared-root
   resolution; selected database configuration context; integration database-URL
-  cardinality; and Docker daemon-versus-object state classification.
+  cardinality and subprocess credential isolation; and Docker
+  daemon-versus-object state classification.
 - Replaced-path behaviors: N/A - no existing runtime path is replaced.
 - Guard-relevant fields: inspection name, complete PostgreSQL connection string,
   the canonical disposable-test URL set, open `*_DATABASE_URL` environment-key
@@ -326,7 +373,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   `.git`/direct bare common directory/Git lookup failure; integration environment
   x zero/one/two/three active canonical URLs; database source x explicit/worktree/
   shared/systemd context plus process override; Docker x CLI missing/offline/
-  daemon unavailable/object absent/object present/empty successful inspect.
+  daemon unavailable/object absent/object present/empty successful inspect;
+  integration credential execution x one confirmed canonical URL plus ambient
+  generic/novel/application database credentials and an unrelated environment
+  key.
 
 ### Deployed-config probing
 
@@ -340,8 +390,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   TLS/socket parameters, each canonical disposable-test URL, a novel
   database-URL-shaped key, and fixture env paths with dotenv quoting/comments,
   escapes, and interpolation; tests also pass a credential-bearing configured
-  health URL and bounded/unbounded integration targets; safe live probes use the
-  current authenticated CLIs where available.
+  health URL, bounded/unbounded integration targets, and confirmed/unconfirmed
+  database credential canaries; safe live probes use the current authenticated
+  CLIs where available.
 - Absent value probe: doctor and status report UNKNOWN/unavailable when a CLI,
   auth context, linked project, env file, or database is absent.
 - Default-session/default-context probe: run from the dedicated worktree, where
@@ -353,9 +404,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   than argv; unit-mode database URLs are removed before pytest starts; Git
   output selects the canonical identifier before printing; env rendering
   extracts keys before any output is produced; integration target validation
-  and exact database-URL cardinality occur before pytest; Docker daemon access
-  is established before object inspection; health output selects a fixed label
-  rather than the configured URL.
+  and exact database-URL cardinality occur before the integration child
+  environment is built, and that isolated environment is passed explicitly to
+  pytest; Docker daemon access is established before object inspection; health
+  output selects a fixed label rather than the configured URL.
 
 ### Files touched
 
@@ -419,10 +471,14 @@ Parked hardening: none.
   unbounded integration targets, and the nonexistent capability command.
 - The bare common-directory resolver regression failed before implementation
   with `1 failed, 2 passed`; only the successful direct-bare member was wrong.
+- The integration credential-isolation regression failed before implementation
+  in all 3 canonical cases because pytest received no explicit child
+  environment.
 - `./ops test focused tests/test_agent_operations_contract.py -q` - 40 passed;
   the frozen pass covers integration URL counts 0/1/2/3, database selection
   across explicit/worktree/shared/systemd contexts, both shared-root path
-  shapes, and Docker CLI/offline/daemon/object states.
+  shapes, Docker CLI/offline/daemon/object states, and single-credential
+  integration subprocess isolation across all 3 canonical URL keys.
 - Direct live `ops` shared-root probe -
   `/home/juan-canfield/Desktop/Atlas` from the current linked worktree.
 - `./ops test focused tests/test_eom_render_profile.py::test_database_config_prefers_connection_string_for_asyncpg_kwargs -q` - 1 passed.
@@ -455,18 +511,18 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.agent/capabilities.yaml` | 298 |
+| `.agent/capabilities.yaml` | 300 |
 | `.agent/runbooks/ci.md` | 65 |
-| `.agent/runbooks/database.md` | 109 |
+| `.agent/runbooks/database.md` | 120 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 274 |
+| `.agent/runbooks/discovery-ledger.md` | 284 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
 | `.agent/runbooks/testing.md` | 101 |
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 879 |
-| `plans/PR-Agent-Operations-Contract.md` | 472 |
-| `tests/test_agent_operations_contract.py` | 654 |
-| **Total** | **3199** |
+| `ops` | 907 |
+| `plans/PR-Agent-Operations-Contract.md` | 528 |
+| `tests/test_agent_operations_contract.py` | 674 |
+| **Total** | **3326** |

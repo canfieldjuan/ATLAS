@@ -709,6 +709,29 @@ def unit_test_environment() -> dict[str, str]:
     return child_env
 
 
+def integration_test_environment(confirmed_key: str) -> dict[str, str]:
+    """Bind every supported DB interface to one confirmed disposable DSN."""
+    if confirmed_key not in TEST_DATABASE_URL_KEYS:
+        raise OpsError("unknown integration database credential")
+    confirmed_url = os.environ.get(confirmed_key)
+    if not confirmed_url:
+        raise OpsError("confirmed integration database credential is unavailable")
+
+    child_env = os.environ.copy()
+    for key in tuple(child_env):
+        if (
+            key == "DATABASE_URL"
+            or key.endswith("_DATABASE_URL")
+            or key in DATABASE_CONFIG_KEYS
+        ):
+            child_env.pop(key)
+    child_env[confirmed_key] = confirmed_url
+    child_env["DATABASE_URL"] = confirmed_url
+    child_env["EXTRACTED_DATABASE_URL"] = confirmed_url
+    child_env["ATLAS_DB_CONNECTION_STRING"] = confirmed_url
+    return child_env
+
+
 def validate_integration_target(root: Path, pytest_args: list[str]) -> None:
     target = pytest_args[0]
     file_target = target.partition("::")[0]
@@ -778,7 +801,12 @@ def test_command(args: list[str]) -> int:
             raise OpsError(
                 "set ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1 after verifying the DB is disposable"
             )
-        return exec_command([python, "-m", "pytest", *args[1:]], cwd=root)
+        child_env = integration_test_environment(active_database_keys[0])
+        return exec_command(
+            [python, "-m", "pytest", *args[1:]],
+            cwd=root,
+            env=child_env,
+        )
     if action == "frontend":
         if len(args) not in (2, 3):
             raise OpsError("usage: ./ops test frontend PACKAGE [SCRIPT]")

@@ -84,6 +84,14 @@ export ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1
 ./ops test integration tests/test_migrations_runner.py -q
 ```
 
+After confirmation, `./ops` constructs a database-isolated child environment.
+It removes every inherited `DATABASE_URL`/`*_DATABASE_URL` and Atlas
+application database setting, then exposes the one confirmed DSN under the
+selected canonical key, `DATABASE_URL`, `EXTRACTED_DATABASE_URL`, and
+`ATLAS_DB_CONNECTION_STRING`. These aliases contain the same credential; they
+let current test consumers use their existing interface without inheriting a
+second database. The DSN is never placed in process arguments or output.
+
 Never point those variables at the live `atlas` database. Run only a focused
 database test target and do not run concurrent DB-backed suites against the
 same disposable database; many tests create/drop or rewrite shared objects.
@@ -100,6 +108,9 @@ workflow as the canonical proof.
 - Integration admission reports multiple URLs: unset every stale canonical
   test URL except the one belonging to the focused suite; never guess which
   disposable database should win.
+- A test needs another database interface: add an explicit adapter from the
+  already confirmed DSN and focused boundary proof; do not pass the parent
+  environment through or add a second credential.
 - `schema_migrations` is absent: stop. The target is probably a fresh or wrong
   database; do not “fix” it by applying the full chain.
 - Startup logs show a migration/writer fence: follow

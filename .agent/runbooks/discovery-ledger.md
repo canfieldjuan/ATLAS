@@ -152,23 +152,33 @@ is not fresh-applicable because later files depend on out-of-band
 `product_metadata`. Database workflows create disposable PostgreSQL 16 services
 and pass test-specific URL variables. Local integration admission requires
 exactly one canonical test URL so stale credentials cannot compete for which
-destructive suite target pytest inherits.
+destructive suite target pytest inherits. Pytest receives an isolated child
+environment: ambient URL-shaped and Atlas application database settings are
+removed, and the one confirmed DSN is adapted to every supported current test
+interface.
 
 Canonical method:
 Inspect `atlas_brain/storage/migrations/__init__.py`, use
 `.agent/runbooks/database.md`, and prefer the matching GitHub Actions workflow
-unless a local disposable database is explicit.
+unless a local disposable database is explicit. Run database-backed tests only
+through `./ops test integration ...`; do not invoke pytest directly with an
+ambient database environment.
 
 Verified:
 2026-08-24: runner code, startup call path, workflow service definitions, test
 gates, and the live ledger were inspected. The focused 0/1/2/3 active-URL
 matrix admitted only one canonical variable and rejected every other
 cardinality before the pytest executor.
+2026-08-25: focused credential-isolation tests proved each canonical URL is the
+sole DSN exposed through the canonical, generic, and Atlas application
+interfaces; unconfirmed and novel database credentials do not reach argv or
+the child environment.
 
 Failure notes:
 A skipped DB test is not proof. Never apply the full chain to a fresh target as
 an exploratory action, and never leave multiple canonical integration URLs
-exported for one run.
+exported for one run. Do not bypass the isolated child environment with direct
+pytest when any database credential is present.
 
 ## Logs and CI
 
