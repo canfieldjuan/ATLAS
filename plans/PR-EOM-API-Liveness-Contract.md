@@ -62,9 +62,10 @@ Max files: 6
      service is inactive, the maintenance lock is absent, and a subsequent
      probe succeeds; settled by
      `tests/test_atlas_api_healthcheck.py::test_inactive_service_is_started_and_reprobed`.
-  2. An existing maintenance lock prevents a start attempt and leaves an
-     inactive service explicitly recorded as maintenance; settled by
-     `tests/test_atlas_api_healthcheck.py::test_maintenance_lock_never_starts_service`.
+  2. An existing maintenance lock prevents a start attempt, and the supported
+     maintenance-entry command serializes marker creation plus service stop
+     against recovery; settled by the two maintenance tests in
+     `tests/test_atlas_api_healthcheck.py`.
   3. A start that fails, or a start followed by a failed probe, remains a
      visible down result rather than a false recovery; settled by the two
      failed-recovery tests in `tests/test_atlas_api_healthcheck.py`.
@@ -74,9 +75,10 @@ Max files: 6
   5. The systemd template runs the installed copy outside the runtime worktree
    and reads notification settings from a user-local environment file;
    settled by `tests/test_atlas_api_healthcheck.py::test_service_template_uses_installed_script_and_private_environment`.
-  6. The installer copies the reviewed monitor and both unit templates, enables
-   the timer, invokes the installed health service once, and can later verify
-   those deployed artifacts without writing; settled by
+  6. The installer copies the reviewed monitor and both unit templates, proves
+     the installed health service before enabling the timer, restores prior
+     files/timer state on failure, and can later verify the deployment without
+     writing; settled by
    `tests/test_atlas_api_healthcheck.py::test_installer_deploys_source_and_invokes_enabled_timer_path`.
 - Reachability proof: On deployment, the timer invokes the installed monitor;
   `python scripts/install_atlas_api_healthcheck.py --install` copies the source,
@@ -154,8 +156,9 @@ The recovery decision is a system state boundary, not an open-input guard.
 - Default-session/default-context probe: the systemd template loads a missing
   environment file optionally for manual recovery, while the installer refuses
   to enable an alerting timer until it can preserve a private topic.
-- Side-effect ordering: decide maintenance before any start; issue a start only
-  after inactive evidence; record success only after the post-start probe.
+- Side-effect ordering: supported maintenance entry and recovery share one
+  process lock; issue a start only after inactive evidence; prove installed
+  service behavior before timer enrollment.
 
 ### Guard-closure declaration
 
@@ -169,9 +172,9 @@ The recovery decision is a system state boundary, not an open-input guard.
   an independent oracle.
 - `PENDING_ALERTS` is CLOSED and ENUMERATED by the three alert events that this
   monitor can emit (`down`, `recovered`, and `auto-recovered`). An unrecognized
-  persisted notification record is not replayed; `pending_notification()`
-  discards it and the monitor recomputes the next state from the current
-  observation, so arbitrary stored values cannot choose a notification path.
+  persisted notification/state record resets safely; recognized pending events
+  remain queued while each run still derives state from the current observation,
+  so arbitrary stored values cannot choose or suppress a notification path.
 
 ### Files touched
 
@@ -185,16 +188,16 @@ The recovery decision is a system state boundary, not an open-input guard.
 ## Mechanism
 
 The monitor is a standalone Python program installed under `~/.local/bin`,
-not loaded from the Atlas runtime worktree. It checks the maintenance lock
-before observing or starting the unit. If the service is inactive without that
-lock, it calls the existing user-systemd unit once and then runs the same
+not loaded from the Atlas runtime worktree. Its supported maintenance command
+creates the marker and stops the service under the same lock used by recovery.
+If the service is inactive without that marker, it calls the existing unit and runs the same
 lead-intake OPTIONS probe that the current monitor uses. It records and notifies
 only after the final outcome is known. The templates keep the timer independent
 of `atlas-api.service` and load the private notification topic from a local
 environment file rather than version control. The companion installer copies
 the reviewed source and templates, migrates an existing private topic without
-printing it when necessary, reloads/enables user systemd, and invokes the
-installed service once; later `--check` is read-only.
+printing it, proves the installed service before enabling the timer, and rolls
+back prior files/timer state on failure; later `--check` is read-only.
 
 ## Intentional
 
@@ -236,8 +239,8 @@ Parked hardening: none.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 243 |
-| `scripts/atlas_api_healthcheck.py` | 415 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 246 |
+| `scripts/atlas_api_healthcheck.py` | 475 |
 | `scripts/install_atlas_api_healthcheck.py` | 397 |
-| `tests/test_atlas_api_healthcheck.py` | 739 |
-| **Total** | **1822** |
+| `tests/test_atlas_api_healthcheck.py` | 814 |
+| **Total** | **1960** |

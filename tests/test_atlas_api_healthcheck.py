@@ -8,6 +8,7 @@ import os
 import string
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -235,6 +236,80 @@ def test_maintenance_lock_never_starts_service(tmp_path):
     assert result == healthcheck.EXIT_OK
     assert _start_commands(runner) == []
     assert _state(settings) == {"consecutive": 0, "status": "maintenance"}
+
+
+def test_enter_maintenance_serializes_with_an_inflight_recovery(tmp_path):
+    settings = _settings(tmp_path)
+    first_status_read = threading.Event()
+    release_status_read = threading.Event()
+    maintenance_started = threading.Event()
+
+    class CoordinatedRunner:
+        def __init__(self):
+            self.active = False
+            self.commands: list[tuple[str, ...]] = []
+
+        def __call__(self, command):
+            command = tuple(command)
+            self.commands.append(command)
+            if "is-active" in command:
+                if not first_status_read.is_set():
+                    first_status_read.set()
+                    assert release_status_read.wait(timeout=2)
+                return subprocess.CompletedProcess(command, 0 if self.active else 3, "", "")
+            if "start" in command:
+                self.active = True
+            elif "stop" in command:
+                self.active = False
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+    runner = CoordinatedRunner()
+    health_results: list[int] = []
+    maintenance_results: list[int] = []
+    health_thread = threading.Thread(
+        target=lambda: health_results.append(
+            healthcheck.run_healthcheck(
+                settings,
+                runner=runner,
+                opener=_opener(204),
+                notifier=lambda *args: True,
+                sleeper=lambda _: None,
+            )
+        )
+    )
+
+    def enter() -> None:
+        maintenance_started.set()
+        maintenance_results.append(healthcheck.enter_maintenance(settings, runner=runner))
+
+    maintenance_thread = threading.Thread(target=enter)
+    health_thread.start()
+    assert first_status_read.wait(timeout=1)
+    maintenance_thread.start()
+    assert maintenance_started.wait(timeout=1)
+    assert not settings.maintenance_lock.exists()
+    release_status_read.set()
+    health_thread.join(timeout=2)
+    maintenance_thread.join(timeout=2)
+
+    assert not health_thread.is_alive()
+    assert not maintenance_thread.is_alive()
+    assert health_results == [healthcheck.EXIT_RECOVERED]
+    assert maintenance_results == [healthcheck.EXIT_OK]
+    assert settings.maintenance_lock.exists()
+    assert not runner.active
+    assert runner.commands.index(("systemctl", "--user", "start", settings.service)) < runner.commands.index(
+        ("systemctl", "--user", "stop", settings.service)
+    )
+
+
+def test_exit_maintenance_removes_marker_under_monitor_lock(tmp_path):
+    settings = _settings(tmp_path)
+    settings.maintenance_lock.parent.mkdir(parents=True, exist_ok=True)
+    settings.maintenance_lock.touch()
+
+    assert healthcheck.exit_maintenance(settings) == healthcheck.EXIT_OK
+    assert not settings.maintenance_lock.exists()
 
 
 def test_failed_start_remains_a_visible_down_result(tmp_path):

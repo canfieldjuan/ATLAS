@@ -16,10 +16,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Iterator, Sequence, TextIO
 
 
 EXIT_OK = 0
@@ -79,8 +80,58 @@ def command_failure_detail(result: subprocess.CompletedProcess[str]) -> str:
     return f"exit {result.returncode}: {text or 'no diagnostic output'}"
 
 
+@contextmanager
+def serialized_monitor_state(settings: Settings) -> Iterator[TextIO]:
+    """Serialize health cycles and supported maintenance transitions."""
+    lock_path = settings.state_dir / "state.lock"
+    try:
+        settings.state_dir.mkdir(parents=True, exist_ok=True)
+        lock_handle = lock_path.open("w", encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to open Atlas API health lock at {lock_path}") from exc
+    with lock_handle as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+        except OSError as exc:
+            raise RuntimeError(f"unable to acquire Atlas API health lock at {lock_path}") from exc
+        yield lock
+
+
 def service_is_active(service: str, runner: Runner) -> bool:
     return runner(("systemctl", "--user", "is-active", "--quiet", service)).returncode == 0
+
+
+def enter_maintenance(settings: Settings, *, runner: Runner = _run) -> int:
+    """Create the maintenance marker and stop the service under the monitor lock."""
+    with serialized_monitor_state(settings):
+        try:
+            settings.maintenance_lock.parent.mkdir(parents=True, exist_ok=True)
+            settings.maintenance_lock.touch(mode=0o600, exist_ok=True)
+            settings.maintenance_lock.chmod(0o600)
+        except OSError as exc:
+            raise RuntimeError(
+                f"unable to create Atlas API maintenance lock at {settings.maintenance_lock}"
+            ) from exc
+        stopped = runner(("systemctl", "--user", "stop", settings.service))
+        if stopped.returncode != 0:
+            raise RuntimeError(
+                f"failed to stop {settings.service} for maintenance ({command_failure_detail(stopped)})"
+            )
+    print(f"MAINTENANCE: stopped {settings.service}; lock present at {settings.maintenance_lock}")
+    return EXIT_OK
+
+
+def exit_maintenance(settings: Settings) -> int:
+    """Remove the maintenance marker under the same lock used by recovery."""
+    with serialized_monitor_state(settings):
+        try:
+            settings.maintenance_lock.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"unable to remove Atlas API maintenance lock at {settings.maintenance_lock}"
+            ) from exc
+    print(f"MAINTENANCE CLEARED: {settings.maintenance_lock}")
+    return EXIT_OK
 
 
 def probe_lead_intake(probe_url: str, opener: Opener) -> tuple[bool, str]:
@@ -330,15 +381,8 @@ def run_healthcheck(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
     """Run one serialized observation/recovery/notification cycle."""
-    settings.state_dir.mkdir(parents=True, exist_ok=True)
     state_path = settings.state_dir / "state.json"
-    lock_path = settings.state_dir / "state.lock"
-    try:
-        lock_handle = lock_path.open("w", encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"unable to open Atlas API health lock at {lock_path}") from exc
-    with lock_handle as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with serialized_monitor_state(settings):
         observation = observe(settings, runner, opener, sleeper)
         previous = read_state(state_path)
         next_state, alert, exit_code = decide_alert(previous, observation, settings.realert_every)
@@ -372,8 +416,11 @@ def run_healthcheck(
         return exit_code
 
 
-def _settings_from_args(argv: Sequence[str] | None) -> Settings:
+def _settings_from_args(argv: Sequence[str] | None) -> tuple[Settings, str]:
     parser = argparse.ArgumentParser(description=__doc__)
+    action = parser.add_mutually_exclusive_group()
+    action.add_argument("--enter-maintenance", action="store_true")
+    action.add_argument("--exit-maintenance", action="store_true")
     parser.add_argument("--service", default=os.environ.get("ATLAS_API_HEALTHCHECK_SERVICE", DEFAULT_SERVICE))
     parser.add_argument("--probe-url", default=os.environ.get("ATLAS_API_HEALTHCHECK_PROBE_URL", DEFAULT_PROBE_URL))
     parser.add_argument("--ntfy-url", default=os.environ.get("ATLAS_API_HEALTHCHECK_NTFY_URL", DEFAULT_NTFY_URL))
@@ -393,7 +440,7 @@ def _settings_from_args(argv: Sequence[str] | None) -> Settings:
         raise ValueError("recovery-attempts must be at least one")
     if args.recovery_interval_seconds < 0:
         raise ValueError("recovery-interval-seconds must not be negative")
-    return Settings(
+    settings = Settings(
         service=args.service,
         probe_url=args.probe_url,
         ntfy_url=args.ntfy_url,
@@ -405,10 +452,23 @@ def _settings_from_args(argv: Sequence[str] | None) -> Settings:
         recovery_interval_seconds=args.recovery_interval_seconds,
         no_alert=args.no_alert,
     )
+    selected_action = (
+        "enter-maintenance"
+        if args.enter_maintenance
+        else "exit-maintenance"
+        if args.exit_maintenance
+        else "healthcheck"
+    )
+    return settings, selected_action
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    return run_healthcheck(_settings_from_args(argv))
+    settings, action = _settings_from_args(argv)
+    if action == "enter-maintenance":
+        return enter_maintenance(settings)
+    if action == "exit-maintenance":
+        return exit_maintenance(settings)
+    return run_healthcheck(settings)
 
 
 if __name__ == "__main__":
