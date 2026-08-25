@@ -38,6 +38,13 @@ cannot be safely exercised or a route without the durable invariants it claims.
   label and enabled state without proving their table/function implementation
   was outside the runtime owner. Migration 351 creates that function under the
   runtime, while migration 354 protects only the canonical-handoff boundary.
+- Review root cause: the two receipt-admission trigger functions resolve their
+  permanent source evidence through a caller-controlled PostgreSQL search path;
+  a runtime temporary table can shadow an unqualified relation and fabricate a
+  matching handoff/lifecycle row.
+- Review root cause: migration 394 and request-time readiness accepted an
+  elevated `atlas` login, so a superuser or role administrator could bypass
+  every guarded ACL/trigger even while readiness reported the schema healthy.
 
 ## Scope (this PR)
 
@@ -71,13 +78,15 @@ Max files: 10
     customer fails closed instead of rewriting the receipt; tests prove the
     original receipt remains unchanged.
   - Migration `394_eom_first_clean_completion_receipts` requires a PostgreSQL
-    superuser, creates the foreign-keyed receipt tables as a trusted no-login
-    guard owner, revokes direct runtime/NocoDB guard membership, rejects an
-    inherited guard path, preserves the guard owner's foreign-key check access,
-    moves the lifecycle append-only table/function boundary to that same guard,
+    superuser and an explicitly unprivileged Atlas login, creates the
+    foreign-keyed receipt tables as a trusted no-login guard owner, revokes
+    direct runtime/NocoDB guard membership, rejects an inherited guard path,
+    preserves the guard owner's foreign-key check access, moves the lifecycle
+    append-only table/function boundary to that same guard, pins both
+    evidence-reading trigger functions to the guarded schema before `pg_temp`,
     and grants the Atlas runtime only the table access actual writers need;
-    database tests prove that owner/ACL state and that a non-superuser executor
-    is rejected before DDL.
+    database tests prove that owner/ACL state, the pinned path, elevated-runtime
+    rejection, and a non-superuser executor are rejected before DDL.
   - The service requires the guarded receipt schema and prerequisite
     handoff/lifecycle integrity triggers before serving; route tests prove a
     missing, owner-mismatched, disabled, or append-only trigger becomes a safe
@@ -86,8 +95,9 @@ Max files: 10
   - The capability name is mechanically derived from the registered route;
     capability-manifest tests prove Atlas never advertises an absent route.
   - The existing PostgreSQL-backed EOM lead-pipeline workflow explicitly runs
-    the persistence and DBA-runner tests, rather than treating local skipped
-    database cases as proof.
+    the persistence and DBA-runner tests against a dedicated synthetic
+    DBA/runtime split, rather than treating either a bootstrap-superuser runtime
+    or local skipped database cases as proof.
 - Reachability proof: the next tracker slice will call the authenticated funnel
   route after a manager explicitly confirms a completed first service. This PR
   proves the route reaches the receipt table, lifecycle ledger, and JSON
@@ -176,6 +186,39 @@ Max files: 10
 - Parked hardening: no new migration number or runtime API is required because
   migration 394 is still the un-deployed controlled DBA boundary.
 
+### Current P1 review disposition preflight
+
+- Root decision: make immutable receipt evidence independent of the runtime
+  connection's temporary objects and reject any elevated or re-assumed runtime
+  before it can bypass the guard boundary.
+- Source trace: unqualified receipt-trigger reads -> PostgreSQL implicit
+  temporary-schema precedence -> fabricated source rows satisfy the permanent
+  receipt trigger; separately, migration/readiness check only `rolcanlogin` ->
+  a superuser/role administrator retains DDL and ACL bypass authority.
+- Upstream files: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`,
+  `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
+  `atlas_brain/services/eom_first_clean_completion.py`,
+  `tests/test_eom_first_clean_completion.py`, and this plan.
+- Fix strategy: upstream-root. The trigger functions receive an exact guarded
+  schema path with `pg_temp` explicitly last; readiness reattests those function
+  settings, guard owners, trigger OIDs, and the direct nonprivileged runtime
+  session. Migration 394 rejects an elevated target runtime before it creates
+  or normalizes any guard role/object. The workflow adds one isolated synthetic
+  DBA/runtime database so the proof does not reconfigure the shared
+  lead-pipeline test role.
+- Blocking predicate: security/data integrity.
+- Disposition: fix in this PR.
+- Allowed files: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`,
+  `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
+  `atlas_brain/services/eom_first_clean_completion.py`,
+  `tests/test_eom_first_clean_completion.py`,
+  `plans/PR-First-Clean-Completion-Receipt.md`, and
+  `SESSION_STATE.codex-eom-first-clean-completion.local.md`.
+- Max files: 10. No new runtime API, migration number, customer workflow, or
+  shared-pipeline database behavior is introduced.
+- Parked hardening: none; the new isolated service is required to prove the
+  production role separation rather than emulate it with a test-only bypass.
+
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
@@ -216,10 +259,14 @@ trigger functions to `atlas_eom_handoff_owner`. It first requires migration
 runtime/NocoDB guard membership, rejects inherited membership, preserves the
 guard owner's operation-table access needed by PostgreSQL foreign-key checks,
 and transfers the lifecycle append-only table and mutation function to that
-guard. Atlas retains only the lifecycle reads/inserts required by existing
+guard. The target `atlas` login must be a direct nonprivileged runtime, and the
+two receipt-admission functions pin their guarded schema first with `pg_temp`
+explicitly last, so a caller's temporary relation cannot shadow canonical
+evidence. Atlas retains only the lifecycle reads/inserts required by existing
 writers; the earlier lifecycle ordering sequence remains outside this slice.
-Readiness attests both the exact trusted owner ACL and the runtime's limited ACL
-plus the lifecycle trigger binding. The route refuses to serve if receipt
+Readiness attests the trusted owner ACL, all receipt/lifecycle trigger-to-
+function bindings, the admission-function path configuration, and the direct
+runtime session/role attributes. The route refuses to serve if receipt
 ownership/ACLs/triggers or the
 prerequisite handoff ownership/functions/triggers and lifecycle integrity
 triggers are not exactly ready, so deploying code before the DBA apply is safe.
@@ -268,12 +315,13 @@ an automatic completion source and is intentionally left outside this slice.
   - Command: ruff check atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py
   - Command: `python -m py_compile atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py`
   - Command: `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py`
-    (`15 passed, 27 skipped`; the skipped cases require the deliberately absent
-    `ATLAS_MIGRATION_TEST_DATABASE_URL`).
-  - Isolated PostgreSQL probe: the focused completion/DBA suite passed
-    (`42 passed`) against a disposable local PostgreSQL 16 container. It covers
-    the lifecycle table/function owner, trigger-to-function binding, narrow
-    runtime lifecycle ACL, foreign-key ACL recovery, and real receipt write.
+    against a disposable PostgreSQL 16 DBA/runtime split (`54 passed`).
+  - Boundary probes: an unqualified trigger accepted a fabricated temporary
+    handoff/lifecycle source before the repair; the pinned-path regression now
+    rejects that same permanent-receipt attempt. Separate parameterized checks
+    reject `SUPERUSER`, `CREATEROLE`, `CREATEDB`, `REPLICATION`, and
+    `BYPASSRLS` both before migration and at serving readiness, and reject a
+    DBA session that merely assumes the Atlas role.
   - Command: `python scripts/sync_pr_plan.py plans/PR-First-Clean-Completion-Receipt.md origin/main`
   - Command: `python scripts/audit_plan_doc.py plans/PR-First-Clean-Completion-Receipt.md`
   - Command: `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-First-Clean-Completion-Receipt.md`
@@ -283,22 +331,22 @@ an automatic completion source and is intentionally left outside this slice.
   files before module imports; this slice leaves that bootstrap ordering intact.
 - GitHub run `32798333370` exposed the prior ACL failure: ten focused receipt
   cases failed because the FK key-share check could not read the operation
-  table. GitHub owns the authoritative EOM lead-pipeline rerun after this
-  repair. No local test contacted Resend, Stripe, Google Calendar, or a real
-  customer.
+  table. Its later current-head rerun passed. The next hosted rerun must prove
+  the isolated DBA/runtime topology. No local test contacted Resend, Stripe,
+  Google Calendar, or a real customer.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 12 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 58 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 942 |
-| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 446 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 990 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 477 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 85 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 304 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 352 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
-| `tests/test_eom_first_clean_completion.py` | 1708 |
+| `tests/test_eom_first_clean_completion.py` | 2038 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **3948** |
+| **Total** | **4451** |

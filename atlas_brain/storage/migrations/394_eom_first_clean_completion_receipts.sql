@@ -34,6 +34,26 @@ BEGIN
             'database administrator must run 394_eom_first_clean_completion_receipts';
     END IF;
 
+    -- Refuse an elevated runtime before this migration creates or changes any
+    -- protected role/object. A later guard-owner ACL cannot constrain a login
+    -- that can bypass or administer PostgreSQL privileges itself.
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_roles AS runtime_role
+         WHERE runtime_role.rolname = 'atlas'
+           AND runtime_role.rolcanlogin
+           AND NOT runtime_role.rolsuper
+           AND NOT runtime_role.rolcreaterole
+           AND NOT runtime_role.rolcreatedb
+           AND NOT runtime_role.rolreplication
+           AND NOT runtime_role.rolbypassrls
+    )
+      INTO runtime_role_ready;
+    IF NOT runtime_role_ready THEN
+        RAISE EXCEPTION
+            'atlas must be an unprivileged login runtime role before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1 FROM pg_roles WHERE rolname = 'atlas_eom_handoff_owner'
     ) THEN
@@ -56,18 +76,6 @@ BEGIN
     IF NOT guard_is_trusted THEN
         RAISE EXCEPTION
             'atlas_eom_handoff_owner must be a no-login, membership-isolated guard role before running 394_eom_first_clean_completion_receipts';
-    END IF;
-
-    SELECT EXISTS (
-        SELECT 1
-          FROM pg_roles AS runtime_role
-         WHERE runtime_role.rolname = 'atlas'
-           AND runtime_role.rolcanlogin
-    )
-      INTO runtime_role_ready;
-    IF NOT runtime_role_ready THEN
-        RAISE EXCEPTION
-            'atlas must be a login runtime role before running 394_eom_first_clean_completion_receipts';
     END IF;
 
     IF to_regclass(format('%I.contacts', schema_name)) IS NULL
@@ -363,6 +371,29 @@ CREATE TRIGGER trg_require_eom_first_clean_completion_receipt
     BEFORE INSERT OR UPDATE ON eom_first_clean_completion_receipts
     FOR EACH ROW
     EXECUTE FUNCTION require_eom_first_clean_completion_receipt();
+
+DO $$
+DECLARE
+    schema_name TEXT := current_schema();
+BEGIN
+    -- PostgreSQL prepends a caller's temporary schema unless pg_temp is named
+    -- explicitly. These invoker trigger functions validate permanent evidence,
+    -- so pin the target schema first and pg_temp last rather than trusting a
+    -- runtime connection's mutable search_path.
+    EXECUTE format(
+        'ALTER FUNCTION %I.require_eom_first_clean_completion_operation_scope() '
+        || 'SET search_path TO %I, pg_catalog, pg_temp',
+        schema_name,
+        schema_name
+    );
+    EXECUTE format(
+        'ALTER FUNCTION %I.require_eom_first_clean_completion_receipt() '
+        || 'SET search_path TO %I, pg_catalog, pg_temp',
+        schema_name,
+        schema_name
+    );
+END;
+$$;
 
 DO $$
 DECLARE

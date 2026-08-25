@@ -244,8 +244,23 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      first-clean-postgres:
+        image: postgres:16@sha256:081f1bc7bd5e143dbb6e487b710bbc27712cdcfaced4c071b8e47349aa1b4171
+        env:
+          POSTGRES_USER: atlas_eom_test_dba
+          POSTGRES_PASSWORD: atlas-eom-test-dba
+          POSTGRES_DB: atlas_eom_first_clean_tests
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U atlas_eom_test_dba -d atlas_eom_first_clean_tests"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       ATLAS_MIGRATION_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5432/atlas_migration_tests
+      ATLAS_EOM_FIRST_CLEAN_TEST_DATABASE_URL: postgresql://atlas:atlas@localhost:5433/atlas_eom_first_clean_tests
+      ATLAS_EOM_FIRST_CLEAN_DBA_DATABASE_URL: postgresql://atlas_eom_test_dba:atlas-eom-test-dba@localhost:5433/atlas_eom_first_clean_tests
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -261,6 +276,37 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           python -m pip install pytest pytest-asyncio
+
+      - name: Provision isolated first-clean runtime role
+        env:
+          FIRST_CLEAN_TEST_DBA_DATABASE_URL: postgresql://atlas_eom_test_dba:atlas-eom-test-dba@localhost:5433/atlas_eom_first_clean_tests
+        run: |
+          python - <<'PY'
+          import asyncio
+          import os
+
+          import asyncpg
+
+
+          async def main() -> None:
+              connection = await asyncpg.connect(
+                  os.environ["FIRST_CLEAN_TEST_DBA_DATABASE_URL"]
+              )
+              try:
+                  await connection.execute(
+                      "CREATE ROLE atlas LOGIN PASSWORD 'atlas' NOINHERIT "
+                      "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION "
+                      "NOBYPASSRLS"
+                  )
+                  await connection.execute(
+                      "GRANT CREATE ON DATABASE atlas_eom_first_clean_tests TO atlas"
+                  )
+              finally:
+                  await connection.close()
+
+
+          asyncio.run(main())
+          PY
 
       - name: Run EOM lead pipeline checks
         run: |

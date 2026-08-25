@@ -34,7 +34,8 @@ from atlas_brain.services.eom_first_clean_completion import (  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ROOT / "atlas_brain" / "storage" / "migrations"
-DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
+DATABASE_URL_ENV = "ATLAS_EOM_FIRST_CLEAN_TEST_DATABASE_URL"
+DBA_DATABASE_URL_ENV = "ATLAS_EOM_FIRST_CLEAN_DBA_DATABASE_URL"
 _NOW = datetime(2026, 8, 24, 20, 0, tzinfo=timezone.utc)
 _EOM_CONTEXT = "effingham_maids"
 _TRACKER_IDS = count(10_000)
@@ -64,6 +65,15 @@ _LIFECYCLE_GUARD_TRIGGERS = (
     "trg_prevent_eom_lead_lifecycle_event_mutation",
     "trg_prevent_eom_lead_lifecycle_event_truncate",
 )
+_RECEIPT_GUARD_FUNCTIONS = (
+    "prevent_eom_first_clean_completion_mutation",
+    "require_eom_first_clean_completion_operation_scope",
+    "require_eom_first_clean_completion_receipt",
+)
+_RECEIPT_ADMISSION_FUNCTIONS = (
+    "require_eom_first_clean_completion_operation_scope",
+    "require_eom_first_clean_completion_receipt",
+)
 _ACTOR_ID_LENGTH_BOUNDARIES = (
     1,
     10,
@@ -80,22 +90,34 @@ class _ConnectionPool:
 
     is_initialized = True
 
-    def __init__(self, connection: Any) -> None:
-        self._connection = connection
+    def __init__(
+        self, runtime_connection: Any, dba_connection: Any | None = None
+    ) -> None:
+        self._runtime_connection = runtime_connection
+        # Direct fixture setup and deliberate catalog corruption need a DBA;
+        # service calls below always execute as the unprivileged atlas runtime.
+        self._connection = dba_connection or runtime_connection
 
     @asynccontextmanager
     async def transaction(self):
-        async with self._connection.transaction():
-            yield self._connection
+        async with self._runtime_connection.transaction():
+            yield self._runtime_connection
 
     async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
-        return await self._connection.fetchval(*args, **kwargs)
+        return await self._runtime_connection.fetchval(*args, **kwargs)
 
 
 def _database_url_or_skip() -> str:
     database_url = os.environ.get(DATABASE_URL_ENV)
     if not database_url:
         pytest.skip(f"{DATABASE_URL_ENV} is not configured")
+    return database_url
+
+
+def _dba_database_url_or_skip() -> str:
+    database_url = os.environ.get(DBA_DATABASE_URL_ENV)
+    if not database_url:
+        pytest.skip(f"{DBA_DATABASE_URL_ENV} is not configured")
     return database_url
 
 
@@ -127,6 +149,32 @@ async def _provision_nocodb_login(connection: Any) -> None:
     )
 
 
+async def _provision_guard_role(connection: Any) -> None:
+    """Supply the isolated guard-owner prerequisite from the test DBA."""
+
+    await connection.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM pg_roles
+                WHERE rolname = 'atlas_eom_handoff_owner'
+            ) THEN
+                ALTER ROLE atlas_eom_handoff_owner
+                    NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+                    NOREPLICATION NOBYPASSRLS;
+            ELSE
+                CREATE ROLE atlas_eom_handoff_owner
+                    NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+                    NOREPLICATION NOBYPASSRLS;
+            END IF;
+        END;
+        $$;
+        """
+    )
+
+
 async def _grant_completion_runtime_dml_as_guard(connection: Any) -> None:
     """Restore the guarded tables' durable runtime grants without ownership."""
 
@@ -148,38 +196,67 @@ async def _grant_completion_runtime_dml_as_guard(connection: Any) -> None:
 
 
 async def _apply_schema(
-    connection: Any,
+    runtime_connection: Any,
+    dba_connection: Any,
     schema: str,
     *,
     migrations: tuple[str, ...] = _COMPLETION_SCHEMA_MIGRATIONS,
 ) -> None:
-    await connection.execute(f'CREATE SCHEMA "{schema}"')
-    await connection.execute(f'SET search_path TO "{schema}", public')
+    await runtime_connection.execute(f'CREATE SCHEMA "{schema}"')
+    await runtime_connection.execute(f'SET search_path TO "{schema}", public')
+    await dba_connection.execute(f'SET search_path TO "{schema}", public')
     # Migration 035 remains additive to the production appointments relation;
     # the focused empty schema supplies that dependency explicitly.
-    await connection.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
+    await runtime_connection.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
     # The completion schema is DBA-only because it references and protects the
     # guard-owned handoff table. Keep this disposable proof limited to its
     # actual canonical prerequisites rather than a developer's broader schema.
-    await _provision_nocodb_login(connection)
-    for migration in migrations:
-        await connection.execute((MIGRATIONS / f"{migration}.sql").read_text())
+    await _provision_nocodb_login(dba_connection)
+    await _provision_guard_role(dba_connection)
+    await dba_connection.execute(
+        "GRANT atlas_eom_handoff_owner TO atlas WITH ADMIN OPTION"
+    )
+    try:
+        for migration in migrations:
+            migration_sql = (MIGRATIONS / f"{migration}.sql").read_text()
+            if migration == "394_eom_first_clean_completion_receipts":
+                # Migration 354 needs this temporary membership to transfer its
+                # protected objects; production removes it before the DBA-only
+                # completion migration records its final guard boundary.
+                await dba_connection.execute(
+                    "REVOKE atlas_eom_handoff_owner FROM atlas"
+                )
+                await dba_connection.execute(migration_sql)
+            else:
+                await runtime_connection.execute(migration_sql)
+    finally:
+        await dba_connection.execute("REVOKE atlas_eom_handoff_owner FROM atlas")
 
 
 @asynccontextmanager
-async def _test_store():
+async def _test_store(
+    *,
+    migrations: tuple[str, ...] = _COMPLETION_SCHEMA_MIGRATIONS,
+):
     database_url = _database_url_or_skip()
+    dba_database_url = _dba_database_url_or_skip()
     schema = f"atlas_eom_first_clean_{uuid4().hex}"
-    connection = await asyncpg.connect(database_url)
+    runtime_connection = await asyncpg.connect(database_url)
+    dba_connection = await asyncpg.connect(dba_database_url)
     try:
-        await _apply_schema(connection, schema)
-        yield _ConnectionPool(connection), schema
+        await _apply_schema(
+            runtime_connection,
+            dba_connection,
+            schema,
+            migrations=migrations,
+        )
+        yield _ConnectionPool(runtime_connection, dba_connection), schema
     finally:
         try:
-            await connection.execute("RESET search_path")
-            await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            await dba_connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         finally:
-            await connection.close()
+            await dba_connection.close()
+            await runtime_connection.close()
 
 
 async def _schema_connection(database_url: str, schema: str) -> _ConnectionPool:
@@ -189,7 +266,7 @@ async def _schema_connection(database_url: str, schema: str) -> _ConnectionPool:
 
 
 async def _close_schema_connection(pool: _ConnectionPool) -> None:
-    await pool._connection.close()
+    await pool._runtime_connection.close()
 
 
 def _quote_ident(value: str) -> str:
@@ -622,41 +699,305 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
 
 
 @pytest.mark.asyncio
+async def test_receipt_trigger_rejects_temp_relation_shadowing() -> None:
+    """Runtime TEMP objects cannot fabricate guarded handoff/lifecycle evidence."""
+
+    async with _test_store() as (pool, _schema):
+        contact_id, customer_id, site_id = await _insert_customer(pool)
+        assert customer_id is not None and site_id is not None
+        handoff_id = await pool._connection.fetchval(
+            "SELECT id FROM eom_customer_handoffs WHERE contact_id = $1",
+            contact_id,
+        )
+        assert handoff_id is not None
+        runtime_connection = pool._runtime_connection
+        operation_key = _operation_key("temp-shadow")
+        fingerprint = "c" * 64
+        completed_at = _NOW - timedelta(hours=1)
+        await runtime_connection.execute(
+            """
+            INSERT INTO eom_first_clean_completion_operation_receipts (
+                operation_key, contact_id, request_fingerprint
+            ) VALUES ($1, $2, $3)
+            """,
+            operation_key,
+            contact_id,
+            fingerprint,
+        )
+
+        fake_customer_id = next(_TRACKER_IDS)
+        fake_site_id = next(_TRACKER_IDS)
+        receipt_id = uuid4()
+        await runtime_connection.execute(
+            """
+            CREATE TEMP TABLE contacts (
+                id UUID,
+                business_context_id TEXT,
+                contact_type TEXT,
+                status TEXT,
+                customer_type TEXT
+            );
+            CREATE TEMP TABLE eom_customer_handoffs (
+                id UUID,
+                contact_id UUID,
+                tracker_customer_id BIGINT,
+                tracker_site_id BIGINT
+            );
+            CREATE TEMP TABLE eom_first_clean_completion_operation_receipts (
+                operation_key VARCHAR(128),
+                contact_id UUID,
+                request_fingerprint VARCHAR(64)
+            );
+            CREATE TEMP TABLE eom_lead_lifecycle_events (
+                contact_id UUID,
+                event_type VARCHAR(64),
+                actor VARCHAR(128),
+                source VARCHAR(32),
+                operation_key VARCHAR(128),
+                metadata JSONB,
+                occurred_at TIMESTAMPTZ
+            )
+            """
+        )
+        await runtime_connection.execute(
+            """
+            INSERT INTO contacts VALUES (
+                $1, 'effingham_maids', 'customer', 'active', 'residential'
+            )
+            """,
+            contact_id,
+        )
+        await runtime_connection.execute(
+            """
+            INSERT INTO eom_customer_handoffs VALUES ($1, $2, $3, $4)
+            """,
+            handoff_id,
+            contact_id,
+            fake_customer_id,
+            fake_site_id,
+        )
+        await runtime_connection.execute(
+            """
+            INSERT INTO eom_first_clean_completion_operation_receipts
+                VALUES ($1, $2, $3)
+            """,
+            operation_key,
+            contact_id,
+            fingerprint,
+        )
+        await runtime_connection.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events VALUES (
+                $1, 'first_clean_completed', 'employee:7:Juan', 'time_tracker',
+                $2,
+                jsonb_build_object(
+                    'completion_receipt_id', $3::text,
+                    'handoff_id', $4::text,
+                    'tracker_customer_id', $5::bigint,
+                    'tracker_site_id', $6::bigint,
+                    'tracker_service_kind', 'job',
+                    'tracker_service_id', 9001::bigint
+                ),
+                $7
+            )
+            """,
+            contact_id,
+            operation_key,
+            str(receipt_id),
+            str(handoff_id),
+            fake_customer_id,
+            fake_site_id,
+            completed_at,
+        )
+
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="matching active residential customer handoff",
+        ):
+            await runtime_connection.execute(
+                """
+                INSERT INTO eom_first_clean_completion_receipts (
+                    id, contact_id, handoff_id, tracker_customer_id,
+                    tracker_site_id, tracker_service_kind, tracker_service_id,
+                    completed_at, operation_key, request_fingerprint, actor_id,
+                    actor_name
+                ) VALUES (
+                    $1, $2, $3, $4, $5, 'job', 9001, $6, $7, $8, 7, 'Juan'
+                )
+                """,
+                receipt_id,
+                contact_id,
+                handoff_id,
+                fake_customer_id,
+                fake_site_id,
+                completed_at,
+                operation_key,
+                fingerprint,
+            )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("privileged_option", "unprivileged_option"),
+    (
+        ("SUPERUSER", "NOSUPERUSER"),
+        ("CREATEROLE", "NOCREATEROLE"),
+        ("CREATEDB", "NOCREATEDB"),
+        ("REPLICATION", "NOREPLICATION"),
+        ("BYPASSRLS", "NOBYPASSRLS"),
+    ),
+)
+async def test_schema_readiness_rejects_privileged_or_reassumed_runtime(
+    privileged_option: str,
+    unprivileged_option: str,
+) -> None:
+    """Readiness must attest both the atlas role and its actual pool session."""
+
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        try:
+            await pool._connection.execute(f"ALTER ROLE atlas {privileged_option}")
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(f"ALTER ROLE atlas {unprivileged_option}")
+        assert await first_clean_completion_schema_ready(pool) is True
+        assert (
+            await first_clean_completion_schema_ready(_ConnectionPool(pool._connection))
+            is False
+        )
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_reattests_receipt_guard_owners_and_paths() -> None:
+    """A runtime cannot retain a stale ready state after guard drift."""
+
+    async with _test_store() as (pool, schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        for function_name in _RECEIPT_GUARD_FUNCTIONS:
+            function_ident = _quote_ident(function_name)
+            try:
+                await pool._connection.execute(
+                    f"ALTER FUNCTION {function_ident}() OWNER TO atlas"
+                )
+                assert await first_clean_completion_schema_ready(pool) is False
+            finally:
+                await pool._connection.execute(
+                    "ALTER FUNCTION "
+                    f"{function_ident}() OWNER TO atlas_eom_handoff_owner"
+                )
+            assert await first_clean_completion_schema_ready(pool) is True
+
+        schema_ident = _quote_ident(schema)
+        for function_name in _RECEIPT_ADMISSION_FUNCTIONS:
+            function_ident = _quote_ident(function_name)
+            try:
+                await pool._connection.execute(
+                    f"ALTER FUNCTION {function_ident}() RESET search_path"
+                )
+                assert await first_clean_completion_schema_ready(pool) is False
+            finally:
+                await pool._connection.execute(
+                    f"ALTER FUNCTION {function_ident}() "
+                    f"SET search_path TO {schema_ident}, pg_catalog, pg_temp"
+                )
+            assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("privileged_option", "unprivileged_option"),
+    (
+        ("SUPERUSER", "NOSUPERUSER"),
+        ("CREATEROLE", "NOCREATEROLE"),
+        ("CREATEDB", "NOCREATEDB"),
+        ("REPLICATION", "NOREPLICATION"),
+        ("BYPASSRLS", "NOBYPASSRLS"),
+    ),
+)
+async def test_completion_migration_rejects_privileged_atlas_runtime(
+    privileged_option: str,
+    unprivileged_option: str,
+) -> None:
+    """The DBA-only migration refuses to bless an elevated runtime login."""
+
+    async with _test_store(
+        migrations=tuple(
+            migration
+            for migration in _COMPLETION_SCHEMA_MIGRATIONS
+            if migration != "394_eom_first_clean_completion_receipts"
+        )
+    ) as (pool, _schema):
+        try:
+            await pool._connection.execute(f"ALTER ROLE atlas {privileged_option}")
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="atlas must be an unprivileged login runtime role",
+            ):
+                await pool._connection.execute(
+                    (
+                        MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+                    ).read_text()
+                )
+        finally:
+            await pool._connection.execute(f"ALTER ROLE atlas {unprivileged_option}")
+
+
+@pytest.mark.asyncio
+async def test_completion_migration_rejects_elevated_runtime_before_guard_ddl() -> None:
+    """A rejected runtime cannot silently normalize the protected guard role."""
+
+    async with _test_store(
+        migrations=tuple(
+            migration
+            for migration in _COMPLETION_SCHEMA_MIGRATIONS
+            if migration != "394_eom_first_clean_completion_receipts"
+        )
+    ) as (pool, _schema):
+        try:
+            await pool._connection.execute("ALTER ROLE atlas_eom_handoff_owner LOGIN")
+            await pool._connection.execute("ALTER ROLE atlas SUPERUSER")
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="atlas must be an unprivileged login runtime role",
+            ):
+                await pool._connection.execute(
+                    (
+                        MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+                    ).read_text()
+                )
+            assert await pool._connection.fetchval(
+                "SELECT rolcanlogin FROM pg_roles "
+                "WHERE rolname = 'atlas_eom_handoff_owner'"
+            )
+        finally:
+            await pool._connection.execute("ALTER ROLE atlas NOSUPERUSER")
+            await pool._connection.execute("ALTER ROLE atlas_eom_handoff_owner NOLOGIN")
+
+
+@pytest.mark.asyncio
 async def test_completion_migration_requires_guard_owned_handoff_prerequisites() -> (
     None
 ):
-    database_url = _database_url_or_skip()
-    schema = f"atlas_eom_first_clean_unguarded_{uuid4().hex}"
-    connection = await asyncpg.connect(database_url)
-    try:
-        await _apply_schema(
-            connection,
-            schema,
-            migrations=tuple(
-                migration
-                for migration in _COMPLETION_SCHEMA_MIGRATIONS
-                if migration
-                not in {
-                    "354_eom_customer_handoff_privileges",
-                    "394_eom_first_clean_completion_receipts",
-                }
-            ),
+    async with _test_store(
+        migrations=tuple(
+            migration
+            for migration in _COMPLETION_SCHEMA_MIGRATIONS
+            if migration
+            not in {
+                "354_eom_customer_handoff_privileges",
+                "394_eom_first_clean_completion_receipts",
+            }
         )
+    ) as (pool, _schema):
         with pytest.raises(
             asyncpg.RaiseError,
             match=(
                 "eom_customer_handoffs and its protected functions must be guard-owned"
             ),
         ):
-            await connection.execute(
+            await pool._connection.execute(
                 (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
             )
-    finally:
-        try:
-            await connection.execute("RESET search_path")
-            await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-        finally:
-            await connection.close()
 
 
 @pytest.mark.asyncio
@@ -667,7 +1008,7 @@ async def test_schema_readiness_rejects_indirect_runtime_guard_membership() -> N
         role_ident = _quote_ident(role_name)
         role_created = False
         try:
-            can_administer_roles = await pool.fetchval(
+            can_administer_roles = await pool._connection.fetchval(
                 """
                 SELECT rolsuper OR rolcreaterole
                 FROM pg_roles
@@ -883,7 +1224,7 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
         role_ident = _quote_ident(role_name)
         role_created = False
         try:
-            can_administer_roles = await pool.fetchval(
+            can_administer_roles = await pool._connection.fetchval(
                 """
                 SELECT rolsuper OR rolcreaterole
                 FROM pg_roles
@@ -985,24 +1326,14 @@ async def test_schema_readiness_rejects_missing_or_disabled_prerequisite_guards(
 
 @pytest.mark.asyncio
 async def test_completion_schema_rejects_a_non_superuser_executor() -> None:
-    database_url = _database_url_or_skip()
+    database_url = _dba_database_url_or_skip()
     role_name = f"eom_completion_runtime_{uuid4().hex[:16]}"
     role_ident = _quote_ident(role_name)
     role_created = False
     connection = await asyncpg.connect(database_url)
     try:
-        can_administer_roles = await connection.fetchval(
-            """
-            SELECT rolsuper OR rolcreaterole
-            FROM pg_roles
-            WHERE rolname = current_user
-            """
-        )
-        if not can_administer_roles:
-            pytest.skip("DBA migration proof requires disposable role administration")
         await connection.execute(f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT")
         role_created = True
-        await connection.execute(f"GRANT {role_ident} TO atlas")
         await connection.execute(f"SET ROLE {role_ident}")
         with pytest.raises(
             asyncpg.RaiseError,
@@ -1015,7 +1346,6 @@ async def test_completion_schema_rejects_a_non_superuser_executor() -> None:
     finally:
         await connection.execute("RESET ROLE")
         if role_created:
-            await connection.execute(f"REVOKE {role_ident} FROM atlas")
             await connection.execute(f"DROP ROLE {role_ident}")
         await connection.close()
 

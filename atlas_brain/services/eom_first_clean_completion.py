@@ -173,6 +173,22 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                    AND to_regclass('eom_first_clean_completion_operation_receipts')
                        IS NOT NULL
                    AND to_regclass('eom_first_clean_completion_receipts') IS NOT NULL
+                   -- The pool must be a direct, least-privilege Atlas login.
+                   -- A DBA session that SET ROLE atlas could RESET ROLE and
+                   -- bypass the protected-object ACL boundary after readiness.
+                   AND current_user = 'atlas'
+                   AND session_user = 'atlas'
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_roles AS runtime_role
+                        WHERE runtime_role.rolname = 'atlas'
+                          AND runtime_role.rolcanlogin
+                          AND NOT runtime_role.rolsuper
+                          AND NOT runtime_role.rolcreaterole
+                          AND NOT runtime_role.rolcreatedb
+                          AND NOT runtime_role.rolreplication
+                          AND NOT runtime_role.rolbypassrls
+                   )
                    AND EXISTS (
                        SELECT 1
                          FROM pg_roles AS guard_role
@@ -282,6 +298,42 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                                 FROM pg_roles
                                WHERE rolname = 'atlas_eom_handoff_owner'
                           )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 3
+                         FROM pg_proc AS protected_function
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = protected_function.pronamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND protected_function.proname IN (
+                              'prevent_eom_first_clean_completion_mutation',
+                              'require_eom_first_clean_completion_operation_scope',
+                              'require_eom_first_clean_completion_receipt'
+                          )
+                          AND protected_function.pronargs = 0
+                          AND protected_function.proowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 2
+                         FROM pg_proc AS protected_function
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = protected_function.pronamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND protected_function.proname IN (
+                              'require_eom_first_clean_completion_operation_scope',
+                              'require_eom_first_clean_completion_receipt'
+                          )
+                          AND protected_function.pronargs = 0
+                          AND protected_function.proconfig @> ARRAY[
+                              format(
+                                  'search_path=%I, pg_catalog, pg_temp',
+                                  current_schema()
+                              )
+                          ]
                    )
                    AND (
                        SELECT COUNT(*) = 6
@@ -497,36 +549,53 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           )
                    )
                    AND NOT EXISTS (
-                       WITH expected_trigger(relation_name, trigger_name) AS (
+                       WITH expected_trigger(
+                           relation_name, trigger_name, function_name
+                       ) AS (
                            VALUES
                                ('eom_customer_handoffs',
-                                'trg_require_eom_customer_handoff_finalization'),
+                                'trg_require_eom_customer_handoff_finalization',
+                                'require_eom_customer_handoff_finalization'),
                                ('eom_customer_handoffs',
-                                'trg_prevent_eom_customer_handoff_mutation'),
+                                'trg_prevent_eom_customer_handoff_mutation',
+                                'prevent_eom_customer_handoff_mutation'),
                                ('eom_customer_handoffs',
-                                'trg_prevent_eom_customer_handoff_truncate'),
+                                'trg_prevent_eom_customer_handoff_truncate',
+                                'prevent_eom_customer_handoff_mutation'),
                                ('eom_lead_lifecycle_events',
-                                'trg_prevent_eom_lead_lifecycle_event_mutation'),
+                                'trg_prevent_eom_lead_lifecycle_event_mutation',
+                                'prevent_eom_lead_lifecycle_event_mutation'),
                                ('eom_lead_lifecycle_events',
-                                'trg_prevent_eom_lead_lifecycle_event_truncate'),
+                                'trg_prevent_eom_lead_lifecycle_event_truncate',
+                                'prevent_eom_lead_lifecycle_event_mutation'),
                                ('eom_first_clean_completion_operation_receipts',
-                                'trg_require_eom_first_clean_completion_operation_scope'),
+                                'trg_require_eom_first_clean_completion_operation_scope',
+                                'require_eom_first_clean_completion_operation_scope'),
                                ('eom_first_clean_completion_operation_receipts',
-                                'trg_prevent_eom_first_clean_completion_operation_mutation'),
+                                'trg_prevent_eom_first_clean_completion_operation_mutation',
+                                'prevent_eom_first_clean_completion_mutation'),
                                ('eom_first_clean_completion_operation_receipts',
-                                'trg_prevent_eom_first_clean_completion_operation_truncate'),
+                                'trg_prevent_eom_first_clean_completion_operation_truncate',
+                                'prevent_eom_first_clean_completion_mutation'),
                                ('eom_first_clean_completion_receipts',
-                                'trg_require_eom_first_clean_completion_receipt'),
+                                'trg_require_eom_first_clean_completion_receipt',
+                                'require_eom_first_clean_completion_receipt'),
                                ('eom_first_clean_completion_receipts',
-                                'trg_prevent_eom_first_clean_completion_receipt_mutation'),
+                                'trg_prevent_eom_first_clean_completion_receipt_mutation',
+                                'prevent_eom_first_clean_completion_mutation'),
                                ('eom_first_clean_completion_receipts',
-                                'trg_prevent_eom_first_clean_completion_receipt_truncate')
+                                'trg_prevent_eom_first_clean_completion_receipt_truncate',
+                                'prevent_eom_first_clean_completion_mutation')
                        )
                        SELECT 1
                          FROM expected_trigger
                         WHERE NOT EXISTS (
                             SELECT 1
                               FROM pg_trigger AS trigger
+                              JOIN pg_proc AS trigger_function
+                                ON trigger_function.oid = trigger.tgfoid
+                              JOIN pg_namespace AS function_namespace
+                                ON function_namespace.oid = trigger_function.pronamespace
                              WHERE trigger.tgrelid = to_regclass(
                                        format(
                                            '%I.%I',
@@ -537,36 +606,15 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                                AND trigger.tgname = expected_trigger.trigger_name
                                AND NOT trigger.tgisinternal
                                AND trigger.tgenabled IN ('O', 'A')
+                               AND function_namespace.nspname = current_schema()
+                               AND trigger_function.proname = expected_trigger.function_name
+                               AND trigger_function.pronargs = 0
+                               AND trigger_function.proowner = (
+                                   SELECT oid
+                                     FROM pg_roles
+                                    WHERE rolname = 'atlas_eom_handoff_owner'
+                               )
                         )
-                   )
-                   AND (
-                       SELECT COUNT(*) = 2
-                         FROM pg_trigger AS trigger
-                         JOIN pg_class AS relation
-                           ON relation.oid = trigger.tgrelid
-                         JOIN pg_namespace AS namespace
-                           ON namespace.oid = relation.relnamespace
-                         JOIN pg_proc AS trigger_function
-                           ON trigger_function.oid = trigger.tgfoid
-                         JOIN pg_namespace AS function_namespace
-                           ON function_namespace.oid = trigger_function.pronamespace
-                        WHERE namespace.nspname = current_schema()
-                          AND relation.relname = 'eom_lead_lifecycle_events'
-                          AND trigger.tgname IN (
-                              'trg_prevent_eom_lead_lifecycle_event_mutation',
-                              'trg_prevent_eom_lead_lifecycle_event_truncate'
-                          )
-                          AND NOT trigger.tgisinternal
-                          AND trigger.tgenabled IN ('O', 'A')
-                          AND function_namespace.nspname = current_schema()
-                          AND trigger_function.proname =
-                              'prevent_eom_lead_lifecycle_event_mutation'
-                          AND trigger_function.pronargs = 0
-                          AND trigger_function.proowner = (
-                              SELECT oid
-                                FROM pg_roles
-                               WHERE rolname = 'atlas_eom_handoff_owner'
-                          )
                    )
                 """
             )
