@@ -7,6 +7,7 @@ import itertools
 import json
 import os
 import shutil
+import stat
 import string
 import subprocess
 import sys
@@ -1488,6 +1489,83 @@ def test_installer_failure_restores_live_and_broken_relative_symlinks(
         assert target.read_bytes() == original_target_payload
     else:
         assert not destination.exists()
+
+
+def test_installer_rejects_nonprivate_notification_symlink_before_systemd_or_mutation(
+    tmp_path,
+):
+    paths = _install_paths(tmp_path)
+    paths.config_dir.mkdir(parents=True, exist_ok=True)
+    target = paths.config_dir / "managed-healthcheck.env"
+    original_payload = f"{installer.TOPIC_ENV}=test-private-topic\n"
+    target.write_text(original_payload, encoding="utf-8")
+    target.chmod(0o640)
+    paths.notification_env.symlink_to(target.name)
+    runner = _InstallerRunner(timer_active=True)
+
+    with pytest.raises(RuntimeError, match="symlink target is not private"):
+        installer.install(paths, runner=runner, environment={})
+
+    assert runner.commands == []
+    assert paths.notification_env.is_symlink()
+    assert os.readlink(paths.notification_env) == target.name
+    assert target.read_text(encoding="utf-8") == original_payload
+    assert stat.S_IMODE(target.stat().st_mode) == 0o640
+
+
+@pytest.mark.parametrize("proof_fails", [False, True])
+def test_installer_preserves_private_notification_symlink_without_chmod(
+    tmp_path, proof_fails
+):
+    paths = _install_paths(tmp_path)
+    paths.config_dir.mkdir(parents=True, exist_ok=True)
+    target = paths.config_dir / "managed-healthcheck.env"
+    original_payload = f"{installer.TOPIC_ENV}=test-private-topic\n"
+    target.write_text(original_payload, encoding="utf-8")
+    target.chmod(0o600)
+    paths.notification_env.symlink_to(target.name)
+    failing_command = (
+        ("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME)
+        if proof_fails
+        else None
+    )
+    runner = _InstallerRunner(failing_command=failing_command)
+
+    if proof_fails:
+        with pytest.raises(RuntimeError, match="initial installed-monitor invocation failed"):
+            installer.install(paths, runner=runner, environment={})
+    else:
+        installer.install(paths, runner=runner, environment={})
+
+    assert paths.notification_env.is_symlink()
+    assert os.readlink(paths.notification_env) == target.name
+    assert target.read_text(encoding="utf-8") == original_payload
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_failed_install_restores_missing_topic_symlink_without_changing_target(tmp_path):
+    paths = _install_paths(tmp_path)
+    paths.config_dir.mkdir(parents=True, exist_ok=True)
+    target = paths.config_dir / "managed-healthcheck.env"
+    original_payload = "UNRELATED=value\n"
+    target.write_text(original_payload, encoding="utf-8")
+    target.chmod(0o600)
+    paths.notification_env.symlink_to(target.name)
+    runner = _InstallerRunner(
+        failing_command=("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME)
+    )
+
+    with pytest.raises(RuntimeError, match="initial installed-monitor invocation failed"):
+        installer.install(
+            paths,
+            runner=runner,
+            environment={installer.TOPIC_ENV: "test-private-topic"},
+        )
+
+    assert paths.notification_env.is_symlink()
+    assert os.readlink(paths.notification_env) == target.name
+    assert target.read_text(encoding="utf-8") == original_payload
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
 def test_installer_rolls_back_before_reraising_operator_cancellation(tmp_path):

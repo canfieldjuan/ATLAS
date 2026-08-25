@@ -336,6 +336,29 @@ Notification delivery is at-least-once, not exactly-once.
   live/broken symlink rollback proof, followed by syntax, systemd, plan, diff,
   and the managed full Unit Gate before push.
 
+### Contract revision: notification-symlink referent safety
+
+- New evidence: `ensure_notification_topic()` follows an existing notification
+  environment symlink with `chmod(0600)` before service proof, while rollback
+  restores only the link entry. A failed installation can therefore leave the
+  managed target mode, ctime, and ACL mask changed even though the link and bytes
+  appear restored.
+- Revised root cause: the installer transaction snapshots destination namespace
+  entries but mutates a symlink referent outside that snapshot. Numeric-mode
+  restoration cannot reconstruct ctime or ACL side effects, so extending the
+  snapshot would still be lossy.
+- Revised required change surface: validate a notification symlink's followed
+  target mode before any systemd query or mutation; reject broken or group/world
+  accessible targets without reading or chmod; preserve an already-private
+  target/link without chmod; retain regular-file permission tightening; and
+  cover existing-topic, missing-topic, success, and failed-proof paths.
+- Revised explicit non-scope: do not change topic grammar, topic value, regular
+  destination behavior, source/unit paths, service/timer commands, recovery,
+  notification delivery, public CLI, schemas, dependencies, or live deployment.
+- Revised verification plan: focused symlink-target privacy and rollback tests,
+  the existing 67 focused cases, syntax/systemd/maturity/plan/diff checks, and
+  the managed full Unit Gate before push.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -485,8 +508,8 @@ notification exit diagnostics, as listed above.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 492 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 515 |
 | `scripts/atlas_api_healthcheck.py` | 675 |
-| `scripts/install_atlas_api_healthcheck.py` | 524 |
-| `tests/test_atlas_api_healthcheck.py` | 1568 |
-| **Total** | **3287** |
+| `scripts/install_atlas_api_healthcheck.py` | 539 |
+| `tests/test_atlas_api_healthcheck.py` | 1646 |
+| **Total** | **3403** |

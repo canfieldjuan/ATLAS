@@ -140,6 +140,18 @@ def _topic_from_legacy_monitor(path: Path) -> str | None:
     return None
 
 
+def _private_notification_symlink(path: Path) -> bool:
+    if not path.is_symlink():
+        return False
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError as exc:
+        raise RuntimeError(f"cannot inspect notification environment symlink target: {exc}") from exc
+    if mode & 0o077:
+        raise RuntimeError("notification environment symlink target is not private")
+    return True
+
+
 def _append_topic(path: Path, topic: str) -> None:
     try:
         existing = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -151,9 +163,11 @@ def _append_topic(path: Path, topic: str) -> None:
 
 
 def ensure_notification_topic(paths: InstallPaths, environment: Mapping[str, str]) -> str:
+    private_symlink = _private_notification_symlink(paths.notification_env)
     existing = _topic_from_env_file(paths.notification_env)
     if existing is not None:
-        paths.notification_env.chmod(0o600)
+        if not private_symlink:
+            paths.notification_env.chmod(0o600)
         return "preserved private notification topic"
 
     candidate = environment.get(TOPIC_ENV, "")
@@ -394,6 +408,7 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
     sources = _source_files(paths)
     destinations = [destination for _source, destination, _executable in sources]
     snapshots = [_snapshot_file(path) for path in (*destinations, paths.notification_env)]
+    _private_notification_symlink(paths.notification_env)
     previous_timer = _timer_state(runner)
     enrollment_attempted = False
     try:
