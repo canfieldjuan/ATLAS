@@ -564,6 +564,30 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                          AND trigger.tgenabled = 'O'
                          AND NOT trigger.tgisinternal
                    )
+                   AND (
+                       SELECT COUNT(*) = 2
+                          AND BOOL_AND(
+                              language_state.lanname = 'plpgsql'
+                              AND procedure.prosrc = expected_function.body
+                          )
+                       FROM (
+                           VALUES
+                               (
+                                   'prevent_eom_missed_call_operation_receipt_mutation()',
+                                   E'\\nBEGIN\\n    RAISE EXCEPTION ''eom_missed_call_operation_receipts is append-only'';\\nEND;\\n'
+                               ),
+                               (
+                                   'prevent_eom_missed_call_attempt_mutation()',
+                                   E'\\nBEGIN\\n    RAISE EXCEPTION ''eom_missed_call_attempts is append-only'';\\nEND;\\n'
+                               )
+                       ) AS expected_function(signature, body)
+                       JOIN pg_proc AS procedure
+                         ON procedure.oid = to_regprocedure(
+                             expected_function.signature
+                         )
+                       JOIN pg_language AS language_state
+                         ON language_state.oid = procedure.prolang
+                   )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contacts'::regclass

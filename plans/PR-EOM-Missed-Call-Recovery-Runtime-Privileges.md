@@ -74,6 +74,13 @@ Max files: 10
   creates it. The explicit EOM workflow also uses path allowlists and a named
   pytest list which omit migration 393, the controlled runner, and its focused
   unit test, so a change to either migration gate can receive no EOM CI proof.
+  The generic migration runner deliberately commits one selected historical
+  recovery and then raises `PendingMigrationContentIntegrityError` while more
+  historical evidence remains; the controlled DBA loop does not distinguish
+  that committed-progress stop from a no-progress integrity failure. Finally,
+  the receipt/attempt fence checks attest only each trigger's OID binding.
+  PostgreSQL preserves that OID under `CREATE OR REPLACE FUNCTION`, so a
+  replaced append-only function body can admit a table-wide runtime `UPDATE`.
 - Required change surface: update only the controlled DBA runner, migration
   393, their existing focused tests, the EOM workflow enrollment, the rollout
   runbook, and this plan. On
@@ -94,6 +101,12 @@ Max files: 10
   each bridge function rejects a tampered body without gaining definer
   authority. The EOM workflow must trigger on and execute the controlled
   runner/migration-393 proof on both pull requests and post-merge pushes.
+  The DBA loop must catch only the expected post-recovery
+  `PendingMigrationContentIntegrityError`, re-read the ledger, and continue
+  only when an explicitly authorized 390-392 receipt advanced; an unchanged
+  ledger must re-raise. Migration 393 must attest both receipt/attempt fence
+  function bodies before it grants `UPDATE`, and runtime readiness must reject
+  either body outside the exact migration-389 source body.
 - Explicit non-scope: do not alter migration 389, the generic migration runner,
   the slim startup tuple, database schema, role memberships, service routes,
   delivery behavior, PostgreSQL CI image, or production state. Do not reapply
@@ -109,7 +122,7 @@ Max files: 10
   disposable role test skipped locally when no test DSN is configured); compile
   changed Python files; run the plan sync and whitespace checks; then let hosted
   `eom-lead-pipeline` exercise the real PostgreSQL extension provisioning,
-  tamper rejection, and controlled-runner test enrollment.
+  bridge/fence tamper rejection, and controlled-runner test enrollment.
 
 ### Review Contract
 
@@ -118,7 +131,8 @@ Max files: 10
      no-login, membership-isolated guard model, transfers all six recovery
      tables plus the privileged CRM-trigger functions to that guard, clears
      stale table/column/function ACLs, and refuses to grant mutable evidence
-     access unless the exact append-only trigger bindings are intact.
+     access unless the exact append-only trigger bindings and trusted migration-
+     389 function bodies are intact.
   2. After applying the migration in a disposable schema, the runtime role has
      the exact required table privileges: read/insert/lock for receipts and
      attempts, read/insert for suppressions/events, and read/insert/update for
@@ -132,8 +146,9 @@ Max files: 10
      complete schema with missing or extra runtime ACLs, runtime guard
      membership, a disabled/rebound immutable-evidence trigger, or an untrusted
      NocoDB direct path; it returns true only after the migration establishes
-     the expected privilege/guard properties. The integration test settles the
-     effect through the real query.
+     the expected privilege/guard properties and rejects either replaced
+     receipt/attempt fence body. The integration test settles the effect through
+     the real query.
   5. `EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS` excludes DBA-only and
      historical recovery SQL. The dedicated DBA runner defaults to a redacted,
      read-only preflight that reports the three historical-prelude receipts plus
@@ -142,9 +157,10 @@ Max files: 10
      applies 389 and the normal runtime never executes the prelude. A fresh
      target first receives 389 from the slim EOM bootstrap path. Migration 393
      provisions `pgcrypto` only after DBA admission, rejects every altered
-     bridge-function body before granting definer authority, and is enrolled
-     with the controlled-runner proof in the EOM workflow. The corresponding
-     source and disposable-Postgres tests settle both boundaries.
+     bridge or mutable-evidence fence body before granting definer authority or
+     runtime `UPDATE`, retries only a ledger-advancing historical-progress stop,
+     and is enrolled with the controlled-runner proof in the EOM workflow. The
+     corresponding source and disposable-Postgres tests settle both boundaries.
   6. No route, provider, delivery configuration, email copy, booking state, or
      recorded recovery evidence changes. Settled by the focused existing
      recovery test suite and a cold diff audit.
@@ -180,12 +196,15 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   clear an exact required historical prelude before a missing 389 receipt, and
   393 trusted pre-existing bridge code; it now gives only the proven prelude
   set to the existing selector, requires the 389 receipt before 393, and
-  rejects bridge bodies outside the migration-389 allowlist before elevation.
+  rejects bridge and mutable-evidence fence bodies outside the migration-389
+  allowlist before elevation or runtime `UPDATE`. A committed historical
+  prelude's expected integrity stop now continues only when the ledger proves
+  that exact prelude advanced.
 - Guard-relevant fields: table/column ACL, table owner, function ACL/owner,
-  `prosecdef`, function `search_path`, trusted function-body SHA-256, trigger
-  identity/enabled state, role login/inheritance/membership properties, the six
-  recovery table names, installed `pgcrypto` extension, and the 390-393 ledger
-  receipts.
+  `prosecdef`, function `search_path`, trusted bridge/fence function-body
+  SHA-256 or source body, trigger identity/enabled state, role
+  login/inheritance/membership properties, the six recovery table names,
+  installed `pgcrypto` extension, and the 390-393 ledger receipts.
 - Caller x input shape: `atlas` executes its existing service SQL; NocoDB only
   performs its documented contacts/contact-interactions mutations. Neither
   caller receives a new public route or payload shape.
@@ -233,9 +252,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 The migration validates that a DBA is applying it and that
 `atlas_eom_handoff_owner` remains a no-login, membership-isolated guard. Before
-it changes any bridge function's authority, it compares every one of the six
-stored bodies against an embedded SHA-256 allowlist generated from migration
-389. After the DBA-only role checks but before this digest check, it installs
+it changes any bridge function's authority or grants runtime `UPDATE`, it
+compares the six bridge and two mutable-evidence fence bodies against trusted
+migration-389 source. After the DBA-only role checks but before this digest
+check, it installs
 the stock PostgreSQL `pgcrypto` extension when absent and reads its actual
 installed schema; the focused integration test deliberately begins without
 that extension and observes the migration establish it. It then moves recovery
@@ -243,8 +263,8 @@ tables and the CRM-trigger execution chain under that guard, sets trusted
 trigger functions to `SECURITY DEFINER` with a fixed schema search path, clears
 public/NocoDB/runtime table and column ACLs plus explicit NocoDB function
 execution, and then grants the runtime only its proven SQL surface. It refuses
-to proceed unless the receipt/attempt append-only triggers are still enabled
-and bound to their rejecting functions.
+to proceed unless the receipt/attempt append-only triggers are still enabled,
+bound to their rejecting functions, and retain their trusted bodies.
 
 The service's existing structural probe becomes an admission predicate for that
 same privilege/guard contract, so a partial, over-privileged, trigger-drifted,
@@ -255,11 +275,14 @@ denied direct NocoDB data access plus the guarded CRM trigger path. A fresh
 target's slim EOM bootstrap records migration 389. Before the runner requires
 that receipt, its `--apply` path gives only 390-392 to the existing attested
 historical selector, so an exact legacy recovery can be completed under the DBA
-connection without handing that authority to normal startup. It never applies
-389, then records 393 before a full generic Atlas runtime starts or recovery is
-enabled. The slim readiness tuple intentionally carries only ordinary schema
-prerequisites. The EOM workflow lists the migration, controlled runner, and
-runner test in both trigger filters and runs the focused runner test explicitly.
+connection without handing that authority to normal startup. When the generic
+runner raises its expected post-commit integrity stop, the DBA command
+continues only if its new ledger snapshot advanced an authorized prelude. It
+never applies 389, then records 393 before a full generic Atlas runtime starts
+or recovery is enabled. The slim readiness tuple intentionally carries only
+ordinary schema prerequisites. The EOM workflow lists the migration,
+controlled runner, and runner test in both trigger filters and runs the focused
+runner test explicitly.
 
 ## Intentional
 
@@ -291,15 +314,16 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest -q tests/test_eom_missed_call_privilege_runner.py` — `9
-  passed` locally, including the historical-prelude ordering and missing-ledger
-  boundaries.
+- `python -m pytest -q tests/test_eom_missed_call_privilege_runner.py` — `11
+  passed` locally, including committed-prelude retry and non-prelude-progress
+  rejection boundaries.
 - `python -m pytest -q tests/test_eom_missed_call_recovery.py` — `14 passed,
-  48 skipped` locally. The disposable-PostgreSQL role test is skipped because
+  50 skipped` locally. The disposable-PostgreSQL role test is skipped because
   `ATLAS_MIGRATION_TEST_DATABASE_URL` is absent in this workspace; hosted CI
   remains the required real-role proof.
 - `python -m pytest -q tests/test_eom_render_profile.py` — `64 passed` locally.
 - `python -m compileall -q scripts/apply_eom_missed_call_recovery_runtime_privileges.py
+  atlas_brain/services/eom_missed_call_recovery.py
   tests/test_eom_missed_call_privilege_runner.py
   tests/test_eom_missed_call_recovery.py` — passed locally.
 - `git diff --check` and `python scripts/check_guard_class_closure.py --base
@@ -313,15 +337,15 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 11 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 191 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 510 |
-| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 61 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 332 |
-| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 271 |
-| `tests/test_eom_missed_call_privilege_runner.py` | 299 |
-| `tests/test_eom_missed_call_recovery.py` | 758 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 215 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 562 |
+| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 66 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 356 |
+| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 293 |
+| `tests/test_eom_missed_call_privilege_runner.py` | 403 |
+| `tests/test_eom_missed_call_recovery.py` | 917 |
 | `tests/test_eom_render_profile.py` | 3 |
-| **Total** | **2443** |
+| **Total** | **2833** |
 
 ## Diff size rationale
 

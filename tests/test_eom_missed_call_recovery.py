@@ -102,6 +102,22 @@ _TRUSTED_BRIDGE_FUNCTIONS = (
         "plpgsql",
     ),
 )
+_TRUSTED_APPEND_ONLY_FENCE_FUNCTION_SIGNATURES = (
+    "prevent_eom_missed_call_operation_receipt_mutation()",
+    "prevent_eom_missed_call_attempt_mutation()",
+)
+_TRUSTED_APPEND_ONLY_FENCE_FUNCTIONS = (
+    (
+        "prevent_eom_missed_call_operation_receipt_mutation()",
+        "prevent_eom_missed_call_operation_receipt_mutation",
+        "plpgsql",
+    ),
+    (
+        "prevent_eom_missed_call_attempt_mutation()",
+        "prevent_eom_missed_call_attempt_mutation",
+        "plpgsql",
+    ),
+)
 
 
 class _ConnectionPool:
@@ -193,11 +209,12 @@ def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
 
 
-def test_privilege_repair_trusted_bridge_hashes_match_migration_389_source() -> None:
-    """Keep 393's body allowlist tied to the immutable migration-389 source."""
+def test_privilege_repair_trusted_function_bodies_match_migration_389_source() -> None:
+    """Keep 393/readiness body checks tied to immutable migration-389 source."""
 
     source = (MIGRATIONS / "389_eom_missed_call_recovery.sql").read_text()
     repair = _PRIVILEGE_REPAIR_MIGRATION.read_text()
+    readiness = (ROOT / "atlas_brain/services/eom_missed_call_recovery.py").read_text()
     extension_install = "EXECUTE 'CREATE EXTENSION IF NOT EXISTS pgcrypto';"
     assert extension_install in repair
     assert repair.index(extension_install) > repair.index(
@@ -209,7 +226,11 @@ def test_privilege_repair_trusted_bridge_hashes_match_migration_389_source() -> 
     assert repair.index(extension_install) < repair.index(
         "SELECT namespace_state.nspname"
     )
-    for signature, function_name, language_name in _TRUSTED_BRIDGE_FUNCTIONS:
+    trusted_functions = (
+        *_TRUSTED_BRIDGE_FUNCTIONS,
+        *_TRUSTED_APPEND_ONLY_FENCE_FUNCTIONS,
+    )
+    for signature, function_name, language_name in trusted_functions:
         function_match = re.search(
             rf"CREATE OR REPLACE FUNCTION {re.escape(function_name)}\b(.*?)"
             r"(?=\nCREATE OR REPLACE FUNCTION|\Z)",
@@ -231,6 +252,17 @@ def test_privilege_repair_trusted_bridge_hashes_match_migration_389_source() -> 
             re.DOTALL,
         )
         assert expected_entry.search(repair), signature
+
+        if signature in _TRUSTED_APPEND_ONLY_FENCE_FUNCTION_SIGNATURES:
+            readiness_body = "E'" + (
+                language_and_body_match.group(2)
+                .replace("\\", "\\\\")
+                .replace("'", "''")
+                .replace("\n", "\\\\n")
+            ) + "'"
+            assert signature in readiness
+            assert readiness_body in readiness
+    assert "language_state.lanname = 'plpgsql'" in readiness
 
 
 async def _tamper_bridge_function(
@@ -294,6 +326,72 @@ async def _tamper_bridge_function(
         """,
     }
     await connection.execute(definitions[function_signature])
+
+
+async def _replace_append_only_fence_function(
+    connection: Any,
+    *,
+    schema: str,
+    function_signature: str,
+    body: str,
+) -> None:
+    """Replace one bound append-only function without changing its OID."""
+
+    function_names = {
+        "prevent_eom_missed_call_operation_receipt_mutation()": (
+            "prevent_eom_missed_call_operation_receipt_mutation"
+        ),
+        "prevent_eom_missed_call_attempt_mutation()": (
+            "prevent_eom_missed_call_attempt_mutation"
+        ),
+    }
+    function_name = function_names[function_signature]
+    await connection.execute(
+        "CREATE OR REPLACE FUNCTION "
+        f"{_quote_ident(schema)}.{function_name}() "
+        "RETURNS TRIGGER LANGUAGE plpgsql AS $$"
+        f"{body}$$;"
+    )
+
+
+async def _tamper_append_only_fence_function(
+    connection: Any,
+    *,
+    schema: str,
+    function_signature: str,
+) -> None:
+    await _replace_append_only_fence_function(
+        connection,
+        schema=schema,
+        function_signature=function_signature,
+        body="\nBEGIN\n    RETURN NEW;\nEND;\n",
+    )
+
+
+async def _restore_append_only_fence_function(
+    connection: Any,
+    *,
+    schema: str,
+    function_signature: str,
+) -> None:
+    messages = {
+        "prevent_eom_missed_call_operation_receipt_mutation()": (
+            "eom_missed_call_operation_receipts is append-only"
+        ),
+        "prevent_eom_missed_call_attempt_mutation()": (
+            "eom_missed_call_attempts is append-only"
+        ),
+    }
+    await _replace_append_only_fence_function(
+        connection,
+        schema=schema,
+        function_signature=function_signature,
+        body=(
+            "\nBEGIN\n"
+            f"    RAISE EXCEPTION '{messages[function_signature]}';\n"
+            "END;\n"
+        ),
+    )
 
 
 async def _require_disposable_role_administration(connection: Any) -> None:
@@ -746,6 +844,24 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             runtime_pool = _ConnectionPool(runtime_connection)
             assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
 
+            for function_signature in _TRUSTED_APPEND_ONLY_FENCE_FUNCTION_SIGNATURES:
+                await _tamper_append_only_fence_function(
+                    connection,
+                    schema=schema,
+                    function_signature=function_signature,
+                )
+                assert not await recovery_mod.missed_call_recovery_schema_ready(
+                    runtime_pool
+                )
+                await _restore_append_only_fence_function(
+                    connection,
+                    schema=schema,
+                    function_signature=function_signature,
+                )
+                assert await recovery_mod.missed_call_recovery_schema_ready(
+                    runtime_pool
+                )
+
             await connection.execute(
                 f"REVOKE INSERT ON TABLE {_quote_ident(schema)}."
                 f"eom_missed_call_sequence_events FROM {runtime_probe_ident}"
@@ -999,6 +1115,49 @@ async def test_privilege_repair_rejects_each_tampered_bridge_body(
             WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
             """,
             qualified_signature,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "function_signature", _TRUSTED_APPEND_ONLY_FENCE_FUNCTION_SIGNATURES
+)
+async def test_privilege_repair_rejects_each_tampered_append_only_fence_body(
+    function_signature: str,
+) -> None:
+    """No altered append-only fence body may authorize runtime UPDATE grants."""
+
+    _database_url_or_skip()
+    async with _test_store() as (admin_pool, schema):
+        connection = admin_pool._connection
+        await _provision_privilege_repair_roles(connection)
+        await _tamper_append_only_fence_function(
+            connection,
+            schema=schema,
+            function_signature=function_signature,
+        )
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="append-only fence function .*trusted migration-389 body",
+        ):
+            await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+
+        protected_table_name = (
+            "eom_missed_call_operation_receipts"
+            if "operation_receipt" in function_signature
+            else "eom_missed_call_attempts"
+        )
+        assert not await connection.fetchval(
+            """
+            SELECT has_table_privilege(
+                'atlas',
+                to_regclass(format('%I.%I', $1::text, $2::text)),
+                'UPDATE'
+            )
+            """,
+            schema,
+            protected_table_name,
         )
 
 

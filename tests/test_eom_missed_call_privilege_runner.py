@@ -297,3 +297,107 @@ def test_privilege_runner_applies_historical_preludes_before_privilege_repair(
     assert result["migration_recorded"] is True
     assert result["applied"] is True
     assert pool.closed is True
+
+
+def test_privilege_runner_continues_after_committed_historical_progress_stop(
+    monkeypatch,
+) -> None:
+    """A committed prelude receipt authorizes retrying the exact selector."""
+
+    runner = _load_runner_module()
+    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
+    )
+    pool = _Pool(state)
+    calls: list[tuple[str, ...]] = []
+    prelude_names = iter(runner.HISTORICAL_PRELUDE_MIGRATION_NAMES)
+
+    async def create_pool(_database_url: str) -> _Pool:
+        return pool
+
+    async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
+        calls.append(only)
+        if only == runner.HISTORICAL_PRELUDE_MIGRATION_NAMES:
+            state.recorded_migrations.add(next(prelude_names))
+            if len(calls) < len(runner.HISTORICAL_PRELUDE_MIGRATION_NAMES):
+                raise runner.PendingMigrationContentIntegrityError(
+                    "next exact historical prelude remains"
+                )
+        elif only == (runner.MIGRATION_NAME,):
+            state.recorded_migrations.add(runner.MIGRATION_NAME)
+        else:  # pragma: no cover - regression guard for this controlled runner
+            raise AssertionError(f"unexpected migration selection: {only}")
+
+    args = runner._parse_args(
+        ["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"]
+    )
+    result = asyncio.run(
+        runner._run(
+            args,
+            create_pool=create_pool,
+            run_migrations_fn=run_migrations,
+        )
+    )
+
+    assert calls == [
+        runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        (runner.MIGRATION_NAME,),
+    ]
+    assert result["historical_prelude_migrations"] == {
+        name: True for name in runner.HISTORICAL_PRELUDE_MIGRATION_NAMES
+    }
+    assert result["migration_recorded"] is True
+    assert pool.closed is True
+
+
+def test_privilege_runner_reraises_non_prelude_progress_stop(
+    monkeypatch,
+) -> None:
+    """Only a newly recorded authorized prelude may absorb the stop."""
+
+    runner = _load_runner_module()
+    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
+    )
+    pool = _Pool(state)
+    calls: list[tuple[str, ...]] = []
+
+    async def create_pool(_database_url: str) -> _Pool:
+        return pool
+
+    async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
+        calls.append(only)
+        assert only == runner.HISTORICAL_PRELUDE_MIGRATION_NAMES
+        # A concurrent/incorrectly selected non-prelude receipt is not the
+        # committed exact prelude that this controlled retry boundary admits.
+        state.recorded_migrations.add(runner.MIGRATION_NAME)
+        raise runner.PendingMigrationContentIntegrityError(
+            "historical prelude did not advance"
+        )
+
+    args = runner._parse_args(
+        ["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"]
+    )
+    with pytest.raises(
+        runner.PendingMigrationContentIntegrityError,
+        match="historical prelude did not advance",
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+            )
+        )
+
+    assert calls == [runner.HISTORICAL_PRELUDE_MIGRATION_NAMES]
+    assert runner.MIGRATION_NAME in state.recorded_migrations
+    assert pool.closed is True

@@ -194,6 +194,58 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- The runtime receives UPDATE on these two append-only tables only to take
+    -- existing FOR UPDATE locks. PostgreSQL preserves a trigger function's OID
+    -- across CREATE OR REPLACE FUNCTION, so the trigger binding below cannot
+    -- prove that its body still rejects mutations by itself.
+    FOR function_signature, expected_function_language, expected_function_body_sha256 IN
+        SELECT expected_function.signature,
+               expected_function.language_name,
+               expected_function.body_sha256
+          FROM (
+              VALUES
+                  (
+                      'prevent_eom_missed_call_operation_receipt_mutation()',
+                      'plpgsql',
+                      '7bc869fec7fe5493b5859da8ab1a26da547d53db518b6e32fa2ab9e3cd9d08a7'
+                  ),
+                  (
+                      'prevent_eom_missed_call_attempt_mutation()',
+                      'plpgsql',
+                      '7647fbfe7a9642e0434e0a0e3930aa221f6d93323205cd0633ba809cf31c579d'
+                  )
+          ) AS expected_function(signature, language_name, body_sha256)
+    LOOP
+        SELECT procedure.prosrc, language_state.lanname
+          INTO observed_function_body, observed_function_language
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_language AS language_state
+            ON language_state.oid = procedure.prolang
+         WHERE procedure.oid = pg_catalog.to_regprocedure(
+                   format('%I.%s', schema_name, function_signature)
+               );
+
+        IF observed_function_body IS NULL
+           OR observed_function_language IS DISTINCT FROM expected_function_language THEN
+            RAISE EXCEPTION
+                'required EOM missed-call append-only fence function % is not the trusted migration-389 function',
+                function_signature;
+        END IF;
+
+        EXECUTE format(
+            'SELECT encode(%1$I.digest($1::text, ''sha256''), ''hex'')',
+            pgcrypto_schema
+        )
+          INTO observed_function_body_sha256
+          USING observed_function_body;
+
+        IF observed_function_body_sha256 IS DISTINCT FROM expected_function_body_sha256 THEN
+            RAISE EXCEPTION
+                'required EOM missed-call append-only fence function % does not match its trusted migration-389 body',
+                function_signature;
+        END IF;
+    END LOOP;
+
     FOR relation_name IN
         SELECT unnest(ARRAY[
             'eom_missed_call_operation_receipts',

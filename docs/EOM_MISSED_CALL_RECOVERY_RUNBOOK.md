@@ -75,12 +75,17 @@ claim or send a step.
    first gives the existing selector only 390-392, then refuses to run 393 until
    `389_eom_missed_call_recovery` is recorded. It never applies 389. Once 389
    is recorded, it applies only 393 through Atlas's normal migration ledger.
-   After it verifies the DBA executor, migration 393 provisions the stock
-   PostgreSQL `pgcrypto` extension if needed, then refuses to elevate any CRM
-   bridge function whose stored body is not the trusted migration-389 body. Do
-   not pre-seed that extension through the normal runtime, pass a DBA DSN on the
-   command line, add it to the normal Atlas service environment, or give the
-   `atlas` runtime role guard membership. Confirm the result reports
+   The generic runner can stop after committing one selected historical prelude
+   while another exact receipt remains unresolved; the controlled command
+   re-reads the ledger and continues only when that selected receipt advanced.
+   An unchanged integrity stop still aborts the command. After it verifies the
+   DBA executor, migration 393 provisions the stock PostgreSQL `pgcrypto`
+   extension if needed, then refuses to elevate any CRM bridge function or grant
+   runtime `UPDATE` when either bridge or append-only fence body is not the
+   trusted migration-389 body.
+   Do not pre-seed that extension through the normal runtime, pass a DBA DSN on
+   the command line, add it to the normal Atlas service environment, or give
+   the `atlas` runtime role guard membership. Confirm the result reports
    `prerequisite_migration_recorded: true` and `migration_recorded: true`, then
    remove the temporary DBA secret injection.
 4. Start the Atlas entrypoint with recovery still disabled. Verify the full

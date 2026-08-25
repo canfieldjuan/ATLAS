@@ -25,7 +25,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from atlas_brain.storage.migrations import run_migrations  # noqa: E402
+from atlas_brain.storage.migrations import (  # noqa: E402
+    PendingMigrationContentIntegrityError,
+    run_migrations,
+)
 
 
 DEFAULT_DSN_ENV = "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL"
@@ -164,9 +167,28 @@ async def _apply_required_historical_prelude(
 
     for _ in HISTORICAL_PRELUDE_MIGRATION_NAMES:
         _, _, _, _, before = await _migration_state(pool)
-        await run_migrations_fn(pool, only=HISTORICAL_PRELUDE_MIGRATION_NAMES)
+        try:
+            await run_migrations_fn(
+                pool,
+                only=HISTORICAL_PRELUDE_MIGRATION_NAMES,
+            )
+        except PendingMigrationContentIntegrityError:
+            # The generic runner intentionally commits one selected historical
+            # recovery, then raises while another evidence gap remains. Admit
+            # only that exact committed-progress stop; every no-progress
+            # integrity failure remains fail-closed.
+            _, _, _, _, after = await _migration_state(pool)
+            if not any(
+                not before[name] and after[name]
+                for name in HISTORICAL_PRELUDE_MIGRATION_NAMES
+            ):
+                raise
+            continue
         _, _, _, _, after = await _migration_state(pool)
-        if after == before:
+        if all(
+            after[name] == before[name]
+            for name in HISTORICAL_PRELUDE_MIGRATION_NAMES
+        ):
             return
 
 
