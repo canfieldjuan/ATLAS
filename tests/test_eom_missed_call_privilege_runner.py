@@ -79,6 +79,23 @@ class _Connection:
                 return False
             lock_state.advisory_lock_held = True
             return True
+        if "pg_try_advisory_lock" in query:
+            self._state.controlled_migration_lock_attempts = (
+                getattr(self._state, "controlled_migration_lock_attempts", 0) + 1
+            )
+            lock_results = getattr(
+                self._state,
+                "controlled_migration_lock_results",
+                [],
+            )
+            if lock_results:
+                return lock_results.pop(0)
+            return True
+        if "pg_advisory_unlock" in query:
+            self._state.controlled_migration_unlocks = (
+                getattr(self._state, "controlled_migration_unlocks", 0) + 1
+            )
+            return True
         if "rolsuper" in query:
             return self._state.executor_is_superuser
         if "to_regclass" in query:
@@ -280,12 +297,15 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
         runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
         (runner.MIGRATION_NAME,),
     ]
-    assert all(
-        isinstance(observed_pool, runner._RuntimeRoleMigrationPool)
-        and observed_pool._pool is pool
-        and observed_pool._runtime_role == "atlas_funnel"
-        for observed_pool, _only in calls
-    )
+    historical_pool, _historical_only = calls[0]
+    assert isinstance(historical_pool, runner._RuntimeRoleMigrationPool)
+    assert historical_pool._pool is pool
+    assert historical_pool._runtime_role == "atlas_funnel"
+    controlled_pool, _controlled_only = calls[1]
+    assert isinstance(controlled_pool, runner._RuntimeRoleMigrationPool)
+    assert isinstance(controlled_pool._pool, runner._PinnedMigrationPool)
+    assert controlled_pool._pool._connection is pool._connection
+    assert controlled_pool._runtime_role == "atlas_funnel"
     assert result["prerequisite_migration_recorded"] is True
     assert result["migration_recorded"] is True
     assert result["applied"] is True
@@ -411,6 +431,87 @@ def test_privilege_runner_applies_historical_preludes_before_privilege_repair(
     assert result["migration_recorded"] is True
     assert result["applied"] is True
     assert pool.closed is True
+
+
+def test_privilege_runner_pins_393_role_setting_and_runner_connection(
+    monkeypatch,
+) -> None:
+    """A transaction-pooling proxy cannot split 393 across backends."""
+
+    runner = _load_runner_module()
+    lock_state = SimpleNamespace()
+    runtime_pool = _Pool(
+        SimpleNamespace(
+            schema_name="eom_canonical",
+            advisory_lock_state=lock_state,
+        )
+    )
+    dba_state = SimpleNamespace(
+        schema_name="eom_canonical",
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        recorded_migrations={
+            runner.PREREQUISITE_MIGRATION_NAME,
+            *runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        },
+        advisory_lock_state=lock_state,
+        controlled_migration_lock_results=[False, True],
+    )
+    dba_pool = _Pool(dba_state)
+    sleep_transaction_depths: list[int] = []
+    observed_migration_connections: list[object] = []
+
+    async def create_pool(
+        database_url: str,
+        *,
+        schema_name: str | None = None,
+    ) -> _Pool:
+        if database_url == TEST_RUNTIME_DSN:
+            assert schema_name is None
+            return runtime_pool
+        assert database_url == TEST_DBA_DSN
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    async def sleep(_delay: float) -> None:
+        sleep_transaction_depths.append(dba_state.transaction_depth)
+
+    async def run_migrations(observed_pool: object, *, only: tuple[str, ...]) -> None:
+        if only == runner.HISTORICAL_PRELUDE_MIGRATION_NAMES:
+            return
+        assert only == (runner.MIGRATION_NAME,)
+        assert isinstance(observed_pool, runner._RuntimeRoleMigrationPool)
+        connection = await observed_pool.acquire()
+        observed_migration_connections.append(connection)
+        assert connection is dba_pool._connection
+        assert dba_state.transaction_depth == 1
+        await observed_pool.release(connection)
+        dba_state.recorded_migrations.add(runner.MIGRATION_NAME)
+
+    monkeypatch.setattr(runner.asyncio, "sleep", sleep)
+    result = asyncio.run(
+        runner._run(
+            runner._parse_args(["--apply"]),
+            create_pool=create_pool,
+            run_migrations_fn=run_migrations,
+            funnel_config_factory=lambda: SimpleNamespace(
+                db_connection_string=TEST_RUNTIME_DSN
+            ),
+        )
+    )
+
+    assert sleep_transaction_depths == [0]
+    assert observed_migration_connections == [dba_pool._connection]
+    assert dba_state.controlled_migration_lock_attempts == 2
+    assert dba_state.controlled_migration_unlocks == 1
+    assert (
+        "SELECT pg_catalog.set_config($1, $2, FALSE)",
+        (runner.RUNTIME_ROLE_SETTING, "atlas_funnel"),
+    ) in dba_state.executed
+    assert result["migration_recorded"] is True
+    assert result["applied"] is True
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 def test_privilege_runner_provisions_pgcrypto_before_historical_preludes(

@@ -33,6 +33,7 @@ from atlas_brain.config import (  # noqa: E402
 from atlas_brain.eom_api.config import EOMFunnelConfig  # noqa: E402
 from atlas_brain.storage.migrations import (  # noqa: E402
     PendingMigrationContentIntegrityError,
+    _MIGRATIONS_ADVISORY_LOCK_KEY,
     run_migrations,
 )
 
@@ -238,6 +239,22 @@ async def _attest_shared_database_lock(runtime_pool: Any, dba_pool: Any) -> None
                         )
                 return
     raise RuntimeError("Could not reserve a fresh EOM funnel target-attestation lock")
+
+
+class _PinnedMigrationPool:
+    """Expose one transaction-pinned connection to the canonical runner."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    async def acquire(self) -> Any:
+        return self._connection
+
+    async def release(self, connection: Any) -> None:
+        if connection is not self._connection:
+            raise RuntimeError(
+                "Controlled migration attempted to release another connection"
+            )
 
 
 class _RuntimeRoleMigrationPool:
@@ -450,6 +467,59 @@ async def _migration_state(
     )
 
 
+async def _run_pinned_controlled_migration(
+    pool: Any,
+    *,
+    runtime_role: str,
+    run_migrations_fn: Callable[..., Awaitable[None]],
+) -> None:
+    """Run atomic migration 393 on one backend under the canonical lock.
+
+    Ordinary catalog runs remain transaction-free because some migrations use
+    concurrent DDL. Migration 393 is atomic bookkeeping, so this controlled
+    command can hold the canonical session lock inside one transaction and pin
+    the generic runner to that exact connection. That keeps the role setting,
+    lock, migration SQL, and receipt bookkeeping together under transaction
+    pooling; the outer unlock balances the generic runner's re-entrant lock.
+    """
+
+    async with pool.acquire() as connection:
+        while True:
+            lock_acquired = False
+            async with connection.transaction():
+                lock_acquired = bool(
+                    await connection.fetchval(
+                        "SELECT pg_catalog.pg_try_advisory_lock($1)",
+                        _MIGRATIONS_ADVISORY_LOCK_KEY,
+                    )
+                )
+                if lock_acquired:
+                    try:
+                        await run_migrations_fn(
+                            _RuntimeRoleMigrationPool(
+                                _PinnedMigrationPool(connection),
+                                runtime_role,
+                            ),
+                            only=(MIGRATION_NAME,),
+                        )
+                    finally:
+                        released = bool(
+                            await connection.fetchval(
+                                "SELECT pg_catalog.pg_advisory_unlock($1)",
+                                _MIGRATIONS_ADVISORY_LOCK_KEY,
+                            )
+                        )
+                        if not released:
+                            raise RuntimeError(
+                                "Controlled migration did not release its "
+                                "database serialization lock"
+                            )
+                    return
+            # Never wait inside a transaction: an ordinary migration might be
+            # waiting for that absence before its concurrent DDL can finish.
+            await asyncio.sleep(0.2)
+
+
 async def _apply_required_historical_prelude(
     pool: Any,
     *,
@@ -588,7 +658,11 @@ async def _run(
                     "run the slim EOM bootstrap before the privilege repair"
                 )
             if args.apply and not migration_recorded:
-                await run_migrations_fn(migration_pool, only=(MIGRATION_NAME,))
+                await _run_pinned_controlled_migration(
+                    pool,
+                    runtime_role=runtime_role,
+                    run_migrations_fn=run_migrations_fn,
+                )
                 await _attest_shared_database_lock(runtime_pool, pool)
                 (
                     _,

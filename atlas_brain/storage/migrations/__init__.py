@@ -21,7 +21,10 @@ MIGRATIONS_DIR = Path(__file__).parent
 # identity verification and explicit, narrow runner selection, but generic
 # startup/MCP runs must not attempt them.
 CONTROLLED_DBA_MIGRATION_NAMES = frozenset(
-    {"394_eom_first_clean_completion_receipts"}
+    {
+        "393_eom_missed_call_recovery_runtime_privileges",
+        "394_eom_first_clean_completion_receipts",
+    }
 )
 
 

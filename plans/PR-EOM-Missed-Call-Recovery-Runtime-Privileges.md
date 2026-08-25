@@ -44,7 +44,7 @@ can report a structurally present but unusable schema as ready.
 
 Ownership lane: eom/missed-call-recovery-runtime-privileges
 Slice phase: Production hardening
-Max files: 11
+Max files: 13
 
 1. Add the additive recovery-ACL migration and security-definer trigger bridge.
 2. Make readiness fail closed when the runtime role cannot execute the service's
@@ -437,6 +437,40 @@ Max files: 11
   package, alter Python packaging, or change the command's CLI behavior merely
   to make its internal helper importable.
 
+### Controlled-migration reservation and backend-pinning contract (current review round)
+
+- Root cause: migration 393 is a DBA-only migration, but the generic catalog
+  reserves only migration 394. An unrestricted `run_migrations(...)` therefore
+  selects 393 and reaches its superuser guard during ordinary startup instead
+  of leaving it for the controlled DBA command. Separately, the controlled
+  command writes the runtime-role setting through a pool wrapper, then lets the
+  generic migration runner acquire from that pool again. Under transaction
+  pooling those two acquisitions can use different PostgreSQL backends, so the
+  migration can lose the session setting it requires even though the command
+  preflighted the correct target.
+- Correct fix must touch/change: add migration 393 to the existing controlled
+  DBA catalog reservation, without changing the generic runner's selection or
+  locking algorithm. Extend its existing runner test so an unrestricted run
+  skips both controlled migrations and explicit selection reaches each one.
+  In the missed-call controlled command, run only migration 393 through one
+  explicit transaction-pinned connection, acquire and release the canonical
+  migration serialization lock around that invocation, and bind the runtime
+  role setting through that same pinned connection. Extend the focused command
+  tests to prove a contention retry waits outside the transaction and that the
+  setting, generic-runner invocation, lock, migration, and bookkeeping share
+  the one pinned connection.
+- Must not change: do not edit migration 393 SQL, historical migrations
+  390--392, the normal generic migration algorithm, the first-clean controlled
+  runner, the slim startup tuple, role/ACL policy, API or UI behavior, workflow
+  configuration, production data, or the command's public CLI/result shape.
+  Historical prelude selection remains limited to 390--392; only 393 receives
+  the new transaction-pinned execution boundary.
+- Acceptance criteria: normal generic startup never selects an unrecorded 393
+  or 394; each remains selectable only through an explicit `only` request. A
+  controlled 393 run retries a busy canonical lock without an open transaction,
+  then runs the real migration adapter inside one transaction on the exact
+  acquired DBA connection with the runtime-role setting installed there.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -574,6 +608,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `atlas_brain/config.py`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_missed_call_recovery.py`
+- `atlas_brain/storage/migrations/__init__.py`
 - `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql`
 - `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md`
 - `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md`
@@ -581,13 +616,19 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `tests/test_eom_missed_call_privilege_runner.py`
 - `tests/test_eom_missed_call_recovery.py`
 - `tests/test_eom_render_profile.py`
+- `tests/test_migrations_runner.py`
 
 ## Mechanism
 
-The controlled runner reads the configured EOM funnel DSN only to derive its
-username, never logs that DSN, and binds the role into each selected migration
-connection. After the DBA admission and before any selected historical prelude,
-it establishes `pgcrypto`. Migration 393 validates that the configured login is
+The generic catalog reserves migrations 393 and 394 from ordinary startup; a
+dedicated command must select either one explicitly. The controlled runner reads
+the configured EOM funnel DSN only to derive its username, never logs that DSN,
+and binds the role into each selected migration connection. For atomic migration
+393, it holds the canonical migration lock and pins the generic runner plus that
+role setting to one explicit transaction connection, so a transaction-pooling
+proxy cannot split the migration from its required session setting. After the
+DBA admission and before any selected historical prelude, it establishes
+`pgcrypto`. Migration 393 validates that the configured login is
 an unprivileged, guard-isolated runtime and that `atlas_eom_handoff_owner`
 remains a no-login, membership-isolated guard. Before it changes any bridge
 function's authority or grants runtime `UPDATE`, it compares every guard-critical
@@ -683,14 +724,16 @@ Parked hardening: none.
 | `atlas_brain/config.py` | 23 |
 | `atlas_brain/main_eom.py` | 11 |
 | `atlas_brain/services/eom_missed_call_recovery.py` | 344 |
+| `atlas_brain/storage/migrations/__init__.py` | 5 |
 | `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 988 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 81 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 701 |
-| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 634 |
-| `tests/test_eom_missed_call_privilege_runner.py` | 923 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 744 |
+| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 708 |
+| `tests/test_eom_missed_call_privilege_runner.py` | 1024 |
 | `tests/test_eom_missed_call_recovery.py` | 1655 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **5374** |
+| `tests/test_migrations_runner.py` | 41 |
+| **Total** | **5638** |
 
 ## Diff size rationale
 

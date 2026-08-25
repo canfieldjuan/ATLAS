@@ -1369,12 +1369,16 @@ async def test_generic_run_skips_controlled_dba_migration_until_explicitly_selec
     )
 
     assert CONTROLLED_DBA_MIGRATION_NAMES == {
-        "394_eom_first_clean_completion_receipts"
+        "393_eom_missed_call_recovery_runtime_privileges",
+        "394_eom_first_clean_completion_receipts",
     }
-    controlled_name = next(iter(CONTROLLED_DBA_MIGRATION_NAMES))
-    controlled_source = "SELECT 'controlled DBA migration'"
+    controlled_sources = {
+        controlled_name: f"SELECT '{controlled_name}'"
+        for controlled_name in CONTROLLED_DBA_MIGRATION_NAMES
+    }
     ordinary_source = "SELECT 'ordinary migration'"
-    (tmp_path / f"{controlled_name}.sql").write_text(controlled_source)
+    for controlled_name, controlled_source in controlled_sources.items():
+        (tmp_path / f"{controlled_name}.sql").write_text(controlled_source)
     (tmp_path / "395_ordinary_probe.sql").write_text(ordinary_source)
     pool = _SerializingPool(honor_lock=True)
     caplog.set_level(logging.INFO, logger="atlas.storage.migrations")
@@ -1382,17 +1386,28 @@ async def test_generic_run_skips_controlled_dba_migration_until_explicitly_selec
     await run_migrations(pool, migrations_dir=tmp_path)
 
     assert pool.applied_sql == [ordinary_source]
-    assert all(name != controlled_name for _version, name, _digest in pool.records)
-    assert "Skipping 1 controlled DBA migration" in caplog.text
-
-    await run_migrations(
-        pool,
-        migrations_dir=tmp_path,
-        only={controlled_name},
+    assert all(
+        name not in CONTROLLED_DBA_MIGRATION_NAMES
+        for _version, name, _digest in pool.records
     )
+    assert "Skipping 2 controlled DBA migration(s)" in caplog.text
 
-    assert pool.applied_sql == [ordinary_source, controlled_source]
-    assert any(name == controlled_name for _version, name, _digest in pool.records)
+    for controlled_name in sorted(CONTROLLED_DBA_MIGRATION_NAMES):
+        await run_migrations(
+            pool,
+            migrations_dir=tmp_path,
+            only={controlled_name},
+        )
+
+    assert pool.applied_sql == [
+        ordinary_source,
+        *(controlled_sources[name] for name in sorted(controlled_sources)),
+    ]
+    assert {
+        name
+        for _version, name, _digest in pool.records
+        if name in CONTROLLED_DBA_MIGRATION_NAMES
+    } == CONTROLLED_DBA_MIGRATION_NAMES
 
 
 @pytest.mark.asyncio
