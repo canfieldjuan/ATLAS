@@ -201,6 +201,16 @@ async def _require_role_admission_before_mutation(pool: Any, runtime_role: str) 
                             WHERE membership.member = runtime_role_state.oid
                               AND guard_role.rolname = 'atlas_eom_handoff_owner'
                        )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_roles AS delegating_login
+                            WHERE delegating_login.rolcanlogin
+                              AND NOT delegating_login.rolsuper
+                              AND delegating_login.oid <> runtime_role_state.oid
+                              AND pg_catalog.pg_has_role(
+                                  delegating_login.oid, runtime_role_state.oid, 'MEMBER'
+                              )
+                       )
                 ) AS runtime_role_ready,
                 EXISTS (
                     SELECT 1
@@ -217,6 +227,16 @@ async def _require_role_admission_before_mutation(pool: Any, runtime_role: str) 
                            SELECT 1
                              FROM pg_catalog.pg_auth_members AS membership
                             WHERE membership.member = nocodb_role.oid
+                       )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_roles AS delegating_login
+                            WHERE delegating_login.rolcanlogin
+                              AND NOT delegating_login.rolsuper
+                              AND delegating_login.oid <> nocodb_role.oid
+                              AND pg_catalog.pg_has_role(
+                                  delegating_login.oid, nocodb_role.oid, 'MEMBER'
+                              )
                        )
                 ) AS nocodb_role_ready
             """,

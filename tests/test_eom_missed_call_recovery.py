@@ -49,6 +49,9 @@ from atlas_brain.templates.email.estimate_confirmation import (  # noqa: E402
 from atlas_brain.templates.email.missed_call_recovery import (  # noqa: E402
     render_missed_call_recovery_email,
 )
+from scripts.apply_eom_missed_call_recovery_runtime_privileges import (
+    _require_role_admission_before_mutation,
+)
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +62,7 @@ _BOOKING_LINK = "https://calendar.app.google/eom-test-booking"
 _NOW = datetime(2026, 8, 21, 15, 0, tzinfo=timezone.utc)
 _NOCODB_TEST_PASSWORD = "test-only-missed-call-nocodb-password"
 _RUNTIME_PROBE_PASSWORD = "test-only-missed-call-runtime-password"
+_DELEGATED_LOGIN_PROBE_PASSWORD = "test-only-missed-call-delegated-login-password"
 _PRIVILEGE_REPAIR_MIGRATION = (
     MIGRATIONS / "393_eom_missed_call_recovery_runtime_privileges.sql"
 )
@@ -182,6 +186,10 @@ class _ConnectionPool:
     async def transaction(self):
         async with self._connection.transaction():
             yield self._connection
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self._connection
 
     async def fetch(self, *args: Any, **kwargs: Any) -> Any:
         return await self._connection.fetch(*args, **kwargs)
@@ -802,6 +810,155 @@ def _service(
 
 
 @pytest.mark.asyncio
+async def test_privilege_repair_rejects_delegated_admitted_logins_before_mutation() -> (
+    None
+):
+    """Block direct and transitive logins that can assume admitted identities."""
+
+    database_url = _database_url_or_skip()
+    runtime_role = f"eom_mc_delegated_runtime_{uuid4().hex[:16]}"
+    runtime_ident = _quote_ident(runtime_role)
+    delegated_login_role = f"eom_mc_delegated_login_{uuid4().hex[:16]}"
+    delegated_login_ident = _quote_ident(delegated_login_role)
+    delegated_group_role = f"eom_mc_delegated_group_{uuid4().hex[:16]}"
+    delegated_group_ident = _quote_ident(delegated_group_role)
+    runtime_role_created = False
+    delegated_login_created = False
+    delegated_group_created = False
+    delegated_login_connection = None
+
+    async with _test_store() as (admin_pool, schema):
+        connection = admin_pool._connection
+        try:
+            await _provision_privilege_repair_roles(connection)
+            database_name = await connection.fetchval("SELECT current_database()")
+            await connection.execute(
+                f"CREATE ROLE {runtime_ident} LOGIN NOINHERIT "
+                f"PASSWORD '{_RUNTIME_PROBE_PASSWORD}'"
+            )
+            runtime_role_created = True
+            await connection.execute(
+                f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} "
+                f"TO {runtime_ident}"
+            )
+            await connection.execute(
+                f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO {runtime_ident}"
+            )
+            await connection.execute(
+                "SELECT pg_catalog.set_config("
+                "'atlas.eom_missed_call_recovery_runtime_role', $1, FALSE)",
+                runtime_role,
+            )
+            await connection.execute(
+                f"CREATE ROLE {delegated_login_ident} LOGIN NOINHERIT "
+                f"PASSWORD '{_DELEGATED_LOGIN_PROBE_PASSWORD}'"
+            )
+            delegated_login_created = True
+            await connection.execute(
+                f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} "
+                f"TO {delegated_login_ident}"
+            )
+            await connection.execute(
+                f"CREATE ROLE {delegated_group_ident} NOLOGIN NOINHERIT"
+            )
+            delegated_group_created = True
+            await connection.execute(
+                f"GRANT {delegated_group_ident} TO {delegated_login_ident}"
+            )
+            delegated_login_connection = await asyncpg.connect(
+                database_url,
+                user=delegated_login_role,
+                password=_DELEGATED_LOGIN_PROBE_PASSWORD,
+            )
+
+            async def assert_repair_has_not_mutated_privileges() -> None:
+                assert not await connection.fetchval(
+                    """
+                    SELECT procedure.prosecdef
+                    FROM pg_catalog.pg_proc AS procedure
+                    WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
+                    """,
+                    f"{_quote_ident(schema)}.validate_eom_missed_call_contact_scope()",
+                )
+                assert not await connection.fetchval(
+                    """
+                    SELECT has_table_privilege(
+                        $1::text,
+                        to_regclass(format('%I.%I', $2::text, $3::text)),
+                        'UPDATE'
+                    )
+                    """,
+                    runtime_role,
+                    schema,
+                    "eom_missed_call_operation_receipts",
+                )
+
+            for target_role, target_ident in (
+                (runtime_role, runtime_ident),
+                ("atlas_nocodb", "atlas_nocodb"),
+            ):
+                for _delegation_path, membership_grantee_ident in (
+                    ("direct", delegated_login_ident),
+                    ("transitive", delegated_group_ident),
+                ):
+                    await connection.execute(
+                        f"GRANT {target_ident} TO {membership_grantee_ident}"
+                    )
+                    try:
+                        assert await connection.fetchval(
+                            "SELECT pg_catalog.pg_has_role("
+                            "$1::name, $2::name, 'MEMBER')",
+                            delegated_login_role,
+                            target_role,
+                        )
+                        await delegated_login_connection.execute(
+                            f"SET ROLE {target_ident}"
+                        )
+                        assert (
+                            await delegated_login_connection.fetchval(
+                                "SELECT current_user"
+                            )
+                            == target_role
+                        )
+                        await delegated_login_connection.execute("RESET ROLE")
+                        with pytest.raises(
+                            asyncpg.exceptions.RaiseError,
+                            match="must be an unprivileged",
+                        ):
+                            await connection.execute(
+                                _PRIVILEGE_REPAIR_MIGRATION.read_text()
+                            )
+                        with pytest.raises(RuntimeError, match="role admission failed"):
+                            await _require_role_admission_before_mutation(
+                                admin_pool, runtime_role
+                            )
+                        await assert_repair_has_not_mutated_privileges()
+                    finally:
+                        await connection.execute(
+                            f"REVOKE {target_ident} FROM {membership_grantee_ident}"
+                        )
+                    await _require_role_admission_before_mutation(
+                        admin_pool, runtime_role
+                    )
+
+        finally:
+            if delegated_login_connection is not None:
+                await delegated_login_connection.close()
+            if delegated_group_created:
+                await connection.execute(
+                    f"REVOKE {delegated_group_ident} FROM {delegated_login_ident}"
+                )
+                await connection.execute(f"DROP OWNED BY {delegated_group_ident}")
+                await connection.execute(f"DROP ROLE {delegated_group_ident}")
+            if delegated_login_created:
+                await connection.execute(f"DROP OWNED BY {delegated_login_ident}")
+                await connection.execute(f"DROP ROLE {delegated_login_ident}")
+            if runtime_role_created:
+                await connection.execute(f"DROP OWNED BY {runtime_ident}")
+                await connection.execute(f"DROP ROLE {runtime_ident}")
+
+
+@pytest.mark.asyncio
 async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> None:
     """Apply 393 in a disposable schema and exercise both restricted roles."""
 
@@ -831,7 +988,7 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 f"CREATE ROLE {stale_group_ident} NOLOGIN NOINHERIT"
             )
             stale_group_created = True
-            await connection.execute(f"CREATE ROLE {stale_login_ident} LOGIN INHERIT")
+            await connection.execute(f"CREATE ROLE {stale_login_ident} LOGIN NOINHERIT")
             stale_login_created = True
             await connection.execute(
                 f"GRANT {stale_group_ident} TO {stale_login_ident}"
@@ -1205,6 +1362,24 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
 
             runtime_pool = _ConnectionPool(runtime_connection)
             assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            for target_ident, membership_grantee_ident in (
+                (runtime_probe_ident, stale_login_ident),
+                (runtime_probe_ident, stale_group_ident),
+                ("atlas_nocodb", stale_login_ident),
+                ("atlas_nocodb", stale_group_ident),
+            ):
+                await connection.execute(
+                    f"GRANT {target_ident} TO {membership_grantee_ident}"
+                )
+                assert not await recovery_mod.missed_call_recovery_schema_ready(
+                    runtime_pool
+                )
+                await connection.execute(
+                    f"REVOKE {target_ident} FROM {membership_grantee_ident}"
+                )
+                assert await recovery_mod.missed_call_recovery_schema_ready(
+                    runtime_pool
+                )
             assert await runtime_connection.fetchval(
                 "SELECT has_function_privilege("
                 "current_user, to_regprocedure("

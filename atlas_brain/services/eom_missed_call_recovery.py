@@ -610,6 +610,40 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                                )
                          )
                    )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_roles AS runtime_role_state
+                       WHERE runtime_role_state.rolname = current_user
+                         AND EXISTS (
+                             SELECT 1
+                             FROM pg_roles AS delegating_login
+                             WHERE delegating_login.rolcanlogin
+                               AND NOT delegating_login.rolsuper
+                               AND delegating_login.oid <> runtime_role_state.oid
+                               AND pg_has_role(
+                                   delegating_login.oid,
+                                   runtime_role_state.oid,
+                                   'MEMBER'
+                               )
+                         )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM pg_roles AS nocodb_role
+                       WHERE nocodb_role.rolname = 'atlas_nocodb'
+                         AND EXISTS (
+                             SELECT 1
+                             FROM pg_roles AS delegating_login
+                             WHERE delegating_login.rolcanlogin
+                               AND NOT delegating_login.rolsuper
+                               AND delegating_login.oid <> nocodb_role.oid
+                               AND pg_has_role(
+                                   delegating_login.oid,
+                                   nocodb_role.oid,
+                                   'MEMBER'
+                               )
+                         )
+                   )
                    AND EXISTS (
                        SELECT 1 FROM pg_index AS idx
                        JOIN pg_class AS rel ON rel.oid = idx.indexrelid

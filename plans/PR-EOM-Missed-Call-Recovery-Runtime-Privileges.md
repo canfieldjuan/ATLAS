@@ -329,6 +329,47 @@ Max files: 10
   and first-clean paths/tests/services, while `main_eom` retains both the
   historical/DBA-only recovery exclusion and the first-clean pool hook.
 
+### Delegated-login admission repair contract (current review round)
+
+- Root cause: the intended exact runtime/NocoDB identity boundary is an
+  authorization-graph invariant, but migration 393 and the controlled DBA
+  runner inspect only memberships granted *to* the configured runtime or
+  `atlas_nocodb`. They do not reject a separate non-superuser login that can
+  assume either admitted login through a direct or transitive membership.
+  PostgreSQL's `pg_has_role(actor, target, 'MEMBER')` reports that ability, and
+  the admitted actor can then `SET ROLE` to the target. The service readiness
+  predicate checks table and guard state but does not attest either admitted
+  login against that incoming delegation path.
+- Correct fix must touch/change: before migration 393 creates `pgcrypto` or
+  changes an ACL, and before the runner creates `pgcrypto` or runs a historical
+  prelude, reject any non-superuser `LOGIN` other than the target role for which
+  `pg_has_role(login, target, 'MEMBER')` is true. Apply the same admission
+  boundary to the runtime worker's schema-readiness predicate for both the
+  current runtime identity and `atlas_nocodb`. Extend disposable-PostgreSQL
+  proof to cover direct and transitive delegated-login paths for both admitted
+  identities, including failed migration/readiness admission followed by
+  revocation and successful re-admission. Exercise the controlled runner's
+  read-only admission query against the same real role graph.
+- Must not change: do not grant, revoke, alter, or otherwise repair production
+  role memberships; the code must only refuse an unsafe graph. Do not change
+  the existing direct table/function ACL matrix, guard role flags, migration
+  389, generic migration runner, historical selector, normal startup tuple,
+  CRM routes/APIs, providers, billing, first-clean behavior, database schema,
+  or production data. Preserve the existing superuser DBA boundary: the new
+  delegated-login scan excludes superusers rather than treating DBA authority as
+  an ordinary runtime admission path.
+- Assumptions: a direct or transitive non-superuser `LOGIN` membership that
+  PostgreSQL reports through `pg_has_role(..., 'MEMBER')` is an assumable target
+  identity; the disposable database probes establish that behavior. The target
+  role itself is excluded because PostgreSQL reports a role as a member of
+  itself.
+- Acceptance criteria: migration 393 and the DBA runner reject direct and
+  transitive non-superuser login delegation to either admitted identity before
+  mutable work; worker readiness returns false for the same post-migration
+  graph and true again after revocation. The configured runtime and NocoDB
+  retain their prior allowed/denied operations when no unsafe delegation
+  exists.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -346,7 +387,9 @@ Max files: 10
      funnel DSN without logging its credentials, installs `pgcrypto` before an
      allowed historical prelude, and binds that login to migration 393. The
      migration fails closed if that role is absent, elevated, or has guard
-     membership; it does not assume a literal `atlas` login exists.
+     membership, or if a separate non-superuser login can assume either
+     admitted runtime/NocoDB identity; it does not assume a literal `atlas`
+     login exists.
   3. After applying the migration in a disposable schema, the configured runtime
      role has
      the exact required table privileges: read/insert/lock for receipts and
@@ -359,10 +402,11 @@ Max files: 10
      proves both sides.
   5. `missed_call_recovery_schema_ready` returns false for a structurally
      complete schema with missing or extra runtime ACLs, runtime guard
-     membership, a disabled/rebound immutable-evidence trigger, or an untrusted
-     NocoDB direct path; it returns true only after the migration establishes
-     the expected privilege/guard properties, rejects any guard-function owner
-     or scope-validator authority drift, and rejects either replaced
+     membership, incoming delegation to either admitted login, a
+     disabled/rebound immutable-evidence trigger, or an untrusted NocoDB direct
+     path; it returns true only after the migration establishes the expected
+     privilege/guard properties, rejects any guard-function owner or
+     scope-validator authority drift, and rejects either replaced
      receipt/attempt fence body. The
      integration test settles the effect through the real query.
   6. `EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS` excludes DBA-only and
@@ -536,22 +580,30 @@ Parked hardening: none.
 
 ## Verification
 
-- `python -m pytest -q tests/test_eom_missed_call_privilege_runner.py` — `11
-  passed` locally, including committed-prelude retry and non-prelude-progress
-  rejection boundaries.
-- `python -m pytest -q tests/test_eom_missed_call_recovery.py` — `14 passed,
-  50 skipped` locally. The disposable-PostgreSQL role test is skipped because
-  `ATLAS_MIGRATION_TEST_DATABASE_URL` is absent in this workspace; hosted CI
-  remains the required real-role proof.
+- `python -m pytest -q tests/test_eom_missed_call_privilege_runner.py` — `17
+  passed` locally, including the controlled prelude admission boundary.
+- `ATLAS_MIGRATION_TEST_DATABASE_URL=... python -m pytest -q
+  tests/test_eom_missed_call_recovery.py` — `72 passed` locally against the
+  disposable PostgreSQL database. The new proof creates a non-superuser
+  `LOGIN NOINHERIT` actor and a `NOLOGIN NOINHERIT` intermediary, confirms
+  direct and transitive `pg_has_role(..., 'MEMBER')` plus actual `SET ROLE`,
+  then proves migration/runner rejection before privilege mutation and
+  readiness rejection/re-admission for both admitted identities.
 - `python -m pytest -q tests/test_eom_render_profile.py` — `64 passed` locally.
 - `python -m compileall -q scripts/apply_eom_missed_call_recovery_runtime_privileges.py
   atlas_brain/services/eom_missed_call_recovery.py
   tests/test_eom_missed_call_privilege_runner.py
   tests/test_eom_missed_call_recovery.py` — passed locally.
+- `python -m ruff format --check` for the changed Python sources — passed.
+  The file-wide `ruff check` remains non-green on its existing lint baseline;
+  a `HEAD` comparison of `tests/test_eom_missed_call_recovery.py` reports `11`
+  pre-existing errors. This privilege-boundary repair does not broaden into a
+  lint-baseline rewrite.
 - `git diff --check` and `python scripts/check_guard_class_closure.py --base
-  origin/main --strict` — passed locally. The repository mechanical review
-  wrapper remains required before publishing. No production database, role,
-  migration, or service restart was touched by this source slice.
+  origin/main --strict`, plus `python scripts/audit_plan_doc.py` — passed
+  locally. The repository mechanical review wrapper remains required before
+  publishing. No production database, role, migration, or service restart was
+  touched by this source slice.
 
 ## Estimated diff size
 
@@ -559,15 +611,15 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 11 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 310 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 968 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 344 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 988 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 578 |
-| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 445 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 630 |
+| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 465 |
 | `tests/test_eom_missed_call_privilege_runner.py` | 547 |
-| `tests/test_eom_missed_call_recovery.py` | 1459 |
+| `tests/test_eom_missed_call_recovery.py` | 1634 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **4408** |
+| **Total** | **4709** |
 
 ## Diff size rationale
 
