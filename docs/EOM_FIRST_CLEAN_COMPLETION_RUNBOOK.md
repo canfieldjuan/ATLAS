@@ -47,8 +47,11 @@ python scripts/apply_eom_first_clean_completion_schema.py --json
 
 The result redacts credentials and reports only the target host/database/schema
 label, executor status, named migration, and whether it is already recorded.
-Confirm the executor is a superuser and the target is the intended canonical
-EOM database and runtime schema.
+Before any DDL, the command compares the runtime and DBA connections' canonical
+schema, database name/OID, and connected server endpoint; it refuses a
+similarly named database or cluster target. Confirm the executor is a
+superuser and the target is the intended canonical EOM database and runtime
+schema.
 
 Then apply only migration 394:
 
@@ -63,8 +66,11 @@ sequence, and their trigger functions to `atlas_eom_handoff_owner`, rejects any
 direct or inherited guard path held by a non-superuser login, and grants the
 Atlas runtime only schema `USAGE, CREATE`, table `SELECT, INSERT, UPDATE` for
 row locking and receipt creation, plus sequence `USAGE` needed by the lifecycle
-default. It does not grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`,
-sequence `SELECT` or `UPDATE`, schema ownership, or customer delivery authority.
+default. The two evidence-reading trigger functions pin `pg_catalog` before
+that mutable application schema and `pg_temp` last, so runtime-created
+operators/functions cannot shadow built-in admission predicates. The migration
+does not grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, sequence `SELECT`
+or `UPDATE`, schema ownership, or customer delivery authority.
 
 Remove the temporary DBA DSN injection after the result reports
 `"migration_recorded": true`.
@@ -93,9 +99,10 @@ Remove the temporary DBA DSN injection after the result reports
 If the DBA preflight or apply fails, leave the route unavailable and correct
 the database prerequisites or guard-role configuration before retrying. The
 normal runtime must not be granted temporary guard membership or `REFERENCES`
-as a workaround. If the configured and observed runtime schemas differ, correct
-the typed schema configuration or the funnel DSN's deployment setting; do not
-override `search_path` ad hoc on a command line.
+as a workaround. If the configured and observed runtime/DBA schema, database
+identity, or server endpoint differ, correct the typed schema configuration or
+the funnel/DBA DSN deployment setting; do not override `search_path` ad hoc on
+a command line.
 
 If application code must be rolled back after a successful apply, remove or
 disable the completion consumer/route first and retain the append-only receipt

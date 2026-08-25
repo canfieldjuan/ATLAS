@@ -382,7 +382,7 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           AND protected_function.pronargs = 0
                           AND protected_function.proconfig @> ARRAY[
                               format(
-                                  'search_path=%I, pg_catalog, pg_temp',
+                                  'search_path=pg_catalog, %I, pg_temp',
                                   current_schema()
                               )
                           ]

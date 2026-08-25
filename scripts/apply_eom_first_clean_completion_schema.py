@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from dataclasses import dataclass
 import json
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -37,6 +38,28 @@ DBA_DSN_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV
 DBA_SCHEMA_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV
 FUNNEL_DSN_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
 MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
+
+
+@dataclass(frozen=True)
+class _TargetIdentity:
+    """One connection's canonical EOM database and schema target."""
+
+    schema_name: str
+    database_name: str
+    database_oid: int
+    server_address: str | None
+    server_port: int | None
+
+    @property
+    def database_identity(self) -> tuple[str, int, str | None, int | None]:
+        """Return only fields that must match across runtime and DBA pools."""
+
+        return (
+            self.database_name,
+            self.database_oid,
+            self.server_address,
+            self.server_port,
+        )
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -111,39 +134,109 @@ async def _create_pool(
     return await asyncpg.create_pool(**pool_kwargs)
 
 
-async def _current_schema(pool: Any) -> str:
-    """Read one pool's effective schema without changing its session state."""
+def _require_database_name(value: object, *, source: str) -> str:
+    """Reject a missing database name rather than comparing an ambiguous target."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Missing or invalid database identity from {source}")
+    return value
+
+
+def _require_database_oid(value: object, *, source: str) -> int:
+    """Accept only one positive PostgreSQL database OID."""
+
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RuntimeError(f"Missing or invalid database identity from {source}")
+    return value
+
+
+def _require_server_endpoint(
+    address: object,
+    port: object,
+    *,
+    source: str,
+) -> tuple[str | None, int | None]:
+    """Preserve Unix-socket targets, but reject malformed network endpoints."""
+
+    if address is None and port is None:
+        return None, None
+    if (
+        not isinstance(address, str)
+        or not address.strip()
+        or isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+    ):
+        raise RuntimeError(f"Missing or invalid database identity from {source}")
+    return address, port
+
+
+async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
+    """Read the current schema and stable database/server identity without DDL."""
 
     async with pool.acquire() as connection:
-        return _require_schema_name(
-            await connection.fetchval("SELECT current_schema()"),
-            source="EOM funnel runtime current_schema()",
+        row = await connection.fetchrow(
+            """
+            SELECT pg_catalog.current_schema() AS schema_name,
+                   pg_catalog.current_database() AS database_name,
+                   (
+                       SELECT oid
+                         FROM pg_catalog.pg_database
+                        WHERE datname = pg_catalog.current_database()
+                   ) AS database_oid,
+                   pg_catalog.inet_server_addr()::text AS server_address,
+                   pg_catalog.inet_server_port() AS server_port
+            """
         )
+    if row is None:
+        raise RuntimeError(f"Missing or invalid database identity from {source}")
+    schema_name = _require_schema_name(
+        row["schema_name"],
+        source=f"{source} current_schema()",
+    )
+    database_name = _require_database_name(row["database_name"], source=source)
+    database_oid = _require_database_oid(row["database_oid"], source=source)
+    server_address, server_port = _require_server_endpoint(
+        row["server_address"],
+        row["server_port"],
+        source=source,
+    )
+    return _TargetIdentity(
+        schema_name=schema_name,
+        database_name=database_name,
+        database_oid=database_oid,
+        server_address=server_address,
+        server_port=server_port,
+    )
 
 
 async def _migration_state(
     pool: Any,
     *,
-    expected_schema_name: str,
+    expected_target: _TargetIdentity,
 ) -> tuple[bool, bool]:
-    """Return executor/migration state after re-attesting the pinned schema."""
+    """Return executor/migration state after re-attesting its full target."""
+
+    observed_target = await _target_identity(
+        pool,
+        source="controlled DBA pool",
+    )
+    if observed_target.schema_name != expected_target.schema_name:
+        raise RuntimeError(
+            "Controlled DBA pool did not resolve to the configured EOM funnel schema"
+        )
+    if observed_target.database_identity != expected_target.database_identity:
+        raise RuntimeError(
+            "Controlled DBA pool does not target the EOM funnel runtime database"
+        )
 
     async with pool.acquire() as connection:
-        observed_schema_name = _require_schema_name(
-            await connection.fetchval("SELECT current_schema()"),
-            source="controlled DBA pool current_schema()",
-        )
-        if observed_schema_name != expected_schema_name:
-            raise RuntimeError(
-                "Controlled DBA pool did not resolve to the configured EOM "
-                "funnel schema"
-            )
         executor_is_superuser = bool(
             await connection.fetchval(
                 """
                 SELECT COALESCE((
                     SELECT role.rolsuper
-                    FROM pg_roles AS role
+                    FROM pg_catalog.pg_roles AS role
                     WHERE role.rolname = current_user
                 ), FALSE)
                 """
@@ -151,7 +244,7 @@ async def _migration_state(
         )
         migrations_table_exists = bool(
             await connection.fetchval(
-                "SELECT to_regclass('schema_migrations') IS NOT NULL"
+                "SELECT pg_catalog.to_regclass('schema_migrations') IS NOT NULL"
             )
         )
         migration_recorded = False
@@ -188,10 +281,13 @@ async def _run(
 
     runtime_pool = await create_pool(funnel_database_url)
     try:
-        runtime_schema_name = await _current_schema(runtime_pool)
+        runtime_target = await _target_identity(
+            runtime_pool,
+            source="EOM funnel runtime",
+        )
     finally:
         await runtime_pool.close()
-    if runtime_schema_name != schema_name:
+    if runtime_target.schema_name != schema_name:
         raise RuntimeError(
             "Configured controlled DBA schema does not match the EOM funnel "
             "runtime schema"
@@ -201,7 +297,7 @@ async def _run(
     try:
         executor_is_superuser, migration_recorded = await _migration_state(
             pool,
-            expected_schema_name=schema_name,
+            expected_target=runtime_target,
         )
         result: dict[str, object] = {
             "target": _safe_target_label(database_url, schema_name=schema_name),
@@ -219,7 +315,7 @@ async def _run(
             await run_migrations_fn(pool, only=(MIGRATION_NAME,))
             _executor_is_superuser, migration_recorded = await _migration_state(
                 pool,
-                expected_schema_name=schema_name,
+                expected_target=runtime_target,
             )
             if not migration_recorded:
                 raise RuntimeError(

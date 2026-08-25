@@ -378,17 +378,19 @@ DECLARE
 BEGIN
     -- PostgreSQL prepends a caller's temporary schema unless pg_temp is named
     -- explicitly. These invoker trigger functions validate permanent evidence,
-    -- so pin the target schema first and pg_temp last rather than trusting a
-    -- runtime connection's mutable search_path.
+    -- so pin pg_catalog before the mutable application schema and pg_temp last.
+    -- The direct runtime retains schema CREATE for ordinary future migrations;
+    -- catalog-first resolution prevents any runtime-created function/operator
+    -- from shadowing the built-in predicates used by this admission boundary.
     EXECUTE format(
         'ALTER FUNCTION %I.require_eom_first_clean_completion_operation_scope() '
-        || 'SET search_path TO %I, pg_catalog, pg_temp',
+        || 'SET search_path TO pg_catalog, %I, pg_temp',
         schema_name,
         schema_name
     );
     EXECUTE format(
         'ALTER FUNCTION %I.require_eom_first_clean_completion_receipt() '
-        || 'SET search_path TO %I, pg_catalog, pg_temp',
+        || 'SET search_path TO pg_catalog, %I, pg_temp',
         schema_name,
         schema_name
     );

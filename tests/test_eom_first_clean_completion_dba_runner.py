@@ -43,14 +43,27 @@ class _Connection:
         self._state = state
 
     async def fetchval(self, query: str, *_args: object) -> object:
-        if "current_schema()" in query:
-            return self._state.schema_name
         if "rolsuper" in query:
             return self._state.executor_is_superuser
         if "to_regclass" in query:
             return self._state.migrations_table_exists
         if "schema_migrations" in query:
             return self._state.migration_recorded
+        raise AssertionError(f"unexpected query: {query}")
+
+    async def fetchrow(self, query: str, *_args: object) -> object:
+        if "current_schema() AS schema_name" in query:
+            return {
+                "schema_name": self._state.schema_name,
+                "database_name": getattr(self._state, "database_name", "atlas"),
+                "database_oid": getattr(self._state, "database_oid", 16_384),
+                "server_address": getattr(
+                    self._state,
+                    "server_address",
+                    "127.0.0.1",
+                ),
+                "server_port": getattr(self._state, "server_port", 5432),
+            }
         raise AssertionError(f"unexpected query: {query}")
 
 
@@ -363,6 +376,90 @@ def test_runner_rejects_runtime_schema_mismatch_before_opening_dba_pool(
     assert runtime_pool.closed is True
 
 
+@pytest.mark.parametrize(
+    ("identity_field", "dba_value"),
+    (
+        ("database_name", "other_atlas"),
+        ("database_oid", 16_385),
+        ("server_address", "192.0.2.55"),
+        ("server_port", 5544),
+    ),
+)
+def test_runner_rejects_dba_database_identity_mismatch_before_migration(
+    monkeypatch,
+    identity_field: str,
+    dba_value: object,
+) -> None:
+    """Schema equality alone cannot admit a similarly named clone target."""
+
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    runtime_pool = _Pool(
+        SimpleNamespace(
+            schema_name="eom_canonical",
+            database_name="atlas",
+            database_oid=16_384,
+            server_address="127.0.0.1",
+            server_port=5432,
+        )
+    )
+    dba_target = {
+        "schema_name": "eom_canonical",
+        "database_name": "atlas",
+        "database_oid": 16_384,
+        "server_address": "127.0.0.1",
+        "server_port": 5432,
+        "executor_is_superuser": True,
+        "migrations_table_exists": True,
+        "migration_recorded": False,
+    }
+    dba_target[identity_field] = dba_value
+    dba_pool = _Pool(SimpleNamespace(**dba_target))
+    calls: list[tuple[str, str | None]] = []
+    migration_calls: list[object] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        calls.append((database_url, schema_name))
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    async def run_migrations(*args: object, **_kwargs: object) -> None:
+        migration_calls.append(args)
+
+    with pytest.raises(
+        RuntimeError,
+        match="does not target the EOM funnel runtime database",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args(["--apply"]),
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+
+    assert calls == [
+        (runtime_database_url, None),
+        ("postgresql://example.test/atlas", "eom_canonical"),
+    ]
+    assert migration_calls == []
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
 def test_runner_rejects_absent_runtime_schema_before_opening_dba_pool(
     monkeypatch,
 ) -> None:
@@ -397,6 +494,55 @@ def test_runner_rejects_absent_runtime_schema_before_opening_dba_pool(
                 ),
             )
         )
+    assert pool_calls == [(runtime_database_url, None)]
+    assert runtime_pool.closed is True
+
+
+def test_runner_rejects_missing_runtime_database_identity_before_opening_dba_pool(
+    monkeypatch,
+) -> None:
+    """A missing catalog identity must not degrade into schema-only matching."""
+
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    runtime_pool = _Pool(
+        SimpleNamespace(
+            schema_name="eom_canonical",
+            database_name="atlas",
+            database_oid=None,
+            server_address="127.0.0.1",
+            server_port=5432,
+        )
+    )
+    pool_calls: list[tuple[str, str | None]] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        pool_calls.append((database_url, schema_name))
+        assert database_url == runtime_database_url
+        assert schema_name is None
+        return runtime_pool
+
+    with pytest.raises(
+        RuntimeError,
+        match="Missing or invalid database identity from EOM funnel runtime",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+
     assert pool_calls == [(runtime_database_url, None)]
     assert runtime_pool.closed is True
 

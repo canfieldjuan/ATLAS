@@ -929,6 +929,135 @@ async def test_receipt_trigger_rejects_temp_relation_shadowing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_receipt_trigger_resists_runtime_operator_shadowing() -> None:
+    """Catalog-first admission predicates ignore an operator created by atlas."""
+
+    async with _test_store() as (pool, schema):
+        contact_id, customer_id, site_id = await _insert_customer(pool)
+        assert customer_id is not None and site_id is not None
+        handoff_id = await pool._connection.fetchval(
+            "SELECT id FROM eom_customer_handoffs WHERE contact_id = $1",
+            contact_id,
+        )
+        assert handoff_id is not None
+        runtime_connection = pool._runtime_connection
+        operation_key = _operation_key("operator-shadow")
+        fingerprint = "d" * 64
+        completed_at = _NOW - timedelta(hours=1)
+        fake_customer_id = next(_TRACKER_IDS)
+        fake_site_id = next(_TRACKER_IDS)
+        receipt_id = uuid4()
+        await runtime_connection.execute(
+            """
+            INSERT INTO eom_first_clean_completion_operation_receipts (
+                operation_key, contact_id, request_fingerprint
+            ) VALUES ($1, $2, $3)
+            """,
+            operation_key,
+            contact_id,
+            fingerprint,
+        )
+        await runtime_connection.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events (
+                contact_id, event_type, actor, source, operation_key, metadata,
+                occurred_at
+            ) VALUES (
+                $1, 'first_clean_completed', 'employee:7:Juan', 'time_tracker',
+                $2,
+                jsonb_build_object(
+                    'completion_receipt_id', $3::text,
+                    'handoff_id', $4::text,
+                    'tracker_customer_id', $5::bigint,
+                    'tracker_site_id', $6::bigint,
+                    'tracker_service_kind', 'job',
+                    'tracker_service_id', 9002::bigint
+                ),
+                $7
+            )
+            """,
+            contact_id,
+            operation_key,
+            str(receipt_id),
+            str(handoff_id),
+            fake_customer_id,
+            fake_site_id,
+            completed_at,
+        )
+
+        schema_ident = _quote_ident(schema)
+        rogue_function_ident = _quote_ident("eom_completion_unsafe_bigint_equality")
+        await runtime_connection.execute(
+            f"""
+            CREATE FUNCTION {schema_ident}.{rogue_function_ident}(BIGINT, BIGINT)
+            RETURNS BOOLEAN
+            LANGUAGE sql
+            IMMUTABLE
+            AS 'SELECT TRUE';
+            CREATE OPERATOR {schema_ident}.= (
+                LEFTARG = BIGINT,
+                RIGHTARG = BIGINT,
+                PROCEDURE = {schema_ident}.{rogue_function_ident}
+            )
+            """
+        )
+
+        receipt_insert = """
+            INSERT INTO eom_first_clean_completion_receipts (
+                id, contact_id, handoff_id, tracker_customer_id,
+                tracker_site_id, tracker_service_kind, tracker_service_id,
+                completed_at, operation_key, request_fingerprint, actor_id,
+                actor_name
+            ) VALUES (
+                $1, $2, $3, $4, $5, 'job', 9002, $6, $7, $8, 7, 'Juan'
+            )
+        """
+        receipt_args = (
+            receipt_id,
+            contact_id,
+            handoff_id,
+            fake_customer_id,
+            fake_site_id,
+            completed_at,
+            operation_key,
+            fingerprint,
+        )
+        function_ident = _quote_ident("require_eom_first_clean_completion_receipt")
+        try:
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="matching active residential customer handoff",
+            ):
+                await runtime_connection.execute(receipt_insert, *receipt_args)
+
+            # The negative control proves the assertion exercises operator
+            # resolution: schema-first would admit the deliberately mismatched
+            # tracker identity. This disposable schema is torn down after test.
+            await pool._connection.execute(
+                f"ALTER FUNCTION {function_ident}() "
+                f"SET search_path TO {schema_ident}, pg_catalog, pg_temp"
+            )
+            await runtime_connection.execute(receipt_insert, *receipt_args)
+            assert (
+                await pool.fetchval(
+                    "SELECT COUNT(*) FROM eom_first_clean_completion_receipts"
+                )
+                == 1
+            )
+        finally:
+            await pool._connection.execute(
+                f"ALTER FUNCTION {function_ident}() "
+                f"SET search_path TO pg_catalog, {schema_ident}, pg_temp"
+            )
+            await pool._connection.execute(
+                f"DROP OPERATOR IF EXISTS {schema_ident}.= (BIGINT, BIGINT)"
+            )
+            await pool._connection.execute(
+                f"DROP FUNCTION IF EXISTS {schema_ident}.{rogue_function_ident}"
+            )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("privileged_option", "unprivileged_option"),
     (
@@ -990,7 +1119,7 @@ async def test_schema_readiness_reattests_receipt_guard_owners_and_paths() -> No
             finally:
                 await pool._connection.execute(
                     f"ALTER FUNCTION {function_ident}() "
-                    f"SET search_path TO {schema_ident}, pg_catalog, pg_temp"
+                    f"SET search_path TO pg_catalog, {schema_ident}, pg_temp"
                 )
             assert await first_clean_completion_schema_ready(pool) is True
 
