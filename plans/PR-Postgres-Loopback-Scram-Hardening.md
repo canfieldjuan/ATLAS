@@ -41,8 +41,8 @@ incorrectly said that admissible state could contain no `missing_source`.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
-5. Remove the unviable, uncommitted encrypted-credential experiment and tests;
-   it would require an unsupported plaintext-secret fallback.
+5. Exclude the unviable encrypted-credential experiment from this PR; it would
+   require an unsupported plaintext-secret fallback.
 
 #### Explicit non-scope
 
