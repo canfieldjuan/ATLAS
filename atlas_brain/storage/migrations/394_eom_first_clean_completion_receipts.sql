@@ -94,6 +94,27 @@ BEGIN
             'a pre-existing atlas_eom_handoff_owner must be NOLOGIN before running 394_eom_first_clean_completion_receipts';
     END IF;
 
+    -- A prior DBA may already have changed a former LOGIN guard to NOLOGIN
+    -- without terminating its authenticated session. That session retains the
+    -- role's future ownership authority, so reject it before any protected
+    -- object is transferred. A session in another database cannot reach this
+    -- database's relations; target only the current database boundary.
+    IF EXISTS (
+        SELECT 1
+          FROM pg_stat_activity AS activity
+          JOIN pg_roles AS guard_role
+            ON guard_role.rolname = 'atlas_eom_handoff_owner'
+         WHERE activity.usesysid = guard_role.oid
+           AND activity.datid = (
+               SELECT database.oid
+                 FROM pg_database AS database
+                WHERE database.datname = current_database()
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'atlas_eom_handoff_owner must have no live sessions before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1 FROM pg_roles WHERE rolname = 'atlas_eom_handoff_owner'
     ) THEN

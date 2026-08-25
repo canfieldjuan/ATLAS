@@ -34,7 +34,9 @@ only the dedicated runner's explicit selection may apply it.
    `NOLOGIN`; migration 394 refuses it rather than converting a role that may
    have an authenticated session. The configured funnel runtime DSN must also
    authenticate directly as `atlas`; the runner verifies both `current_user`
-   and `session_user` before it opens the DBA pool.
+   and `session_user` before it opens the DBA pool. The guard must also have no
+   live session in the target database: `NOLOGIN` prevents future connections
+   but does not terminate a former direct guard session.
 3. Inject a short-lived, protected PostgreSQL superuser DSN into
    `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL`. Do not put that DSN in
    a command line, browser configuration, source file, or application runtime
@@ -86,8 +88,9 @@ handoff table and its protected functions to be guard-owned, transfers the
 schema plus the two receipt tables, lifecycle table, lifecycle ordering
     sequence, and their trigger functions to `atlas_eom_handoff_owner`, rebuilds
     the lifecycle append-only function and both of its trigger definitions before
-    that ownership transfer. It rejects a pre-existing login-enabled guard and
-    any direct or inherited guard path held by a non-superuser login, rejects
+    that ownership transfer. It rejects a pre-existing login-enabled guard, any
+    live direct guard session in the target database, and any direct or
+    inherited guard path held by a non-superuser login, rejects
     database ownership or effective membership in a role with PostgreSQL
     administrative attributes, and grants the
 Atlas runtime only schema `USAGE, CREATE`, table `SELECT, INSERT, UPDATE` for

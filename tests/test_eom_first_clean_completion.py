@@ -1789,6 +1789,50 @@ async def test_completion_migration_rejects_preexisting_login_guard_before_ddl()
 
 
 @pytest.mark.asyncio
+async def test_completion_migration_rejects_live_former_guard_session_before_ddl() -> (
+    None
+):
+    """A historical guard session must not gain a newly transferred boundary."""
+
+    migrations = tuple(
+        migration
+        for migration in _COMPLETION_SCHEMA_MIGRATIONS
+        if migration != "394_eom_first_clean_completion_receipts"
+    )
+    guard_connection: Any | None = None
+    async with _test_store(migrations=migrations) as (pool, _schema):
+        try:
+            await pool._connection.execute(
+                "ALTER ROLE atlas_eom_handoff_owner LOGIN PASSWORD 'test-guard-session'"
+            )
+            guard_connection = await asyncpg.connect(
+                _dba_database_url_or_skip(),
+                user="atlas_eom_handoff_owner",
+                password="test-guard-session",
+            )
+            await pool._connection.execute("ALTER ROLE atlas_eom_handoff_owner NOLOGIN")
+
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="atlas_eom_handoff_owner must have no live sessions",
+            ):
+                await pool._connection.execute(
+                    (
+                        MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+                    ).read_text()
+                )
+            assert await pool._connection.fetchval(
+                "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+            )
+        finally:
+            if guard_connection is not None:
+                await guard_connection.close()
+            await pool._connection.execute(
+                "ALTER ROLE atlas_eom_handoff_owner NOLOGIN PASSWORD NULL"
+            )
+
+
+@pytest.mark.asyncio
 async def test_completion_migration_requires_canonical_lifecycle_sequence_before_ddl() -> (
     None
 ):
