@@ -386,6 +386,16 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
         )
         messages.append("proved installed health service and enabled timer")
         return messages
+    except KeyboardInterrupt as exc:
+        rollback_errors = _rollback_install(
+            snapshots,
+            previous_timer,
+            runner,
+            enrollment_attempted=enrollment_attempted,
+        )
+        if rollback_errors:
+            exc.add_note(f"rollback failed: {'; '.join(rollback_errors)}")
+        raise
     except (OSError, RuntimeError) as exc:
         rollback_errors = _rollback_install(
             snapshots,

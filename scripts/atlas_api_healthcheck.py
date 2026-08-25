@@ -452,6 +452,13 @@ def state_with_pending_notifications(
     return state
 
 
+def result_with_pending_alert(provider_exit_code: int) -> int:
+    """Keep a provider outage dominant over secondary alert delivery."""
+    if provider_exit_code == EXIT_DOWN:
+        return EXIT_DOWN
+    return EXIT_ALERT_UNDELIVERED
+
+
 def state_with_recovery_intent(state: dict[str, object], service: str) -> dict[str, object]:
     pending_state = dict(state)
     pending_state.setdefault("status", "healthy")
@@ -549,7 +556,7 @@ def run_healthcheck(
         print(f"{observation.status.upper()}: {observation.detail}")
         if settings.no_alert:
             print("WARNING --no-alert: notifications queued for retry")
-            return EXIT_ALERT_UNDELIVERED
+            return result_with_pending_alert(exit_code)
 
         for index, notification in enumerate(notifications):
             title, body, priority, tags = alert_message(
@@ -557,7 +564,7 @@ def run_healthcheck(
             )
             if not notifier(settings.ntfy_url, settings.ntfy_topic, title, body, priority, tags):
                 print("WARNING alert undelivered; transition remains queued for retry")
-                return EXIT_ALERT_UNDELIVERED
+                return result_with_pending_alert(exit_code)
             write_state(
                 state_path,
                 state_with_pending_notifications(next_state, notifications[index + 1 :]),

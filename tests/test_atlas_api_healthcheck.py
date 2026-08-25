@@ -525,7 +525,7 @@ def test_undelivered_down_transition_is_retried(tmp_path):
     first = healthcheck.run_healthcheck(
         settings, runner=runner, opener=_opener(503), notifier=notifier, sleeper=lambda _: None
     )
-    assert first == healthcheck.EXIT_ALERT_UNDELIVERED
+    assert first == healthcheck.EXIT_DOWN
     assert _state(settings)["pending_notifications"][0]["alert"] == "down"
 
     second = healthcheck.run_healthcheck(
@@ -753,6 +753,21 @@ def test_missing_notification_configuration_does_not_block_recovery(tmp_path):
     assert _state(settings)["pending_notifications"][0]["alert"] == "auto-recovered"
 
 
+def test_failed_recovery_with_undelivered_alert_preserves_down_exit(tmp_path):
+    settings = _settings(tmp_path)
+
+    result = healthcheck.run_healthcheck(
+        settings,
+        runner=_Runner(active=False, start_returncode=1),
+        opener=_opener(204),
+        notifier=lambda *args: False,
+        sleeper=lambda _: None,
+    )
+
+    assert result == healthcheck.EXIT_DOWN
+    assert _state(settings)["pending_notifications"][0]["alert"] == "down"
+
+
 def test_no_alert_does_not_consume_a_transition(tmp_path):
     settings = _settings(tmp_path, no_alert=True)
 
@@ -764,7 +779,7 @@ def test_no_alert_does_not_consume_a_transition(tmp_path):
         sleeper=lambda _: None,
     )
 
-    assert result == healthcheck.EXIT_ALERT_UNDELIVERED
+    assert result == healthcheck.EXIT_DOWN
     assert _state(settings)["pending_notifications"][0]["alert"] == "down"
 
 
@@ -1299,6 +1314,49 @@ def test_installer_restores_files_and_timer_when_service_proof_fails(tmp_path):
     assert runner.timer_enabled
     assert runner.timer_active
     assert ("systemctl", "--user", "enable", "--now", installer.TIMER_NAME) not in runner.commands
+    assert runner.commands[-3:] == [
+        ("systemctl", "--user", "daemon-reload"),
+        ("systemctl", "--user", "enable", installer.TIMER_NAME),
+        ("systemctl", "--user", "start", installer.TIMER_NAME),
+    ]
+
+
+def test_installer_rolls_back_before_reraising_operator_cancellation(tmp_path):
+    paths = _install_paths(tmp_path)
+    paths.installed_monitor.parent.mkdir(parents=True, exist_ok=True)
+    paths.installed_monitor.write_bytes(b"previous-monitor")
+    paths.installed_monitor.chmod(0o700)
+    paths.notification_env.parent.mkdir(parents=True, exist_ok=True)
+    paths.notification_env.write_text(
+        f"{installer.TOPIC_ENV}=previous-private-topic\n", encoding="utf-8"
+    )
+    paths.notification_env.chmod(0o600)
+    runner = _InstallerRunner(timer_enabled=True, timer_active=True)
+    proof_command = (
+        "systemctl",
+        "--user",
+        "start",
+        "--wait",
+        installer.SERVICE_NAME,
+    )
+
+    def interrupting_runner(command):
+        if tuple(command) == proof_command:
+            runner.commands.append(proof_command)
+            raise KeyboardInterrupt
+        return runner(command)
+
+    with pytest.raises(KeyboardInterrupt):
+        installer.install(paths, runner=interrupting_runner, environment={})
+
+    assert paths.installed_monitor.read_bytes() == b"previous-monitor"
+    assert not (paths.systemd_dir / installer.SERVICE_NAME).exists()
+    assert not (paths.systemd_dir / installer.TIMER_NAME).exists()
+    assert paths.notification_env.read_text(encoding="utf-8") == (
+        f"{installer.TOPIC_ENV}=previous-private-topic\n"
+    )
+    assert runner.timer_enabled
+    assert runner.timer_active
     assert runner.commands[-3:] == [
         ("systemctl", "--user", "daemon-reload"),
         ("systemctl", "--user", "enable", installer.TIMER_NAME),

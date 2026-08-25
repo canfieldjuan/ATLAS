@@ -180,6 +180,10 @@ Max files: 6
 - After outbox persistence but before notification: the next cycle retries.
 - After successful notification but before acknowledgement persistence: a
   duplicate notification is admitted; silent loss is not.
+- After the installer stops the prior timer or replaces any installation file,
+  an operator `KeyboardInterrupt` runs the same rollback as an installation
+  failure and is then re-raised. `SIGKILL` remains outside the rollback boundary;
+  atomic file replacement still selects a complete prior or next file.
 - If state cannot be read, decoded, locked, or atomically written, the cycle
   fails before issuing a new recovery side effect. A SIGKILL cannot interrupt an
   atomic file replacement, although it can select either the prior or next
@@ -191,9 +195,9 @@ For every admitted interleaving: the monitor never starts an unloaded,
 transitional, failed, query-unknown, or maintenance-protected provider; every
 issued recovery start is preceded by durable intent; every derived alert is
 either durably queued or acknowledged after delivery; and installation is
-reported verified only when source bytes, private configuration, timer state,
-and systemd's loaded definitions agree. Notification delivery is at-least-once,
-not exactly-once.
+reported verified only when the provider proof is non-down and source bytes,
+private configuration, timer state, and systemd's loaded definitions agree.
+Notification delivery is at-least-once, not exactly-once.
 
 #### Closed-surface alternatives
 
@@ -231,6 +235,37 @@ not exactly-once.
   malformed HTTP at both boundaries, invalid numeric environment on both
   maintenance actions and the healthcheck path; syntax, systemd verification,
   focused maturity, plan sync, and diff audit. GitHub runs the full unit gate.
+
+### Contract revision: outcome precedence and installer cancellation
+
+- New evidence: notification delivery failure currently returns exit `4` for
+  both a healthy/recovered provider and a provider that remains down. Because
+  the systemd unit accepts exit `4`, the installer's service proof can therefore
+  succeed while the provider is unavailable. Separately, the installer mutates
+  timer and file state inside a transaction that catches `OSError` and
+  `RuntimeError`, but an operator `KeyboardInterrupt` bypasses rollback.
+- Revised root cause: the monitor collapses the provider observation and remote
+  alert-delivery result into one scalar without failure precedence, while the
+  installer transaction omits an admitted operator-cancellation exception from
+  its rollback boundary.
+- Revised required change surface: retain exit `3` whenever the current provider
+  outcome is down even if its alert remains queued; use exit `4` only when the
+  provider outcome is non-down and alert delivery remains pending; run the
+  existing installer rollback for `KeyboardInterrupt` and then re-raise the
+  cancellation; cover both outcome axes and cancellation after mutation in the
+  focused test file.
+- Revised explicit non-scope: do not change the systemd success-status set,
+  alert queue or retry semantics, timer cadence, notification destinations,
+  public CLI, dependencies, schemas, funnel/CRM behavior, or live deployment.
+  Non-finite recovery-interval validation and nonzero desktop `notify-send`
+  diagnostics are valid hardening but remain parked because neither blocks the
+  observed provider recovery proof. Do not add or change a workflow: the
+  existing every-PR Unit Gate escalates this config diff to the full unit suite.
+- Revised verification plan: focused regressions for down-plus-undelivered,
+  recovered-plus-undelivered, and installer `KeyboardInterrupt` rollback;
+  focused pytest and syntax checks; systemd unit verification; selector proof
+  that the PR runs the full Unit Gate; plan sync and diff audit. GitHub remains
+  the source of truth for the full Unit Gate.
 
 ### Boundary-change enumeration
 
@@ -324,11 +359,18 @@ back prior files/timer state on failure; later `--check` is read-only.
   this local liveness monitor, and this PR must not change that network boundary.
 - A deployment-time authenticated, Render-origin funnel smoke is deferred until
   a supported provider hosting/network path is selected and can be tested.
+- Rejecting non-finite recovery intervals is parked as configuration hardening;
+  ordinary numeric and negative-value validation remains unchanged, and this
+  does not alter the provider-result precedence required for installer proof.
+- Reporting a nonzero desktop `notify-send` return code is parked as secondary
+  observability hardening; desktop notification remains best-effort and remote
+  ntfy delivery plus provider outcome remain the operational contract.
 
 Parking predicate: network-topology changes and active-process recovery are
 parked unless they block this inactive-unit recovery path.
 
-Parked hardening: none.
+Parked hardening: non-finite recovery-interval validation and nonzero desktop
+notification exit diagnostics, as listed above.
 
 ## Verification
 
@@ -344,8 +386,8 @@ Parked hardening: none.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 19 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 351 |
-| `scripts/atlas_api_healthcheck.py` | 642 |
-| `scripts/install_atlas_api_healthcheck.py` | 472 |
-| `tests/test_atlas_api_healthcheck.py` | 1341 |
-| **Total** | **2835** |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 393 |
+| `scripts/atlas_api_healthcheck.py` | 649 |
+| `scripts/install_atlas_api_healthcheck.py` | 482 |
+| `tests/test_atlas_api_healthcheck.py` | 1399 |
+| **Total** | **2952** |
