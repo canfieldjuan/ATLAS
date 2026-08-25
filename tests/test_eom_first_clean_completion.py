@@ -1024,13 +1024,20 @@ async def test_completion_migration_rebuilds_handoff_guards_before_trusting_them
                 "WHERE contact_id = $1",
                 valid_contact_id,
             )
+        # PostgreSQL checks the receipt FK before it can dispatch the handoff
+        # table's BEFORE TRUNCATE trigger, and the runtime intentionally lacks
+        # TRUNCATE on the receipt table. The isolated DBA fixture removes only
+        # that unrelated FK admission barrier so this assertion reaches the
+        # actual handoff trigger under the normal runtime role.
+        await pool._connection.execute(
+            "ALTER TABLE eom_first_clean_completion_receipts "
+            "DROP CONSTRAINT eom_first_clean_completion_receipts_handoff_id_fkey"
+        )
         with pytest.raises(
             asyncpg.RaiseError,
             match="eom_customer_handoffs is immutable",
         ):
-            await pool._runtime_connection.execute(
-                "TRUNCATE eom_customer_handoffs, eom_first_clean_completion_receipts"
-            )
+            await pool._runtime_connection.execute("TRUNCATE eom_customer_handoffs")
 
 
 @pytest.mark.asyncio

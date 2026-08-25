@@ -574,7 +574,7 @@ an automatic completion source and is intentionally left outside this slice.
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 129 |
 | `plans/PR-First-Clean-Completion-Receipt.md` | 580 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 429 |
-| `tests/test_eom_first_clean_completion.py` | 2910 |
+| `tests/test_eom_first_clean_completion.py` | 2917 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 751 |
 | `tests/test_migrations_runner.py` | 39 |
-| **Total** | **6875** |
+| **Total** | **6882** |
