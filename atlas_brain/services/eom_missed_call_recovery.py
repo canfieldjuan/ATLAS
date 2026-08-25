@@ -526,6 +526,63 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                          ON table_owner.oid = relation.relowner
                       WHERE namespace.nspname = current_schema()
                    )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM (
+                           VALUES
+                               ('eom_missed_call_operation_receipts'),
+                               ('eom_missed_call_attempts'),
+                               ('eom_missed_call_contact_suppressions'),
+                               ('eom_missed_call_sequences'),
+                               ('eom_missed_call_sequence_steps'),
+                               ('eom_missed_call_sequence_events')
+                       ) AS required_relation(relation_name)
+                       JOIN pg_class AS relation
+                         ON relation.oid = to_regclass(
+                             format(
+                                 '%I.%I', current_schema(),
+                                 required_relation.relation_name
+                             )
+                         )
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           COALESCE(
+                               relation.relacl,
+                               pg_catalog.acldefault('r', relation.relowner)
+                           )
+                       ) AS table_acl
+                       LEFT JOIN pg_roles AS grantee_role
+                         ON grantee_role.oid = table_acl.grantee
+                       WHERE table_acl.grantee = 0
+                          OR grantee_role.rolname NOT IN (
+                              'atlas_eom_handoff_owner', current_user
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM (
+                           VALUES
+                               ('eom_missed_call_operation_receipts'),
+                               ('eom_missed_call_attempts'),
+                               ('eom_missed_call_contact_suppressions'),
+                               ('eom_missed_call_sequences'),
+                               ('eom_missed_call_sequence_steps'),
+                               ('eom_missed_call_sequence_events')
+                       ) AS required_relation(relation_name)
+                       JOIN pg_class AS relation
+                         ON relation.oid = to_regclass(
+                             format(
+                                 '%I.%I', current_schema(),
+                                 required_relation.relation_name
+                             )
+                         )
+                       JOIN pg_attribute AS attribute
+                         ON attribute.attrelid = relation.oid
+                       CROSS JOIN LATERAL pg_catalog.aclexplode(
+                           attribute.attacl
+                       ) AS column_acl
+                       WHERE attribute.attnum > 0
+                         AND NOT attribute.attisdropped
+                   )
                    AND EXISTS (
                        SELECT 1
                        FROM pg_roles AS guard_role

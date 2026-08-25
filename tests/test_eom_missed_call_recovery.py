@@ -808,7 +808,13 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
     database_url = _database_url_or_skip()
     runtime_probe_role = f"eom_mc_runtime_{uuid4().hex[:16]}"
     runtime_probe_ident = _quote_ident(runtime_probe_role)
+    stale_group_role = f"eom_mc_stale_group_{uuid4().hex[:16]}"
+    stale_group_ident = _quote_ident(stale_group_role)
+    stale_login_role = f"eom_mc_stale_login_{uuid4().hex[:16]}"
+    stale_login_ident = _quote_ident(stale_login_role)
     runtime_role_created = False
+    stale_group_created = False
+    stale_login_created = False
     runtime_connection = None
     nocodb_connection = None
 
@@ -821,6 +827,15 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             )
             await _provision_privilege_repair_roles(connection)
             database_name = await connection.fetchval("SELECT current_database()")
+            await connection.execute(
+                f"CREATE ROLE {stale_group_ident} NOLOGIN NOINHERIT"
+            )
+            stale_group_created = True
+            await connection.execute(f"CREATE ROLE {stale_login_ident} LOGIN INHERIT")
+            stale_login_created = True
+            await connection.execute(
+                f"GRANT {stale_group_ident} TO {stale_login_ident}"
+            )
             await connection.execute(
                 f"CREATE ROLE {runtime_probe_ident} LOGIN NOINHERIT "
                 f"PASSWORD '{_RUNTIME_PROBE_PASSWORD}'"
@@ -863,6 +878,18 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             await connection.execute(
                 f"GRANT SELECT (recipient_email) ON TABLE {_quote_ident(schema)}."
                 "eom_missed_call_sequences TO atlas_nocodb"
+            )
+            await connection.execute(
+                f"GRANT SELECT ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_attempts TO {stale_group_ident}"
+            )
+            await connection.execute(
+                f"GRANT SELECT (actor_name) ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_attempts TO {stale_group_ident}"
+            )
+            await connection.execute(
+                f"GRANT SELECT (actor_name) ON TABLE {_quote_ident(schema)}."
+                "eom_missed_call_attempts TO atlas_eom_handoff_owner"
             )
             await connection.execute(
                 f"GRANT EXECUTE ON FUNCTION {_quote_ident(schema)}."
@@ -1003,6 +1030,60 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 "eom_missed_call_sequence_steps": {"INSERT", "SELECT", "UPDATE"},
                 "eom_missed_call_sequence_events": {"INSERT", "SELECT"},
             }
+            non_allowlisted_table_acl_rows = await connection.fetch(
+                """
+                SELECT relation.relname, COALESCE(grantee_role.rolname, 'PUBLIC')
+                FROM pg_class AS relation
+                JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+                CROSS JOIN LATERAL aclexplode(
+                    COALESCE(
+                        relation.relacl,
+                        pg_catalog.acldefault('r', relation.relowner)
+                    )
+                ) AS acl
+                LEFT JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+                WHERE namespace.nspname = current_schema()
+                  AND relation.relname = ANY($1::text[])
+                  AND (
+                      acl.grantee = 0
+                      OR grantee_role.rolname NOT IN (
+                          'atlas_eom_handoff_owner', $2::text
+                      )
+                  )
+                """,
+                [
+                    "eom_missed_call_operation_receipts",
+                    "eom_missed_call_attempts",
+                    "eom_missed_call_contact_suppressions",
+                    "eom_missed_call_sequences",
+                    "eom_missed_call_sequence_steps",
+                    "eom_missed_call_sequence_events",
+                ],
+                runtime_probe_role,
+            )
+            assert non_allowlisted_table_acl_rows == []
+            assert not await connection.fetchval(
+                """
+                SELECT has_table_privilege(
+                    $1::text,
+                    to_regclass(format('%I.%I', $2::text, 'eom_missed_call_attempts')),
+                    'SELECT'
+                )
+                """,
+                stale_login_role,
+                schema,
+            )
+            assert not await connection.fetchval(
+                """
+                SELECT has_any_column_privilege(
+                    $1::text,
+                    to_regclass(format('%I.%I', $2::text, 'eom_missed_call_attempts')),
+                    'SELECT'
+                )
+                """,
+                stale_login_role,
+                schema,
+            )
             for function_signature in _TRUSTED_DEFINER_FUNCTION_SIGNATURES:
                 qualified_signature = f"{_quote_ident(schema)}.{function_signature}"
                 assert not await connection.fetchval(
@@ -1051,13 +1132,6 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                   AND relation.relname = ANY($1::text[])
                   AND attribute.attnum > 0
                   AND NOT attribute.attisdropped
-                  AND acl.grantee = ANY(
-                      ARRAY[0::oid] || ARRAY(
-                          SELECT oid
-                          FROM pg_roles
-                          WHERE rolname = ANY($2::text[])
-                      )
-                  )
                 """,
                 [
                     "eom_missed_call_operation_receipts",
@@ -1067,7 +1141,6 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                     "eom_missed_call_sequence_steps",
                     "eom_missed_call_sequence_events",
                 ],
-                ["atlas", runtime_probe_role, "atlas_nocodb"],
             )
             assert stale_column_acl_rows == []
 
@@ -1080,6 +1153,32 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 f"SET search_path TO {_quote_ident(schema)}, public"
             )
             runtime_pool = _ConnectionPool(runtime_connection)
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"GRANT SELECT ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_attempts TO {stale_group_ident}"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(
+                runtime_pool
+            )
+            await connection.execute(
+                f"REVOKE SELECT ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_attempts FROM {stale_group_ident}"
+            )
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"GRANT SELECT (actor_name) ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_attempts TO {stale_group_ident}"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(
+                runtime_pool
+            )
+            await connection.execute(
+                f"REVOKE SELECT (actor_name) ON TABLE {_quote_ident(schema)}."
+                f"eom_missed_call_attempts FROM {stale_group_ident}"
+            )
             assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
 
             await connection.execute(
@@ -1371,6 +1470,15 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             if runtime_role_created:
                 await connection.execute(f"DROP OWNED BY {runtime_probe_ident}")
                 await connection.execute(f"DROP ROLE {runtime_probe_ident}")
+            if stale_login_created:
+                await connection.execute(
+                    f"REVOKE {stale_group_ident} FROM {stale_login_ident}"
+                )
+                await connection.execute(f"DROP OWNED BY {stale_login_ident}")
+                await connection.execute(f"DROP ROLE {stale_login_ident}")
+            if stale_group_created:
+                await connection.execute(f"DROP OWNED BY {stale_group_ident}")
+                await connection.execute(f"DROP ROLE {stale_group_ident}")
 
 
 @pytest.mark.asyncio

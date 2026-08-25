@@ -245,6 +245,37 @@ Max files: 10
   direct recovery-table reads remain denied, and the separate interaction path
   remains covered.
 
+### Recovery ACL allowlist repair contract (current review round)
+
+- Root cause: migration 393 clears direct recovery-table and column grants
+  only from `PUBLIC`, NocoDB, the literal legacy `atlas` role, and the current
+  runtime role. PostgreSQL preserves grants to every other login or group role
+  across ownership transfer. Readiness separately checks only the current
+  runtime and NocoDB, so an inherited group grant or an old runtime's direct
+  grant can keep reading or mutating recovery evidence while the worker still
+  reports the schema ready.
+- Correct fix must touch/change: rebuild each recovery table's direct ACL from
+  the catalog after ownership transfer: make the no-login guard's effective
+  table authority explicit, revoke every other direct table grantee and every
+  direct column grantee, then re-grant only the existing configured runtime
+  allowlist. Extend readiness to fail closed on any direct table ACL grantee
+  other than the guard/current runtime or on any direct column ACL.
+  Extend the disposable PostgreSQL proof with a unique stale login and inherited
+  group role: it must prove migration cleanup removes pre-existing table and
+  column grants, readiness rejects post-migration grants, and revocation
+  re-admits the schema.
+- Must not change: do not change the guard or runtime role flags/memberships,
+  the existing runtime privilege matrix, NocoDB's CRM permissions, definer
+  functions, migration 389, generic migration runner, normal startup tuple,
+  routes, providers, billing, production grants, or PostgreSQL superuser
+  semantics. Superuser access remains PostgreSQL's DBA boundary, not an ACL
+  allowlist exception to be silently widened.
+- Acceptance criteria: a pre-existing stale login/group table or column grant
+  cannot survive migration 393; a newly granted stale login/group table or
+  column privilege makes `missed_call_recovery_schema_ready` return false;
+  revoking it restores readiness; and the existing exact runtime/NocoDB
+  allowed/denied real-role paths remain green.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -475,15 +506,15 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 11 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 253 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 758 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 310 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 783 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 494 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 525 |
 | `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 445 |
 | `tests/test_eom_missed_call_privilege_runner.py` | 547 |
-| `tests/test_eom_missed_call_recovery.py` | 1225 |
+| `tests/test_eom_missed_call_recovery.py` | 1333 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **3823** |
+| **Total** | **4044** |
 
 ## Diff size rationale
 

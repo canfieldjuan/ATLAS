@@ -437,24 +437,38 @@ BEGIN
             schema_name,
             relation_name
         );
+        -- An old owner can carry an explicit empty ACL through ownership
+        -- transfer. Make the no-login guard's table authority explicit before
+        -- rebuilding the direct-grantee allowlist below.
+        EXECUTE format(
+            'GRANT ALL PRIVILEGES ON TABLE %I.%I TO atlas_eom_handoff_owner',
+            schema_name,
+            relation_name
+        );
         EXECUTE format(
             'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM PUBLIC',
             schema_name,
             relation_name
         );
-        EXECUTE format(
-            'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM atlas_nocodb',
-            schema_name,
-            relation_name
-        );
-        -- Rebuild the configured-runtime allowlist below rather than preserving
-        -- a stale DBA-era direct grant such as DELETE after ownership changes.
-        -- Clear the legacy default only when it exists so a deployment whose
-        -- configured runtime has another name does not require an `atlas` role.
+        -- Rebuild the direct table allowlist from every catalog grantee, not
+        -- just the current runtime's named predecessor. A stale login or a
+        -- group inherited by one can otherwise retain recovery evidence access
+        -- after ownership transfer.
         FOR acl_role IN
-            SELECT role_state.rolname
-              FROM pg_catalog.pg_roles AS role_state
-             WHERE role_state.rolname IN ('atlas', runtime_role)
+            SELECT DISTINCT grantee_role.rolname
+              FROM pg_catalog.pg_class AS relation
+              CROSS JOIN LATERAL pg_catalog.aclexplode(
+                  COALESCE(
+                      relation.relacl,
+                      pg_catalog.acldefault('r', relation.relowner)
+                  )
+              ) AS relation_acl
+              JOIN pg_catalog.pg_roles AS grantee_role
+                ON grantee_role.oid = relation_acl.grantee
+             WHERE relation.oid = to_regclass(
+                       format('%I.%I', schema_name, relation_name)
+                   )
+               AND grantee_role.rolname <> 'atlas_eom_handoff_owner'
         LOOP
             EXECUTE format(
                 'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM %I',
@@ -464,8 +478,9 @@ BEGIN
             );
         END LOOP;
         -- Table and column ACLs are separate PostgreSQL catalogs. Rebuild the
-        -- entire direct access surface so an old column grant cannot survive
-        -- the table-level revoke and expose recovery evidence to NocoDB.
+        -- entire direct access surface so no stale column grant can survive
+        -- the table-level rebuild and expose recovery evidence to a login or
+        -- one of its inherited groups.
         FOR column_name IN
             SELECT attribute.attname
               FROM pg_catalog.pg_attribute AS attribute
@@ -488,9 +503,19 @@ BEGIN
                 relation_name
             );
             FOR acl_role IN
-                SELECT role_state.rolname
-                  FROM pg_catalog.pg_roles AS role_state
-                 WHERE role_state.rolname IN ('atlas', runtime_role)
+                SELECT DISTINCT grantee_role.rolname
+                  FROM pg_catalog.pg_attribute AS attribute
+                  CROSS JOIN LATERAL pg_catalog.aclexplode(
+                      attribute.attacl
+                  ) AS column_acl
+                  JOIN pg_catalog.pg_roles AS grantee_role
+                    ON grantee_role.oid = column_acl.grantee
+                 WHERE attribute.attrelid = to_regclass(
+                           format('%I.%I', schema_name, relation_name)
+                       )
+                   AND attribute.attname = column_name
+                   AND attribute.attnum > 0
+                   AND NOT attribute.attisdropped
             LOOP
                 EXECUTE format(
                     'REVOKE ALL PRIVILEGES (%I) ON TABLE %I.%I FROM %I',
