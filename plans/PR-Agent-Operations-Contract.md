@@ -83,6 +83,7 @@ would leave an incomplete and unverified operational path between PRs.
 
 Ownership lane: agent-operations
 Slice phase: workflow/process
+Max files: 14
 
 1. Establish one verified, versioned operational knowledge path for a fresh
    agent without replacing existing subsystem-specific runbooks.
@@ -249,6 +250,6 @@ Parked hardening: none.
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
 | `ops` | 780 |
-| `plans/PR-Agent-Operations-Contract.md` | 254 |
+| `plans/PR-Agent-Operations-Contract.md` | 255 |
 | `tests/test_agent_operations_contract.py` | 258 |
-| **Total** | **2351** |
+| **Total** | **2352** |
