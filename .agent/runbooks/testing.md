@@ -34,6 +34,13 @@ non-integration/e2e suite. See `.github/workflows/unit_gate.yml`,
 `scripts/check_unit_gate.py`; a local green subset is not a claim that all CI
 passed.
 
+`./ops test unit` removes `DATABASE_URL` and every inherited
+`*_DATABASE_URL` from the pytest child environment, along with the disposable
+database confirmation flag. This keeps unmarked PostgreSQL tests in their skip
+path when credentials remain exported from an earlier integration run. Use
+`./ops test integration ...` for explicit database-backed proof; unrelated
+environment configuration is preserved in unit mode.
+
 ## Database and integration tests
 
 Integration tests can create, migrate, truncate, or drop objects. `./ops`

@@ -79,6 +79,49 @@ would leave an incomplete and unverified operational path between PRs.
   credential-bearing-origin redaction proof, focused tests, live fixed
   inspections, and the canonical guarded push review.
 
+### Contract revision 3
+
+- New evidence: current-head review found two reachable configuration-boundary
+  gaps. The database environment reader hand-parses assignments instead of
+  using the `python-dotenv` semantics that back `DatabaseConfig`, so quoting,
+  inline comments, escapes, and interpolation can produce a different value.
+  Unit mode also inherits all three canonical disposable-database URL
+  variables, allowing unmarked database-backed tests to write when a URL is
+  left exported from an earlier integration run.
+- Revised root cause: the operations layer preserved raw connection text and
+  pytest markers, but did not preserve the application's dotenv decoding or
+  isolate the unit-test child process from integration-only credentials.
+- Revised required change surface: parse selected database settings with the
+  same checked-in `python-dotenv` dependency used by Pydantic settings; retain
+  process-environment precedence and no-output/no-argv boundaries; remove every
+  inherited `DATABASE_URL` / `*_DATABASE_URL` plus the disposable-database
+  confirmation from unit-mode children; update capability/testing/ledger
+  claims; and add boundary regression tests.
+- Revised non-scope: do not source or execute shell files, print environment
+  values, alter `DatabaseConfig`, change pytest markers, add dependencies,
+  change integration-mode admission, or touch databases, schemas, CI, or
+  provider configuration.
+- Revised verification plan: focused tests prove dotenv quotes/comments,
+  escapes, and interpolation match `python-dotenv`; ambient environment still
+  wins; unit subprocesses omit every current and novel database-URL-shaped
+  variable while preserving unrelated environment; then run compile, plan
+  sync/audits, and the guarded push with GitHub retaining the full unit gate.
+
+#### Unit database-environment closure declaration
+
+- Membership is **OPEN** because parent-process environment names are not a
+  finite enum. Membership is **DERIVED** on every unit invocation from the
+  actual child-environment keys: `DATABASE_URL` and every key ending in
+  `_DATABASE_URL` belong to the database-URL class. This covers the three Atlas
+  integration URLs and the extracted/generic PostgreSQL test gates found under
+  `tests/` without copying a closed list into the decision.
+- Any recognized or novel database-URL-shaped key takes the safe default: it is
+  removed before pytest starts, because skipping an unintentionally live test
+  is safer than letting nominal unit mode write through inherited credentials.
+  Keys outside that syntactic class remain inherited so unrelated test/runtime
+  configuration is unchanged; integration mode retains its separate explicit
+  URL plus disposable-database confirmation gate.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
@@ -130,16 +173,18 @@ router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
 - Boundary path/seam: `./ops db inspect` named-inspection admission and
-  read-only execution; integration-test database-variable admission;
-  `./ops env keys` secret-value suppression.
+  read-only execution; integration-test database-variable admission; unit-test
+  database-environment isolation; `./ops env keys` secret-value suppression.
 - Replaced-path behaviors: N/A - no existing runtime path is replaced.
 - Guard-relevant fields: inspection name, complete PostgreSQL connection string,
-  the canonical disposable-test URL set, Git origin userinfo, environment
-  assignment key/value split, and subprocess output redaction.
+  the canonical disposable-test URL set, open `*_DATABASE_URL` environment-key
+  class, Git origin userinfo, environment assignment key/value split, and
+  subprocess output redaction.
 - Caller x input shape: shell caller x fixed connectivity/migrations names;
   shell caller x arbitrary/unknown query names; test caller x each canonical
-  disposable database URL independently; Git origin x credential-bearing URL;
-  env files x blank/comment/export/quoted/canary-secret assignments.
+  disposable database URL independently; unit caller x current/novel database
+  URL keys plus an unrelated key; Git origin x credential-bearing URL; env files
+  x blank/comment/export/quoted/escaped/interpolated/canary-secret assignments.
 
 ### Deployed-config probing
 
@@ -150,8 +195,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   `atlas_brain/storage/config.py`; the linked Vercel project comes from ignored
   `.vercel/project.json`; neither secret value is copied into version control.
 - Explicit value probe: tests pass fixed inspection names, a complete DSN with
-  TLS/socket parameters, each canonical disposable-test URL, and fixture env paths;
-  safe live probes use the current authenticated CLIs where available.
+  TLS/socket parameters, each canonical disposable-test URL, a novel
+  database-URL-shaped key, and fixture env paths with dotenv quoting/comments,
+  escapes, and interpolation; safe live probes use the current authenticated
+  CLIs where available.
 - Absent value probe: doctor and status report UNKNOWN/unavailable when a CLI,
   auth context, linked project, env file, or database is absent.
 - Default-session/default-context probe: run from the dedicated worktree, where
@@ -159,8 +206,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   context via explicit discovery only.
 - Side-effect ordering: fixed inspection selection occurs before the database
   client receives SQL; the exact DSN remains in the child environment rather
-  than argv; Git output selects the canonical identifier before printing; env
-  rendering extracts keys before any output is produced.
+  than argv; unit-mode database URLs are removed before pytest starts; Git
+  output selects the canonical identifier before printing; env rendering
+  extracts keys before any output is produced.
 
 ### Files touched
 
@@ -217,13 +265,17 @@ Parked hardening: none.
 
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile ops` - pass.
 - PyYAML `safe_load(.agent/capabilities.yaml)` - schema version `1` parsed.
-- `./ops test focused tests/test_agent_operations_contract.py -q` - 16 passed.
+- New dotenv/unit-isolation regression nodes failed before implementation with
+  undecoded dotenv text and a missing sanitized child environment.
+- `./ops test focused tests/test_agent_operations_contract.py -q` - 19 passed.
 - `./ops test focused tests/test_eom_render_profile.py::test_database_config_prefers_connection_string_for_asyncpg_kwargs -q` - 1 passed.
 - `./ops doctor` - pass; live systemd/Brain ping, Docker, Vercel, Render CLI,
   PostgreSQL fixed inspection, GitHub auth, and environment-source discovery
   reported without secret values.
 - `./ops db inspect connectivity` and `./ops db migrations` - pass through the
   Atlas `DatabaseConfig`/asyncpg path.
+- `./ops db inspect connectivity` - pass again after switching selected `.env`
+  decoding to `python-dotenv`.
 - `./ops env keys`, `./ops env systemd`, and `./ops env vercel` - pass;
   names/sources only.
 - `./ops ci status 3`, `./ops logs brain`, targeted container logs, and
@@ -232,24 +284,25 @@ Parked hardening: none.
 - `python scripts/sync_pr_plan.py --check plans/PR-Agent-Operations-Contract.md`
   and `git diff --check` - pass after final sync.
 - The original head's guarded push/local review and secret scan passed. The
-  current review-fix head will rerun the same guarded push before publication.
+  current review-fix head will rerun the same guarded push before publication;
+  per operator direction, GitHub Actions owns the full unit gate.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.agent/capabilities.yaml` | 288 |
+| `.agent/capabilities.yaml` | 289 |
 | `.agent/runbooks/ci.md` | 65 |
 | `.agent/runbooks/database.md` | 85 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 189 |
+| `.agent/runbooks/discovery-ledger.md` | 219 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
-| `.agent/runbooks/testing.md` | 85 |
+| `.agent/runbooks/testing.md` | 92 |
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 780 |
-| `plans/PR-Agent-Operations-Contract.md` | 255 |
-| `tests/test_agent_operations_contract.py` | 258 |
-| **Total** | **2352** |
+| `ops` | 793 |
+| `plans/PR-Agent-Operations-Contract.md` | 308 |
+| `tests/test_agent_operations_contract.py` | 341 |
+| **Total** | **2539** |

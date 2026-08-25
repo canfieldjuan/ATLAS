@@ -64,12 +64,13 @@ testing:
     command: ./ops test unit
     authentication: none
     current_session_capable: true
-    mutation: local test artifacts only; production providers are not required
+    mutation: local test artifacts only; inherited DATABASE_URL and *_DATABASE_URL values are removed before pytest, so database-backed tests skip
     safe_verify: ./ops test focused tests/test_agent_operations_contract.py -q
     likely_failures:
       - a worktree has no local .venv and must use the shared project venv or ATLAS_PYTHON
       - optional dependencies can cause collection errors
       - the full suite uses a committed known-failure baseline in CI
+      - use integration mode for database-backed proof; unit mode intentionally removes database URL credentials
   focused:
     status: verified
     command: ./ops test focused <pytest-target-and-args>

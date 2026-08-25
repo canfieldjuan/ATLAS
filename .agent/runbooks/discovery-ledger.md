@@ -187,3 +187,33 @@ Verified:
 
 Failure notes:
 Installed/authenticated does not mean the tool/provider belongs to Atlas.
+
+## Dotenv database settings and unit-test isolation
+
+Problem:
+Hand-parsing selected `.env` assignments changes quoting, inline-comment,
+escape, and interpolation behavior, while a nominal unit command can inherit
+database URLs left exported after integration work.
+
+Finding:
+`DatabaseConfig` uses Pydantic settings backed by `python-dotenv`. Database
+inspection must decode selected values with that same parser before applying
+process-environment precedence. Several unmarked PostgreSQL tests activate from
+`DATABASE_URL` or `*_DATABASE_URL`, so pytest markers alone do not isolate unit
+mode from database writes.
+
+Canonical method:
+Use `./ops db inspect ...` for application-equivalent dotenv decoding. Use
+`./ops test unit` for database-credential-free unit execution and
+`./ops test integration ...` only with an explicitly confirmed disposable
+database.
+
+Verified:
+2026-08-24: focused boundary tests proved dotenv comments, escapes,
+interpolation, and process overrides, plus removal of current and novel
+database-URL-shaped variables from unit-mode children.
+
+Failure notes:
+Do not replace dotenv parsing with shell sourcing, and do not assume
+`-m "not integration"` excludes every database-writing test. Keep database
+URLs out of unit-mode subprocesses by construction.

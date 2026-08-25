@@ -14,6 +14,7 @@ ROOT = Path(__file__).parents[1]
 OPS = ROOT / "ops"
 OPS_MODULE = runpy.run_path(str(OPS), run_name="atlas_ops_contract_test")
 DATABASE_INSPECTIONS = OPS_MODULE["DATABASE_INSPECTIONS"]
+DATABASE_CONFIG_KEYS = OPS_MODULE["DATABASE_CONFIG_KEYS"]
 TEST_DATABASE_URL_KEYS = OPS_MODULE["TEST_DATABASE_URL_KEYS"]
 database_inspection_command = OPS_MODULE["database_inspection_command"]
 database_runtime_environment = OPS_MODULE["database_runtime_environment"]
@@ -83,6 +84,53 @@ def test_database_runtime_preserves_exact_dsn_without_argv(
     assert all(dsn not in argument for argument in command)
 
 
+def test_database_runtime_uses_project_dotenv_semantics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas_brain.storage.config import DatabaseConfig
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "DB_USER=agent\n"
+        "DB_HOST=db.example\n"
+        'ATLAS_DB_CONNECTION_STRING="postgresql://${DB_USER}:pa\\\"ss@'
+        '${DB_HOST}/atlas?sslmode=require" # local database\n'
+        'ATLAS_DB_SOCKET_PATH="/var/run/postgresql\\tcluster"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ATLAS_OPS_ENV_FILES", str(env_file))
+    for key in DATABASE_CONFIG_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    child_env = database_runtime_environment()
+    application_config = DatabaseConfig(_env_file=env_file)
+
+    assert child_env["ATLAS_DB_CONNECTION_STRING"] == (
+        'postgresql://agent:pa"ss@db.example/atlas?sslmode=require'
+    )
+    assert child_env["ATLAS_DB_SOCKET_PATH"] == "/var/run/postgresql\tcluster"
+    assert (
+        child_env["ATLAS_DB_CONNECTION_STRING"]
+        == application_config.connection_string
+    )
+    assert child_env["ATLAS_DB_SOCKET_PATH"] == application_config.socket_path
+
+
+def test_database_runtime_environment_overrides_dotenv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("ATLAS_DB_HOST=file.example\n", encoding="utf-8")
+    monkeypatch.setenv("ATLAS_OPS_ENV_FILES", str(env_file))
+    monkeypatch.setenv("ATLAS_DB_HOST", "runtime.example")
+
+    child_env = database_runtime_environment()
+
+    assert child_env["ATLAS_DB_HOST"] == "runtime.example"
+
+
 def test_git_snapshot_never_reads_or_prints_raw_origin(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -126,6 +174,41 @@ def test_integration_guard_admits_each_canonical_database_variable(
 
     assert OPS_MODULE["test_command"](["integration", "tests/example.py", "-q"]) == 0
     assert calls and calls[0][-2:] == ["tests/example.py", "-q"]
+
+
+def test_unit_mode_removes_database_urls_from_child_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_urls = (
+        *TEST_DATABASE_URL_KEYS,
+        "EXTRACTED_DATABASE_URL",
+        "DATABASE_URL",
+        "FUTURE_DATABASE_URL",
+    )
+    for key in database_urls:
+        monkeypatch.setenv(
+            key,
+            f"postgresql://disposable.invalid/{key.lower()}",
+        )
+    monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
+    monkeypatch.setenv("ATLAS_UNIT_CANARY", "preserved")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_exec(args: list[str], **kwargs: object) -> int:
+        calls.append((args, kwargs))
+        return 0
+
+    function_globals = OPS_MODULE["test_command"].__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
+    monkeypatch.setitem(function_globals, "exec_command", fake_exec)
+
+    assert OPS_MODULE["test_command"](["unit"]) == 0
+    assert calls
+    child_env = calls[0][1]["env"]
+    assert isinstance(child_env, dict)
+    assert all(key not in child_env for key in database_urls)
+    assert "ATLAS_CONFIRM_DISPOSABLE_TEST_DB" not in child_env
+    assert child_env["ATLAS_UNIT_CANARY"] == "preserved"
 
 
 def test_env_keys_never_emit_values_or_evaluate_file(tmp_path: Path) -> None:
