@@ -10,6 +10,8 @@ customer appointment.
 The ordinary Atlas runtime must not apply this migration. It cannot safely
 create a foreign key to the guard-owned customer-handoff table, and it must not
 own the append-only receipt tables. Use the controlled DBA entrypoint below.
+Generic Atlas startup and MCP migration runs intentionally skip migration 394;
+only the dedicated runner's explicit selection may apply it.
 
 ## Prerequisites
 

@@ -56,7 +56,7 @@ cannot be safely exercised or a route without the durable invariants it claims.
 
 Ownership lane: eom/onboarding-first-clean-completion
 Slice phase: vertical slice
-Max files: 11
+Max files: 13
 
 1. Add a durable ATLAS receipt for one authenticated completion of the first
    residential service for an already canonicalized EOM customer.
@@ -166,7 +166,7 @@ Max files: 11
   `tests/test_eom_first_clean_completion.py`,
   `plans/PR-First-Clean-Completion-Receipt.md`, and
   `SESSION_STATE.codex-eom-first-clean-completion.local.md`.
-- Max files: 10 (the existing PR-wide file budget; this repair may modify only
+- Max files: 13 (the existing PR-wide file budget; this repair may modify only
   the four listed files).
 - Parked hardening: none.
 
@@ -187,7 +187,7 @@ Max files: 11
   `tests/test_eom_first_clean_completion.py`,
   `plans/PR-First-Clean-Completion-Receipt.md`, and
   `SESSION_STATE.codex-eom-first-clean-completion.local.md`.
-- Max files: 10 (the existing PR-wide file budget; this repair may modify only
+- Max files: 13 (the existing PR-wide file budget; this repair may modify only
   the four listed files).
 - Parked hardening: no new migration number or runtime API is required because
   migration 394 is still the un-deployed controlled DBA boundary.
@@ -220,7 +220,7 @@ Max files: 11
   `tests/test_eom_first_clean_completion.py`,
   `plans/PR-First-Clean-Completion-Receipt.md`, and
   `SESSION_STATE.codex-eom-first-clean-completion.local.md`.
-- Max files: 10. No new runtime API, migration number, customer workflow, or
+- Max files: 13. No new runtime API, migration number, customer workflow, or
   shared-pipeline database behavior is introduced.
 - Parked hardening: none; the new isolated service is required to prove the
   production role separation rather than emulate it with a test-only bypass.
@@ -260,7 +260,29 @@ Max files: 11
   (`atlas_brain/config.py`) is mandatory to use the repository's typed
   configuration boundary; no API, migration number, customer behavior, or
   additional database is introduced.
-- Max files: 11.
+- Max files: 13.
+- Parked hardening: none.
+
+### Controlled DBA migration-runner P1 disposition preflight
+
+- Root decision: the generic migration runner excludes migration 394 by
+  default, while the protected DBA runner remains able to apply its exact stem
+  through `only`.
+- Source trace: `run_migrations()` enumerates every packaged SQL file for a
+  default invocation -> the normal main application and standalone invoicing
+  MCP invoke that generic path -> the non-superuser runtime reaches migration
+  394's mandatory-superuser exception before later ordinary migrations can run.
+- Upstream files: `atlas_brain/storage/migrations/__init__.py`,
+  `tests/test_migrations_runner.py`, the existing DBA runbook, and this plan.
+- Fix strategy: upstream-root. Reserve the named controlled migration at the
+  shared catalog seam instead of patching individual app/MCP callers; prove a
+  default run skips it and an explicit selection records it.
+- Blocking predicate: deployment/startup availability.
+- Disposition: fix in this PR.
+- Allowed files: the listed upstream files plus the existing P1 files already
+  listed above. No migration API, customer workflow, or normal-runtime DBA
+  authority is introduced.
+- Max files: 13.
 - Parked hardening: none.
 
 ### Files touched
@@ -271,11 +293,13 @@ Max files: 11
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_first_clean_completion.py`
 - `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`
+- `atlas_brain/storage/migrations/__init__.py`
 - `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md`
 - `plans/PR-First-Clean-Completion-Receipt.md`
 - `scripts/apply_eom_first_clean_completion_schema.py`
 - `tests/test_eom_first_clean_completion.py`
 - `tests/test_eom_first_clean_completion_dba_runner.py`
+- `tests/test_migrations_runner.py`
 
 ## Mechanism
 
@@ -321,6 +345,12 @@ normal slim EOM profile does not run migration 394. The runbook uses one
 explicit named migration and a redacted protected-DSN preflight through a
 dedicated typed secret configuration object; rollback stops the route/consumer
 while preserving audit evidence.
+
+The shared migration runner reserves migration 394 from every default startup
+and MCP migration pass, so a normal non-superuser process continues applying
+ordinary pending migrations without acquiring DBA authority. The dedicated
+runner explicitly selects only migration 394 after its protected-DSN and
+superuser preflight succeed.
 
 ## Intentional
 
@@ -380,6 +410,9 @@ an automatic completion source and is intentionally left outside this slice.
     while the guarded append-only trigger still rejects an actual `UPDATE`.
     Migration preflight and serving readiness both reject direct and inherited
     guard membership held by a disposable non-superuser login.
+  - Generic migration-runner coverage proves migration 394 is skipped by the
+    default catalog pass and applied only when the controlled DBA runner selects
+    its exact stem.
   - Command: `python scripts/sync_pr_plan.py plans/PR-First-Clean-Completion-Receipt.md origin/main`
   - Command: `python scripts/audit_plan_doc.py plans/PR-First-Clean-Completion-Receipt.md`
   - Command: `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-First-Clean-Completion-Receipt.md`
@@ -403,9 +436,11 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/main_eom.py` | 1 |
 | `atlas_brain/services/eom_first_clean_completion.py` | 1091 |
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 520 |
-| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 93 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 411 |
+| `atlas_brain/storage/migrations/__init__.py` | 40 |
+| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 95 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 446 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 171 |
 | `tests/test_eom_first_clean_completion.py` | 2367 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 205 |
-| **Total** | **5066** |
+| `tests/test_migrations_runner.py` | 39 |
+| **Total** | **5182** |
