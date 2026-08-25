@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+from itertools import product
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -287,6 +288,41 @@ def test_typed_dba_schema_rejects_non_identifier_configuration(monkeypatch) -> N
 
     with pytest.raises(ValidationError, match="one ASCII PostgreSQL identifier"):
         runner.EOMFirstCleanCompletionDBAConfig(_env_file=None)
+
+
+def test_eom_first_clean_completion_dba_config_schema_grammar_property() -> None:
+    """The typed schema config admits exactly the identifier grammar invariant."""
+
+    from atlas_brain.config import EOMFirstCleanCompletionDBAConfig
+
+    valid_tokens = ("public", "tenant", "_private")
+    valid_wrappers = ("", " ", "\t")
+    valid_families = ("", "_1", "9")
+    for token, wrapper, family in product(
+        valid_tokens,
+        valid_wrappers,
+        valid_families,
+    ):
+        expected_schema = f"{token}{family}"
+        assert (
+            EOMFirstCleanCompletionDBAConfig.validate_schema_name(
+                f"{wrapper}{expected_schema}{wrapper}"
+            )
+            == expected_schema
+        )
+
+    invalid_tokens = ("-", ".", ";", '"', "\n", "λ")
+    invalid_wrappers = ("", " ", "\t")
+    invalid_families = ("public", "tenant", "_private")
+    for token, wrapper, family in product(
+        invalid_tokens,
+        invalid_wrappers,
+        invalid_families,
+    ):
+        with pytest.raises(ValueError):
+            EOMFirstCleanCompletionDBAConfig.validate_schema_name(
+                f"{wrapper}{family}{token}x{wrapper}"
+            )
 
 
 def test_runner_rejects_runtime_schema_mismatch_before_opening_dba_pool(
