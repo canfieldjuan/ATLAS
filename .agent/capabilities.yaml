@@ -20,7 +20,7 @@ workspace:
     safe_verify: ./ops doctor
   shared_root:
     status: verified
-    path_hint: the parent of the worktree git common directory
+    path_hint: the parent for a conventional .git common directory; otherwise the direct bare common directory
     purpose: holds shared ignored runtime state such as .env, .venv, and .vercel
     warning: the shared Atlas root can report as bare and reject git status
     runbook: .agent/runbooks/environment.md
@@ -79,12 +79,13 @@ testing:
     status: available-with-explicit-disposable-database
     provider: pytest plus PostgreSQL 16
     command: ./ops test integration <tests/test_file.py[::node]> [pytest-options]
-    authentication: one of ATLAS_MIGRATION_TEST_DATABASE_URL, ATLAS_RECEIVABLES_TEST_DATABASE_URL, or ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
+    authentication: exactly one of ATLAS_MIGRATION_TEST_DATABASE_URL, ATLAS_RECEIVABLES_TEST_DATABASE_URL, or ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
     current_session_capable: false-until-a-disposable-url-is-exported
     mutation: destructive within the explicitly confirmed disposable database
     safe_verify: use the matching GitHub Actions workflow when no disposable local database is prepared
     likely_failures:
       - pointing tests at the live atlas database
+      - exporting multiple canonical test database URLs at once
       - omitting ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1
       - omitting a concrete existing test file or passing a directory-wide target
       - running multiple DB-backed suites against one shared database
@@ -154,6 +155,7 @@ database:
   authentication: local PostgreSQL rules or ATLAS_DB_* environment variables
   current_session_capable: true
   access: ./ops db status
+  configuration_selection: explicit ATLAS_OPS_ENV_FILES context, else worktree .env/.env.local, else shared-root .env/.env.local, else systemd EnvironmentFiles; exported process values win last
   safe_inspection: ./ops db inspect connectivity
   arbitrary_query: unavailable-until-a-privilege-restricted-inspection-role-exists
   migration_status: ./ops db migrations
@@ -168,6 +170,7 @@ database:
     - using Alembic even though Atlas uses its custom SQL runner
     - treating app startup as a read-only health check
     - using the live atlas database for integration tests
+    - merging inventory-only examples or an unrelated shared/systemd context into a deliberately provisioned worktree context
     - assuming a READ ONLY transaction makes arbitrary SELECT functions non-mutating
   runbook: .agent/runbooks/database.md
 
@@ -215,6 +218,8 @@ containers:
   status: verified
   provider: Docker Engine with docker compose plugin
   current_session_capable: true
+  inspect: ./ops status
+  safe_verify: docker info
   compose_files:
     root: docker-compose.yml
     graph: docker-compose.graphiti.yml
@@ -223,6 +228,9 @@ containers:
       - docker-compose.homeassistant.yml
     cameras: docker-compose.wyze.yml
   warning: root Compose has no postgres service and even status parsing requires ATLAS_NOCODB_DB_PASSWORD
+  likely_failures:
+    - Docker CLI installed but daemon stopped, unreachable, or denied
+    - a known container genuinely absent after daemon access succeeds
 
 external_services:
   required_or_active:

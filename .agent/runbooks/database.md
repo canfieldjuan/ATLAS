@@ -22,6 +22,25 @@ retains TLS, socket, and other connection parameters without appearing in a
 process argument. The fixed SQL still runs inside a PostgreSQL `READ ONLY`
 transaction with command, statement, and lock timeouts.
 
+## Configuration context and precedence
+
+Database inspection deliberately selects one application context instead of
+merging every file that `./ops env keys` inventories:
+
+1. `ATLAS_OPS_ENV_FILES`, when explicitly set, selects only those files in the
+   listed order.
+2. Otherwise, the presence of `.env` or `.env.local` in the current worktree
+   selects that pair, matching `DatabaseConfig` in that working directory.
+3. Without a worktree pair, the shared-root `.env`/`.env.local` pair is used.
+4. Systemd `EnvironmentFiles` are the final live-service fallback.
+5. Exported process values override the selected files.
+
+A present worktree context remains selected even when it omits database keys;
+do not silently fall through to shared production configuration. Tracked
+examples and `.env.tailscale` remain useful for key inventory, but they are not
+database value sources. Use `ATLAS_OPS_ENV_FILES` only to select an intentional
+context, never to concatenate unrelated environments.
+
 There is intentionally no arbitrary `./ops db query`: PostgreSQL permits
 functions with operational side effects inside a `READ ONLY` transaction. A
 generic query command is unavailable until Atlas has a privilege-restricted
@@ -55,8 +74,9 @@ CI creates disposable PostgreSQL 16 service databases and supplies one of:
 - `ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL`
 
 For local work, create or obtain a disposable database outside `./ops`, verify
-its exact name/host, then export only the matching test URL and acknowledge the
-boundary:
+its exact name/host, then export exactly one matching test URL and acknowledge
+the boundary. Integration mode rejects both zero and multiple active canonical
+URLs before pytest starts:
 
 ```bash
 export ATLAS_MIGRATION_TEST_DATABASE_URL='postgresql://.../disposable_db'
@@ -75,7 +95,11 @@ workflow as the canonical proof.
 - `pg_isready` fails: check `systemctl status postgresql@16-main` and whether
   port `5433` is listening; do not fall back to an unrelated `5432` database.
 - Connectivity inspection fails: authentication or database selection is
-  wrong. Inspect key names with `./ops env keys`; never print the URL/password.
+  wrong. Inspect key names with `./ops env keys`; then verify the selected
+  context above without printing the URL/password.
+- Integration admission reports multiple URLs: unset every stale canonical
+  test URL except the one belonging to the focused suite; never guess which
+  disposable database should win.
 - `schema_migrations` is absent: stop. The target is probably a fresh or wrong
   database; do not “fix” it by applying the full chain.
 - Startup logs show a migration/writer fence: follow

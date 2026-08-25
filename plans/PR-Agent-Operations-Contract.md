@@ -196,6 +196,53 @@ would leave an incomplete and unverified operational path between PRs.
 - The regression covers each member directly, including the live Atlas
   conventional `.git` shape and the alternate bare-directory shape.
 
+### Contract revision 6
+
+- New evidence: one current-head review round exposed four finite classification
+  gaps. Integration admission accepts more than one destructive-test URL;
+  database inspection merges unrelated worktree, shared, example, and systemd
+  sources instead of selecting one application context; shared-root metadata
+  describes only the conventional `.git` shape; and container status reports
+  every Docker inspect failure as an absent object even when the daemon itself
+  is unavailable.
+- Revised root cause: the operational layer uses one-sided presence or ordered
+  accumulation where safety depends on explicit cardinality, precedence, or
+  provider state. Patching individual instances would leave the opposite
+  members of each same finite decision class undisposed.
+- Revised required change surface: require exactly one canonical integration
+  database URL; select one database file context in explicit override,
+  worktree, shared-root, then systemd-fallback order before applying process
+  environment precedence; describe conventional and direct-bare shared roots;
+  distinguish Docker CLI absence, offline mode, daemon unavailability, and
+  daemon-available object state; update the canonical database/ledger claims;
+  and cover every member with focused tests.
+- Revised non-scope: do not add more providers, containers, database variables,
+  environment formats, test modes, deployment behavior, CI changes, product
+  code, or adjacent hardening. This is one frozen pass over the four named
+  current-head threads; GitHub retains the full unit gate.
+- Revised verification plan: run only the focused operations-contract tests,
+  Python compile, YAML parse, plan sync/check, diff check, safe live doctor,
+  database status/inspection, and Docker status probes. Do not run the local
+  unit gate.
+
+#### Frozen-pass closure declarations
+
+- Integration database admission is **CLOSED** over 0, 1, or many active
+  members of `TEST_DATABASE_URL_KEYS`: only 1 proceeds; 0 and 2/3 reject before
+  pytest, naming keys but never values.
+- Database file context is **CLOSED** by precedence: an explicit
+  `ATLAS_OPS_ENV_FILES` list is one selected context; otherwise any worktree
+  `.env`/`.env.local` presence selects that application context, else the
+  shared-root pair, else systemd EnvironmentFiles. Tracked examples and
+  `.env.tailscale` remain inventory-only. Within a selected context later
+  files win, and exported process values win last.
+- Shared-root metadata is **CLOSED** over the resolver's successful path shapes:
+  conventional `.git` means its parent and a direct bare common directory
+  means that directory itself; command failure retains the repository fallback.
+- Docker container status is **CLOSED** over CLI missing, offline, daemon
+  unavailable, and daemon available. Only after a successful daemon probe can
+  an inspect miss mean `absent`; a successful empty inspect is `UNKNOWN`.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
@@ -230,6 +277,14 @@ Max files: 14
     settled by the documentation contract test and cold reconstruction.
   - Root `AGENTS.md` points fresh agents at the contract, `./ops doctor`, and
     the continuous-learning rule; settled by the documentation contract test.
+  - Integration mode admits exactly one canonical disposable database URL and
+    rejects zero or many before pytest; settled by the 0/1/2/3 focused matrix.
+  - Database inspection selects one application-equivalent file context before
+    exported values override it; settled by explicit/worktree/shared/systemd
+    canary tests and the live selected-path probe.
+  - Container status proves Docker daemon access before classifying objects as
+    present or absent; settled by CLI/offline/daemon/object state tests and a
+    live `./ops status` invocation.
 - Reachability proof: run the real `./ops doctor`, `./ops env keys`,
   `./ops db status`, `./ops deploy status`, `./ops ci status`, and focused test
   entrypoints and observe their redacted terminal output/exit status.
@@ -251,7 +306,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   database-environment isolation; integration-test target admission;
   dependency-free database status fallback; Brain health-detail redaction; and
   `./ops env keys` secret-value suppression; Git common-directory shared-root
-  resolution.
+  resolution; selected database configuration context; integration database-URL
+  cardinality; and Docker daemon-versus-object state classification.
 - Replaced-path behaviors: N/A - no existing runtime path is replaced.
 - Guard-relevant fields: inspection name, complete PostgreSQL connection string,
   the canonical disposable-test URL set, open `*_DATABASE_URL` environment-key
@@ -267,7 +323,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   fresh system Python x missing `python-dotenv`; configured Brain endpoint x
   credential-bearing URL; integration caller x file/node/option-only/directory/
   missing/out-of-tree/additional-positional targets; worktree x conventional
-  `.git`/direct bare common directory/Git lookup failure.
+  `.git`/direct bare common directory/Git lookup failure; integration environment
+  x zero/one/two/three active canonical URLs; database source x explicit/worktree/
+  shared/systemd context plus process override; Docker x CLI missing/offline/
+  daemon unavailable/object absent/object present/empty successful inspect.
 
 ### Deployed-config probing
 
@@ -294,8 +353,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   than argv; unit-mode database URLs are removed before pytest starts; Git
   output selects the canonical identifier before printing; env rendering
   extracts keys before any output is produced; integration target validation
-  occurs before pytest or database admission; health output selects a fixed
-  label rather than the configured URL.
+  and exact database-URL cardinality occur before pytest; Docker daemon access
+  is established before object inspection; health output selects a fixed label
+  rather than the configured URL.
 
 ### Files touched
 
@@ -359,13 +419,21 @@ Parked hardening: none.
   unbounded integration targets, and the nonexistent capability command.
 - The bare common-directory resolver regression failed before implementation
   with `1 failed, 2 passed`; only the successful direct-bare member was wrong.
-- `./ops test focused tests/test_agent_operations_contract.py -q` - 32 passed.
+- `./ops test focused tests/test_agent_operations_contract.py -q` - 40 passed;
+  the frozen pass covers integration URL counts 0/1/2/3, database selection
+  across explicit/worktree/shared/systemd contexts, both shared-root path
+  shapes, and Docker CLI/offline/daemon/object states.
 - Direct live `ops` shared-root probe -
   `/home/juan-canfield/Desktop/Atlas` from the current linked worktree.
 - `./ops test focused tests/test_eom_render_profile.py::test_database_config_prefers_connection_string_for_asyncpg_kwargs -q` - 1 passed.
 - `./ops doctor` - pass; live systemd/Brain ping, Docker, Vercel, Render CLI,
   PostgreSQL fixed inspection, GitHub auth, and environment-source discovery
   reported without secret values.
+- `./ops status` - pass after the daemon-first container change; the reachable
+  daemon reported present and absent known objects separately.
+- Live database-context path probe selected only the shared-root `.env` and
+  `.env.local` pair from this unprovisioned worktree; `./ops db status` and
+  `./ops db inspect connectivity` then passed without printing credentials.
 - `/usr/bin/python3 ./ops doctor` with `python-dotenv` unavailable - pass;
   database status reported `UNAVAILABLE` while the remaining snapshot completed.
 - `./ops db inspect connectivity` and `./ops db migrations` - pass through the
@@ -387,18 +455,18 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.agent/capabilities.yaml` | 290 |
+| `.agent/capabilities.yaml` | 298 |
 | `.agent/runbooks/ci.md` | 65 |
-| `.agent/runbooks/database.md` | 85 |
+| `.agent/runbooks/database.md` | 109 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 252 |
+| `.agent/runbooks/discovery-ledger.md` | 274 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
 | `.agent/runbooks/testing.md` | 101 |
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 827 |
-| `plans/PR-Agent-Operations-Contract.md` | 404 |
-| `tests/test_agent_operations_contract.py` | 494 |
-| **Total** | **2865** |
+| `ops` | 879 |
+| `plans/PR-Agent-Operations-Contract.md` | 472 |
+| `tests/test_agent_operations_contract.py` | 654 |
+| **Total** | **3199** |

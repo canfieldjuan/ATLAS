@@ -88,20 +88,28 @@ Finding:
 Root Compose defines no PostgreSQL service. Atlas uses native PostgreSQL 16 on
 port `5433`; the current session can run fixed read-only connectivity and
 migration-ledger inspections through Atlas's application configuration path.
+Database inspection selects one configuration context: explicit override,
+worktree application files, shared-root application files, or systemd fallback;
+it does not merge every key-inventory source.
 
 Canonical method:
 Use `./ops db status`, `./ops db inspect connectivity`, and
 `./ops db migrations`. Arbitrary SQL is intentionally unavailable until Atlas
 has a privilege-restricted inspection role; transaction read-only mode alone
-does not prevent side effects from invoked PostgreSQL functions.
+does not prevent side effects from invoked PostgreSQL functions. Use
+`ATLAS_OPS_ENV_FILES` only for an intentional explicit context.
 
 Verified:
 2026-08-24: `./ops db inspect connectivity` and `./ops db migrations` succeeded
 through `DatabaseConfig`/asyncpg with fixed SQL inside `READ ONLY` transactions.
+Focused context-selection tests covered explicit, worktree, shared-root, and
+systemd sources; a live worktree probe selected only the shared-root `.env` and
+`.env.local` pair before connectivity succeeded.
 
 Failure notes:
 Do not substitute a random `5432` instance, use live `atlas` for integration
-tests, or use Alembic. Application startup invokes the custom migration runner.
+tests, merge worktree and live-service contexts, or use Alembic. Application
+startup invokes the custom migration runner.
 
 ## Root Compose prerequisites
 
@@ -110,18 +118,27 @@ Even a read-only-looking `docker compose ps` can fail before inspecting Docker.
 
 Finding:
 The root Compose file requires `ATLAS_NOCODB_DB_PASSWORD` during interpolation,
-even when the intended operation is status or another service.
+even when the intended operation is status or another service. Docker object
+absence is meaningful only after `docker info` proves the daemon/authentication
+boundary; otherwise inspect failures are provider unavailability, not absent
+containers.
 
 Canonical method:
-Use `./ops status` and targeted `docker inspect` / `./ops logs container` for
-discovery. Set the NocoDB credential only for an authorized Compose operation.
+Use `./ops status` for the daemon-first classification and targeted
+`docker inspect` / `./ops logs container` after it succeeds. Set the NocoDB
+credential only for an authorized Compose operation.
 
 Verified:
 2026-08-24: Docker daemon access succeeded while root `docker compose ps`
-failed at NocoDB interpolation with the variable absent.
+failed at NocoDB interpolation with the variable absent. Focused status tests
+covered CLI absence, offline mode, daemon failure, object absence/presence, and
+an empty successful inspect; live `./ops status` classified known objects after
+a successful daemon probe.
 
 Failure notes:
-Do not weaken the required-variable expression merely to make status work.
+Do not weaken the required-variable expression merely to make status work, and
+do not interpret a stopped/unreachable/permission-denied daemon as an inventory
+where every container is absent.
 
 ## Database migrations and test databases
 
@@ -133,7 +150,9 @@ Finding:
 Atlas uses a custom SQL migration runner and `schema_migrations`. The full chain
 is not fresh-applicable because later files depend on out-of-band
 `product_metadata`. Database workflows create disposable PostgreSQL 16 services
-and pass test-specific URL variables.
+and pass test-specific URL variables. Local integration admission requires
+exactly one canonical test URL so stale credentials cannot compete for which
+destructive suite target pytest inherits.
 
 Canonical method:
 Inspect `atlas_brain/storage/migrations/__init__.py`, use
@@ -142,11 +161,14 @@ unless a local disposable database is explicit.
 
 Verified:
 2026-08-24: runner code, startup call path, workflow service definitions, test
-gates, and the live ledger were inspected.
+gates, and the live ledger were inspected. The focused 0/1/2/3 active-URL
+matrix admitted only one canonical variable and rejected every other
+cardinality before the pytest executor.
 
 Failure notes:
 A skipped DB test is not proof. Never apply the full chain to a fresh target as
-an exploratory action.
+an exploratory action, and never leave multiple canonical integration URLs
+exported for one run.
 
 ## Logs and CI
 

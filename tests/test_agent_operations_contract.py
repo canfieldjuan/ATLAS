@@ -19,6 +19,7 @@ DATABASE_CONFIG_KEYS = OPS_MODULE["DATABASE_CONFIG_KEYS"]
 TEST_DATABASE_URL_KEYS = OPS_MODULE["TEST_DATABASE_URL_KEYS"]
 OpsError = OPS_MODULE["OpsError"]
 database_inspection_command = OPS_MODULE["database_inspection_command"]
+database_env_files = OPS_MODULE["database_env_files"]
 database_runtime_environment = OPS_MODULE["database_runtime_environment"]
 
 
@@ -159,6 +160,70 @@ def test_database_runtime_environment_overrides_dotenv(
     assert child_env["ATLAS_DB_HOST"] == "runtime.example"
 
 
+def test_database_file_context_prefers_worktree_over_shared_and_systemd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = tmp_path / "worktree"
+    shared = tmp_path / "shared"
+    systemd = tmp_path / "systemd.env"
+    for path in (worktree, shared):
+        path.mkdir()
+    (worktree / ".env").write_text("ATLAS_DB_HOST=worktree.example\n", encoding="utf-8")
+    (shared / ".env").write_text("ATLAS_DB_HOST=shared.example\n", encoding="utf-8")
+    systemd.write_text("ATLAS_DB_HOST=systemd.example\n", encoding="utf-8")
+    monkeypatch.delenv("ATLAS_OPS_ENV_FILES", raising=False)
+    monkeypatch.delenv("ATLAS_DB_HOST", raising=False)
+    function_globals = database_env_files.__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: worktree)
+    monkeypatch.setitem(function_globals, "shared_root", lambda: shared)
+    monkeypatch.setitem(function_globals, "systemd_env_files", lambda: [systemd])
+
+    selected = database_env_files()
+    child_env = database_runtime_environment()
+
+    assert selected == [worktree / ".env", worktree / ".env.local"]
+    assert child_env["ATLAS_DB_HOST"] == "worktree.example"
+
+
+def test_database_file_context_fallbacks_are_explicit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worktree = tmp_path / "worktree"
+    shared = tmp_path / "shared"
+    systemd = tmp_path / "systemd.env"
+    for path in (worktree, shared):
+        path.mkdir()
+    (shared / ".env.local").write_text("ATLAS_DB_HOST=shared.example\n", encoding="utf-8")
+    systemd.write_text("ATLAS_DB_HOST=systemd.example\n", encoding="utf-8")
+    monkeypatch.delenv("ATLAS_OPS_ENV_FILES", raising=False)
+    function_globals = database_env_files.__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: worktree)
+    monkeypatch.setitem(function_globals, "shared_root", lambda: shared)
+    monkeypatch.setitem(function_globals, "systemd_env_files", lambda: [systemd])
+
+    assert database_env_files() == [shared / ".env", shared / ".env.local"]
+
+    (shared / ".env.local").unlink()
+    assert database_env_files() == [systemd]
+
+
+def test_database_file_context_honors_explicit_override_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "first.env"
+    second = tmp_path / "second.env"
+    first.write_text("ATLAS_DB_HOST=first.example\n", encoding="utf-8")
+    second.write_text("ATLAS_DB_HOST=second.example\n", encoding="utf-8")
+    monkeypatch.setenv("ATLAS_OPS_ENV_FILES", os.pathsep.join((str(first), str(second))))
+    monkeypatch.delenv("ATLAS_DB_HOST", raising=False)
+
+    assert database_env_files() == [first, second]
+    assert database_runtime_environment()["ATLAS_DB_HOST"] == "second.example"
+
+
 def test_database_probe_degrades_when_project_dotenv_is_unavailable(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -265,6 +330,35 @@ def test_integration_guard_admits_each_canonical_database_variable(
     target = "tests/test_agent_operations_contract.py::test_doctor_runs_without_live_provider_access"
     assert OPS_MODULE["test_command"](["integration", target, "-q"]) == 0
     assert calls and calls[0][-2:] == [target, "-q"]
+
+
+@pytest.mark.parametrize("active_count", (0, 2, 3))
+def test_integration_guard_requires_exactly_one_database_variable(
+    active_count: int,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in TEST_DATABASE_URL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    active_keys = TEST_DATABASE_URL_KEYS[:active_count]
+    for key in active_keys:
+        monkeypatch.setenv(key, f"postgresql://canary.invalid/{key.lower()}")
+    monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
+    calls: list[list[str]] = []
+    function_globals = OPS_MODULE["test_command"].__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
+    monkeypatch.setitem(
+        function_globals,
+        "exec_command",
+        lambda args, **_kwargs: calls.append(args) or 0,
+    )
+
+    with pytest.raises(OpsError, match="exactly one") as exc_info:
+        OPS_MODULE["test_command"](
+            ["integration", "tests/test_agent_operations_contract.py"]
+        )
+    assert calls == []
+    assert all(key in str(exc_info.value) for key in active_keys)
+    assert "postgresql://" not in str(exc_info.value)
 
 
 @pytest.mark.parametrize(
@@ -419,6 +513,68 @@ def test_doctor_runs_without_live_provider_access() -> None:
     assert "UNKNOWN" in result.stdout
 
 
+def test_container_status_stops_at_unavailable_daemon(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    commands: list[list[str]] = []
+    function_globals = OPS_MODULE["container_status"].__globals__
+    monkeypatch.setattr(function_globals["shutil"], "which", lambda _name: None)
+    OPS_MODULE["container_status"]()
+    assert "containers: UNAVAILABLE" in capsys.readouterr().out
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        return subprocess.CompletedProcess(args, 1, "", "daemon unavailable")
+
+    monkeypatch.delenv("ATLAS_OPS_OFFLINE", raising=False)
+    monkeypatch.setitem(function_globals, "run", fake_run)
+    monkeypatch.setattr(function_globals["shutil"], "which", lambda _name: "/usr/bin/docker")
+
+    OPS_MODULE["container_status"]()
+
+    output = capsys.readouterr().out
+    assert commands == [["docker", "info"]]
+    assert "containers: UNAVAILABLE" in output
+    assert "absent" not in output
+
+
+def test_container_status_classifies_offline_and_object_states(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    function_globals = OPS_MODULE["container_status"].__globals__
+    monkeypatch.setattr(function_globals["shutil"], "which", lambda _name: "/usr/bin/docker")
+    monkeypatch.setenv("ATLAS_OPS_OFFLINE", "1")
+    monkeypatch.setitem(
+        function_globals,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("offline status must not call Docker"),
+    )
+    OPS_MODULE["container_status"]()
+    assert "containers: UNKNOWN (offline test mode)" in capsys.readouterr().out
+
+    monkeypatch.delenv("ATLAS_OPS_OFFLINE", raising=False)
+    monkeypatch.setitem(function_globals, "KNOWN_CONTAINERS", ("running", "missing", "empty"))
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args == ["docker", "info"]:
+            return subprocess.CompletedProcess(args, 0, "ok", "")
+        name = args[-1]
+        if name == "running":
+            return subprocess.CompletedProcess(args, 0, "running\n", "")
+        if name == "empty":
+            return subprocess.CompletedProcess(args, 0, "", "")
+        return subprocess.CompletedProcess(args, 1, "", "not found")
+
+    monkeypatch.setitem(function_globals, "run", fake_run)
+    OPS_MODULE["container_status"]()
+    output = capsys.readouterr().out
+    assert "running: running" in output
+    assert "missing: absent" in output
+    assert "empty: UNKNOWN" in output
+
+
 def test_mutating_database_and_deployment_commands_are_not_exposed() -> None:
     for args in (("db", "write"), ("db", "migrate"), ("deploy", "production")):
         result = subprocess.run(
@@ -455,6 +611,10 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
     assert capabilities["deployment"]["frontend"]["provider"] == "Vercel"
     assert "./ops doctor" in capabilities["project"]["source_of_truth"]
     assert "./ops runtime inspection" not in capabilities["project"]["source_of_truth"]
+    assert capabilities["workspace"]["shared_root"]["path_hint"] == (
+        "the parent for a conventional .git common directory; otherwise the "
+        "direct bare common directory"
+    )
 
 
 def test_fresh_agent_documentation_contract_is_complete() -> None:

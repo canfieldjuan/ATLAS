@@ -150,7 +150,44 @@ def offline() -> bool:
     return os.environ.get("ATLAS_OPS_OFFLINE") == "1"
 
 
+def unique_paths(candidates: list[Path]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(resolved)
+    return unique
+
+
+def systemd_env_files() -> list[Path]:
+    if shutil.which("systemctl") is None:
+        return []
+    result = run(
+        [
+            "systemctl",
+            "--user",
+            "show",
+            SYSTEMD_UNIT,
+            "--property=EnvironmentFiles",
+            "--value",
+            "--no-pager",
+        ],
+        timeout=5,
+    )
+    if result.returncode != 0:
+        return []
+    candidates = []
+    for line in result.stdout.splitlines():
+        raw_path = line.strip().split(" ", 1)[0]
+        if raw_path:
+            candidates.append(Path(raw_path).expanduser())
+    return unique_paths(candidates)
+
+
 def env_files() -> list[Path]:
+    """Return the broad, key-only environment-source inventory."""
     override = os.environ.get("ATLAS_OPS_ENV_FILES")
     if override is not None:
         candidates = [Path(item).expanduser() for item in override.split(os.pathsep) if item]
@@ -166,32 +203,30 @@ def env_files() -> list[Path]:
                 repo_root() / "graphiti-wrapper/.env.example",
             )
         )
-        if shutil.which("systemctl"):
-            result = run(
-                [
-                    "systemctl",
-                    "--user",
-                    "show",
-                    SYSTEMD_UNIT,
-                    "--property=EnvironmentFiles",
-                    "--value",
-                    "--no-pager",
-                ],
-                timeout=5,
-            )
-            if result.returncode == 0:
-                for line in result.stdout.splitlines():
-                    raw_path = line.strip().split(" ", 1)[0]
-                    if raw_path:
-                        candidates.append(Path(raw_path).expanduser())
-    unique: list[Path] = []
-    seen: set[Path] = set()
-    for candidate in candidates:
-        resolved = candidate.resolve(strict=False)
-        if resolved not in seen:
-            seen.add(resolved)
-            unique.append(resolved)
-    return unique
+        candidates.extend(systemd_env_files())
+    return unique_paths(candidates)
+
+
+def database_env_files() -> list[Path]:
+    """Select one application-equivalent database configuration context."""
+    override = os.environ.get("ATLAS_OPS_ENV_FILES")
+    if override is not None:
+        return unique_paths(
+            [Path(item).expanduser() for item in override.split(os.pathsep) if item]
+        )
+
+    seen_roots: set[Path] = set()
+    for root in (worktree_root(), shared_root()):
+        if root is None:
+            continue
+        resolved_root = root.resolve(strict=False)
+        if resolved_root in seen_roots:
+            continue
+        seen_roots.add(resolved_root)
+        candidates = [resolved_root / ".env", resolved_root / ".env.local"]
+        if any(path.is_file() for path in candidates):
+            return candidates
+    return systemd_env_files()
 
 
 def parse_env_keys(path: Path) -> list[str]:
@@ -230,7 +265,7 @@ def parse_env_values(
 def database_runtime_environment() -> dict[str, str]:
     """Pass DB configuration to the project interpreter without argv exposure."""
     config: dict[str, str] = {}
-    for path in env_files():
+    for path in database_env_files():
         config.update(parse_env_values(path, DATABASE_CONFIG_KEYS))
     for key in DATABASE_CONFIG_KEYS:
         if key in os.environ:
@@ -511,12 +546,21 @@ def container_status() -> None:
     if shutil.which("docker") is None:
         status_line("containers", "UNAVAILABLE")
         return
+    if offline():
+        status_line("containers", "UNKNOWN", "offline test mode")
+        return
+    if run(["docker", "info"], timeout=8).returncode != 0:
+        status_line("containers", "UNAVAILABLE", "Docker daemon/authentication unavailable")
+        return
     for name in KNOWN_CONTAINERS:
         result = run(
             ["docker", "inspect", "--format", "{{.State.Status}}", name],
             timeout=5,
         )
-        state = result.stdout.strip() if result.returncode == 0 else "absent"
+        if result.returncode != 0:
+            state = "absent"
+        else:
+            state = result.stdout.strip() or "UNKNOWN"
         status_line(name, state)
 
 
@@ -717,10 +761,18 @@ def test_command(args: list[str]) -> int:
         if len(args) < 2:
             raise OpsError("name a focused integration test target")
         validate_integration_target(root, args[1:])
-        if not any(os.environ.get(key) for key in TEST_DATABASE_URL_KEYS):
+        active_database_keys = [
+            key for key in TEST_DATABASE_URL_KEYS if os.environ.get(key)
+        ]
+        if len(active_database_keys) != 1:
+            detail = (
+                "none are set; use one of: " + ", ".join(TEST_DATABASE_URL_KEYS)
+                if not active_database_keys
+                else "multiple are set: " + ", ".join(active_database_keys)
+            )
             raise OpsError(
-                "integration tests require one explicit disposable test database URL; "
-                f"use one of: {', '.join(TEST_DATABASE_URL_KEYS)}"
+                "integration tests require exactly one explicit disposable test "
+                f"database URL; {detail}"
             )
         if os.environ.get("ATLAS_CONFIRM_DISPOSABLE_TEST_DB") != "1":
             raise OpsError(
