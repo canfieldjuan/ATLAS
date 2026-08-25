@@ -42,6 +42,22 @@ also hides legitimate unrelated base changes that land after event creation.
   gate, focused workflow tests, unchanged real-overlap proof, YAML/plan/body/
   diff audits, and the mechanical push. Full units remain GitHub-only.
 
+### Contract revision 2
+
+- New evidence: the lifecycle-class test only matches independent YAML text
+  fragments, so it cannot prove which case arm exits or reaches the auditor.
+- Revised root cause: the workflow implementation is lifecycle-gated, but the
+  regression proof does not execute that decision and therefore permits a
+  branch-placement regression to remain green.
+- Revised required change surface: execute the existing base-owned audit-step
+  shell with stubbed `gh` and auditor command boundaries, and assert exit status
+  plus auditor invocation for `OPEN`, `CLOSED`, `MERGED`, and an unknown state.
+- Revised non-scope: do not change the workflow mechanism, extract a new runtime
+  helper, touch the auditor, add dependencies, or broaden beyond lifecycle-gate
+  behavior proof.
+- Revised verification plan: run only the focused workflow contract file plus
+  plan/body/diff/mechanical checks; the full unit gate remains GitHub-only.
+
 ## Scope (this PR)
 
 Ownership lane: dev-workflow/session-lane-admission
@@ -50,8 +66,9 @@ Max files: 3
 
 1. Snapshot the live base and PR head, then audit only while the current PR is
    still open.
-2. Add focused workflow contract proof for open/live-drift, terminal/self-merge,
-   unknown-state failure, and preserved PR-head data-only handling.
+2. Add executable focused workflow contract proof for open/live-drift,
+   terminal/self-merge, unknown-state failure, and preserved PR-head data-only
+   handling.
 
 ### Review Contract
 
@@ -62,7 +79,7 @@ Max files: 3
     `tests/test_session_lane_workflow.py::test_session_lane_workflow_snapshots_live_base_before_state_gate`.
   - Canonical `CLOSED` and `MERGED` states exit successfully before the auditor,
     while any unrecognized state fails; settled by
-    `tests/test_session_lane_workflow.py::test_session_lane_workflow_closes_pr_state_class`.
+    `tests/test_session_lane_workflow.py::test_session_lane_workflow_executes_lifecycle_gate`.
   - The workflow still fetches `pull/${PR_NUMBER}/head` strictly as data and
     never executes code from its worktree; settled by the live-base/state-gate
     test plus the trusted-base workflow test.
@@ -122,8 +139,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Deployed/default config values: the workflow derives the base ref and PR
   number from the `pull_request_target` event and lifecycle state from GitHub;
   there is no repository-configured fallback.
-- Explicit value probe: workflow contract tests cover the `OPEN`, `CLOSED`,
-  `MERGED`, and default state branches plus the live-base refspec.
+- Explicit value probe: the focused test executes the audit-step shell for
+  `OPEN`, `CLOSED`, `MERGED`, and an unknown state and separately asserts status
+  plus auditor invocation; structural checks cover the live-base refspec.
 - Absent value probe: N/A - GitHub's pull-request event contract supplies the
   base SHA/ref and PR number; the workflow has no alternate event path.
 - Default-session/default-context probe: the job-level event guard remains
@@ -176,12 +194,18 @@ Parked hardening: none.
 - Revised expected red: the workflow contract file reported `2 failed, 2
   passed` because the current head neither refreshed the live base nor closed
   the PR-state class.
-- `./ops test focused tests/test_session_lane_workflow.py -q` - `4 passed`.
+- Earlier focused proof: `./ops test focused
+  tests/test_session_lane_workflow.py -q` - `4 passed`, but the lifecycle test
+  matched YAML fragments without executing the decision.
+- Executable lifecycle proof: `./ops test focused
+  tests/test_session_lane_workflow.py -q` - `7 passed`; the real audit-step
+  shell invokes the stubbed auditor only for `OPEN`, exits zero without it for
+  `CLOSED` and `MERGED`, and rejects an unknown state without invoking it.
 - `./ops test focused tests/test_audit_pr_session_drift.py::test_cli_fails_when_base_changed_same_file_since_branch_point -q` - `1 passed`; real
   same-file base drift remains blocking.
-- Boundary/effect probe: PR #2496 returns canonical state `OPEN` and reaches the
-  live-base audit path; merged PR #2495 returns `MERGED` and reaches the terminal
-  no-op path; the explicit default branch rejects unknown/empty state.
+- Boundary/effect probe: executing the real audit-step shell proves `OPEN`
+  reaches the auditor, `CLOSED`/`MERGED` are terminal zero-exit no-ops, and the
+  explicit default rejects unknown state without invoking the auditor.
 - Plan sync, PR-body audit, fix-loop disposition audit, YAML parse, and `git
   diff --check` pass after the revision.
 - Mechanical push review remains pending and will run once through
@@ -193,6 +217,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.github/workflows/session_lane.yml` | 15 |
-| `plans/PR-Session-Lane-Base-Snapshot.md` | 198 |
-| `tests/test_session_lane_workflow.py` | 33 |
-| **Total** | **246** |
+| `plans/PR-Session-Lane-Base-Snapshot.md` | 222 |
+| `tests/test_session_lane_workflow.py` | 101 |
+| **Total** | **338** |
