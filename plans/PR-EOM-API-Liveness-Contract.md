@@ -389,5 +389,5 @@ notification exit diagnostics, as listed above.
 | `plans/PR-EOM-API-Liveness-Contract.md` | 393 |
 | `scripts/atlas_api_healthcheck.py` | 649 |
 | `scripts/install_atlas_api_healthcheck.py` | 482 |
-| `tests/test_atlas_api_healthcheck.py` | 1399 |
-| **Total** | **2952** |
+| `tests/test_atlas_api_healthcheck.py` | 1420 |
+| **Total** | **2973** |

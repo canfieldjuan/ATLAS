@@ -6,6 +6,7 @@ import http.client
 import itertools
 import json
 import os
+import shutil
 import string
 import subprocess
 import sys
@@ -972,6 +973,26 @@ def test_service_template_uses_installed_script_and_private_environment():
     assert "eom-atlas-api-health-" not in service
     assert "SuccessExitStatus=0 2 4" in service
     assert "OnUnitActiveSec=5min" in timer
+
+
+def test_systemd_templates_verify_when_systemd_analyze_is_available():
+    systemd_analyze = shutil.which("systemd-analyze")
+    if systemd_analyze is None:
+        pytest.skip("systemd-analyze is unavailable")
+
+    result = subprocess.run(
+        [
+            systemd_analyze,
+            "verify",
+            str(REPO_ROOT / "config" / installer.SERVICE_NAME),
+            str(REPO_ROOT / "config" / installer.TIMER_NAME),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(
