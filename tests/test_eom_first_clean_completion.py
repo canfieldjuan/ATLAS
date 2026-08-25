@@ -59,6 +59,11 @@ _PREREQUISITE_HANDOFF_GUARD_FUNCTIONS = (
     "require_eom_customer_handoff_finalization",
     "prevent_eom_customer_handoff_mutation",
 )
+_LIFECYCLE_GUARD_FUNCTION = "prevent_eom_lead_lifecycle_event_mutation"
+_LIFECYCLE_GUARD_TRIGGERS = (
+    "trg_prevent_eom_lead_lifecycle_event_mutation",
+    "trg_prevent_eom_lead_lifecycle_event_truncate",
+)
 _ACTOR_ID_LENGTH_BOUNDARIES = (
     1,
     10,
@@ -123,7 +128,7 @@ async def _provision_nocodb_login(connection: Any) -> None:
 
 
 async def _grant_completion_runtime_dml_as_guard(connection: Any) -> None:
-    """Restore the migration's durable runtime grant without changing ownership."""
+    """Restore the guarded tables' durable runtime grants without ownership."""
 
     await connection.execute("SET ROLE atlas_eom_handoff_owner")
     try:
@@ -134,6 +139,9 @@ async def _grant_completion_runtime_dml_as_guard(connection: Any) -> None:
         await connection.execute(
             "GRANT SELECT, INSERT, UPDATE "
             "ON TABLE eom_first_clean_completion_receipts TO atlas"
+        )
+        await connection.execute(
+            "GRANT SELECT, INSERT ON TABLE eom_lead_lifecycle_events TO atlas"
         )
     finally:
         await connection.execute("RESET ROLE")
@@ -429,18 +437,20 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             """,
             [
                 "eom_customer_handoffs",
+                "eom_lead_lifecycle_events",
                 "eom_first_clean_completion_operation_receipts",
                 "eom_first_clean_completion_receipts",
             ],
         )
         assert {row["relname"]: row["owner"] for row in ownership} == {
             "eom_customer_handoffs": "atlas_eom_handoff_owner",
+            "eom_lead_lifecycle_events": "atlas_eom_handoff_owner",
             "eom_first_clean_completion_operation_receipts": (
                 "atlas_eom_handoff_owner"
             ),
             "eom_first_clean_completion_receipts": "atlas_eom_handoff_owner",
         }
-        handoff_function_ownership = await pool._connection.fetch(
+        protected_function_ownership = await pool._connection.fetch(
             """
             SELECT protected_function.proname, role.rolname AS owner
             FROM pg_proc AS protected_function
@@ -452,12 +462,39 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
               AND protected_function.pronargs = 0
             ORDER BY protected_function.proname
             """,
-            list(_PREREQUISITE_HANDOFF_GUARD_FUNCTIONS),
+            [*_PREREQUISITE_HANDOFF_GUARD_FUNCTIONS, _LIFECYCLE_GUARD_FUNCTION],
         )
-        assert {row["proname"]: row["owner"] for row in handoff_function_ownership} == {
+        assert {
+            row["proname"]: row["owner"] for row in protected_function_ownership
+        } == {
             function_name: "atlas_eom_handoff_owner"
-            for function_name in _PREREQUISITE_HANDOFF_GUARD_FUNCTIONS
+            for function_name in (
+                *_PREREQUISITE_HANDOFF_GUARD_FUNCTIONS,
+                _LIFECYCLE_GUARD_FUNCTION,
+            )
         }
+        lifecycle_trigger_bindings = await pool._connection.fetch(
+            """
+            SELECT trigger.tgname, trigger_function.proname,
+                   owner.rolname AS function_owner
+            FROM pg_trigger AS trigger
+            JOIN pg_proc AS trigger_function ON trigger_function.oid = trigger.tgfoid
+            JOIN pg_roles AS owner ON owner.oid = trigger_function.proowner
+            WHERE trigger.tgrelid = 'eom_lead_lifecycle_events'::regclass
+              AND trigger.tgname = ANY($1::text[])
+              AND NOT trigger.tgisinternal
+            ORDER BY trigger.tgname
+            """,
+            list(_LIFECYCLE_GUARD_TRIGGERS),
+        )
+        assert [dict(row) for row in lifecycle_trigger_bindings] == [
+            {
+                "tgname": trigger_name,
+                "proname": _LIFECYCLE_GUARD_FUNCTION,
+                "function_owner": "atlas_eom_handoff_owner",
+            }
+            for trigger_name in sorted(_LIFECYCLE_GUARD_TRIGGERS)
+        ]
         runtime_acl_rows = await pool._connection.fetch(
             """
             SELECT relation.relname, acl.privilege_type
@@ -474,6 +511,7 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             [
                 "eom_first_clean_completion_operation_receipts",
                 "eom_first_clean_completion_receipts",
+                "eom_lead_lifecycle_events",
             ],
         )
         runtime_acl: dict[str, set[str]] = {}
@@ -490,6 +528,7 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
                 "SELECT",
                 "UPDATE",
             },
+            "eom_lead_lifecycle_events": {"INSERT", "SELECT"},
         }
         guard_acl_rows = await pool._connection.fetch(
             """
@@ -682,6 +721,107 @@ async def test_schema_readiness_rejects_non_guard_table_ownership() -> None:
 
 
 @pytest.mark.asyncio
+async def test_schema_readiness_requires_guard_owned_lifecycle_boundary() -> None:
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        try:
+            await pool._connection.execute(
+                "ALTER TABLE eom_lead_lifecycle_events OWNER TO atlas"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                "ALTER TABLE eom_lead_lifecycle_events OWNER TO atlas_eom_handoff_owner"
+            )
+            await _grant_completion_runtime_dml_as_guard(pool._connection)
+        assert await first_clean_completion_schema_ready(pool) is True
+
+        try:
+            await pool._connection.execute(
+                "ALTER FUNCTION prevent_eom_lead_lifecycle_event_mutation() "
+                "OWNER TO atlas"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                "ALTER FUNCTION prevent_eom_lead_lifecycle_event_mutation() "
+                "OWNER TO atlas_eom_handoff_owner"
+            )
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_lifecycle_trigger_bound_to_other_function() -> (
+    None
+):
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        definitions: list[str] = []
+        try:
+            await pool._connection.execute(
+                """
+                CREATE FUNCTION eom_lifecycle_guard_probe()
+                RETURNS TRIGGER
+                LANGUAGE plpgsql
+                AS $$
+                BEGIN
+                    RETURN NEW;
+                END;
+                $$
+                """
+            )
+            await pool._connection.execute(
+                "ALTER FUNCTION eom_lifecycle_guard_probe() "
+                "OWNER TO atlas_eom_handoff_owner"
+            )
+            for trigger_name in _LIFECYCLE_GUARD_TRIGGERS:
+                definition = await pool._connection.fetchval(
+                    """
+                    SELECT pg_get_triggerdef(trigger.oid)
+                    FROM pg_trigger AS trigger
+                    WHERE trigger.tgrelid = 'eom_lead_lifecycle_events'::regclass
+                      AND trigger.tgname = $1
+                    """,
+                    trigger_name,
+                )
+                assert isinstance(definition, str)
+                definitions.append(definition)
+                trigger_ident = _quote_ident(trigger_name)
+                await pool._connection.execute(
+                    f"DROP TRIGGER {trigger_ident} ON eom_lead_lifecycle_events"
+                )
+                if trigger_name.endswith("mutation"):
+                    await pool._connection.execute(
+                        "CREATE TRIGGER "
+                        f"{trigger_ident} BEFORE UPDATE OR DELETE "
+                        "ON eom_lead_lifecycle_events FOR EACH ROW "
+                        "EXECUTE FUNCTION eom_lifecycle_guard_probe()"
+                    )
+                else:
+                    await pool._connection.execute(
+                        "CREATE TRIGGER "
+                        f"{trigger_ident} BEFORE TRUNCATE "
+                        "ON eom_lead_lifecycle_events FOR EACH STATEMENT "
+                        "EXECUTE FUNCTION eom_lifecycle_guard_probe()"
+                    )
+
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            for trigger_name in _LIFECYCLE_GUARD_TRIGGERS:
+                trigger_ident = _quote_ident(trigger_name)
+                await pool._connection.execute(
+                    "DROP TRIGGER IF EXISTS "
+                    f"{trigger_ident} ON eom_lead_lifecycle_events"
+                )
+            for definition in definitions:
+                await pool._connection.execute(definition)
+            await pool._connection.execute(
+                "DROP FUNCTION IF EXISTS eom_lifecycle_guard_probe()"
+            )
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
 async def test_schema_readiness_rejects_guard_fk_access_stripped_by_acl_cleanup() -> (
     None
 ):
@@ -757,6 +897,12 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
             )
             role_created = True
             await pool._connection.execute(
+                "REVOKE INSERT ON TABLE eom_lead_lifecycle_events FROM atlas"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+            await _grant_completion_runtime_dml_as_guard(pool._connection)
+            assert await first_clean_completion_schema_ready(pool) is True
+            await pool._connection.execute(
                 """
                 GRANT DELETE ON TABLE eom_first_clean_completion_receipts TO atlas
                 """
@@ -768,6 +914,13 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
                 """
             )
             await pool._connection.execute(
+                "GRANT UPDATE ON TABLE eom_lead_lifecycle_events TO atlas"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+            await pool._connection.execute(
+                "REVOKE UPDATE ON TABLE eom_lead_lifecycle_events FROM atlas"
+            )
+            await pool._connection.execute(
                 "GRANT SELECT ON TABLE eom_first_clean_completion_receipts "
                 f"TO {role_ident}"
             )
@@ -777,6 +930,9 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
                 """
                 REVOKE DELETE ON TABLE eom_first_clean_completion_receipts FROM atlas
                 """
+            )
+            await pool._connection.execute(
+                "REVOKE UPDATE ON TABLE eom_lead_lifecycle_events FROM atlas"
             )
             if role_created:
                 await pool._connection.execute(
@@ -1405,8 +1561,8 @@ async def test_schema_is_ready_and_direct_receipt_rewrite_is_refused() -> None:
             """,
             second_contact_id,
             operation_key,
-            second_receipt_id,
-            second_handoff_id,
+            str(second_receipt_id),
+            str(second_handoff_id),
             second_customer_id,
             second_site_id,
             lifecycle_time,
@@ -1470,8 +1626,8 @@ async def test_schema_is_ready_and_direct_receipt_rewrite_is_refused() -> None:
             """,
             second_contact_id,
             future_operation_key,
-            future_receipt_id,
-            second_handoff_id,
+            str(future_receipt_id),
+            str(second_handoff_id),
             second_customer_id,
             second_site_id,
             future_time,

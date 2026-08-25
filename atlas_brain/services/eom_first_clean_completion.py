@@ -238,6 +238,20 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           )
                    )
                    AND (
+                       SELECT COUNT(*) = 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relkind = 'r'
+                          AND relation.relname = 'eom_lead_lifecycle_events'
+                          AND relation.relowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
+                   AND (
                        SELECT COUNT(*) = 2
                          FROM pg_proc AS protected_function
                          JOIN pg_namespace AS namespace
@@ -247,6 +261,21 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                               'require_eom_customer_handoff_finalization',
                               'prevent_eom_customer_handoff_mutation'
                           )
+                          AND protected_function.pronargs = 0
+                          AND protected_function.proowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 1
+                         FROM pg_proc AS protected_function
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = protected_function.pronamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND protected_function.proname =
+                              'prevent_eom_lead_lifecycle_event_mutation'
                           AND protected_function.pronargs = 0
                           AND protected_function.proowner = (
                               SELECT oid
@@ -289,6 +318,36 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                               SELECT oid FROM pg_roles WHERE rolname = 'atlas'
                           )
                           AND acl.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE')
+                   )
+                   AND (
+                       SELECT COUNT(*) = 2
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname = 'eom_lead_lifecycle_events'
+                          AND acl.grantee = (
+                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+                          )
+                          AND acl.privilege_type IN ('SELECT', 'INSERT')
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname = 'eom_lead_lifecycle_events'
+                          AND acl.grantee = (
+                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+                          )
+                          AND acl.privilege_type NOT IN ('SELECT', 'INSERT')
                    )
                    AND (
                        SELECT COUNT(*) = 14
@@ -415,6 +474,16 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                        'eom_first_clean_completion_receipts',
                        'UPDATE'
                    )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_lead_lifecycle_events',
+                       'SELECT'
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_lead_lifecycle_events',
+                       'INSERT'
+                   )
                    AND (
                        SELECT COUNT(*) = 4
                          FROM pg_constraint
@@ -469,6 +538,35 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                                AND NOT trigger.tgisinternal
                                AND trigger.tgenabled IN ('O', 'A')
                         )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 2
+                         FROM pg_trigger AS trigger
+                         JOIN pg_class AS relation
+                           ON relation.oid = trigger.tgrelid
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         JOIN pg_proc AS trigger_function
+                           ON trigger_function.oid = trigger.tgfoid
+                         JOIN pg_namespace AS function_namespace
+                           ON function_namespace.oid = trigger_function.pronamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname = 'eom_lead_lifecycle_events'
+                          AND trigger.tgname IN (
+                              'trg_prevent_eom_lead_lifecycle_event_mutation',
+                              'trg_prevent_eom_lead_lifecycle_event_truncate'
+                          )
+                          AND NOT trigger.tgisinternal
+                          AND trigger.tgenabled IN ('O', 'A')
+                          AND function_namespace.nspname = current_schema()
+                          AND trigger_function.proname =
+                              'prevent_eom_lead_lifecycle_event_mutation'
+                          AND trigger_function.pronargs = 0
+                          AND trigger_function.proowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
                    )
                 """
             )

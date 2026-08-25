@@ -8,10 +8,11 @@
 --
 -- This is a controlled DBA-only migration. The normal Atlas runtime no longer
 -- owns eom_customer_handoffs after migration 354, so it cannot safely create
--- a foreign key to that guard-owned table. More importantly, the new immutable
--- evidence must itself be guard-owned; a runtime-owned table could disable its
--- own append-only triggers. Use the dedicated 394 preflight/apply command,
--- never the slim EOM profile's ordinary migration startup.
+-- a foreign key to that guard-owned table. More importantly, the receipt and
+-- lifecycle evidence boundaries must be guard-owned; a runtime-owned table or
+-- trigger function could disable or replace its append-only implementation.
+-- Use the dedicated 394 preflight/apply command, never the slim EOM profile's
+-- ordinary migration startup.
 --
 -- Rollback: stop the completion route and its tracker consumer first, then
 -- retain these append-only receipts as audit evidence. Do not delete a receipt
@@ -373,6 +374,10 @@ BEGIN
         OWNER TO atlas_eom_handoff_owner;
     ALTER TABLE eom_first_clean_completion_receipts
         OWNER TO atlas_eom_handoff_owner;
+    ALTER TABLE eom_lead_lifecycle_events
+        OWNER TO atlas_eom_handoff_owner;
+    ALTER FUNCTION prevent_eom_lead_lifecycle_event_mutation()
+        OWNER TO atlas_eom_handoff_owner;
     ALTER FUNCTION prevent_eom_first_clean_completion_mutation()
         OWNER TO atlas_eom_handoff_owner;
     ALTER FUNCTION require_eom_first_clean_completion_operation_scope()
@@ -424,6 +429,12 @@ BEGIN
     );
     EXECUTE format(
         'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_first_clean_completion_receipts TO atlas',
+        schema_name
+    );
+    -- Existing lifecycle writers append evidence; they never need table
+    -- ownership or mutation authority.
+    EXECUTE format(
+        'GRANT SELECT, INSERT ON TABLE %I.eom_lead_lifecycle_events TO atlas',
         schema_name
     );
 END;

@@ -34,6 +34,10 @@ cannot be safely exercised or a route without the durable invariants it claims.
   PostgreSQL foreign-key enforcement runs under the referencing table owner,
   so its required operation-receipt key-share lookup fails even though the
   `atlas` runtime ACL is correct.
+- Review root cause: readiness accepted the lifecycle append-only triggers by
+  label and enabled state without proving their table/function implementation
+  was outside the runtime owner. Migration 351 creates that function under the
+  runtime, while migration 354 protects only the canonical-handoff boundary.
 
 ## Scope (this PR)
 
@@ -70,9 +74,10 @@ Max files: 10
     superuser, creates the foreign-keyed receipt tables as a trusted no-login
     guard owner, revokes direct runtime/NocoDB guard membership, rejects an
     inherited guard path, preserves the guard owner's foreign-key check access,
-    and grants the Atlas runtime only `SELECT`, `INSERT`, and `UPDATE`; database
-    tests prove that owner/ACL state and that a non-superuser executor is
-    rejected before DDL.
+    moves the lifecycle append-only table/function boundary to that same guard,
+    and grants the Atlas runtime only the table access actual writers need;
+    database tests prove that owner/ACL state and that a non-superuser executor
+    is rejected before DDL.
   - The service requires the guarded receipt schema and prerequisite
     handoff/lifecycle integrity triggers before serving; route tests prove a
     missing, owner-mismatched, disabled, or append-only trigger becomes a safe
@@ -149,6 +154,28 @@ Max files: 10
   the four listed files).
 - Parked hardening: none.
 
+### Review-thread disposition preflight
+
+- Root decision: protect lifecycle trigger implementations from the runtime.
+- Source trace: migration 351 runtime-owned lifecycle mutation function ->
+  migration 354 transfers only handoff objects -> completion readiness checks
+  lifecycle trigger labels/enabled state -> runtime can replace the guard body.
+- Upstream files: `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
+  `atlas_brain/services/eom_first_clean_completion.py`,
+  `tests/test_eom_first_clean_completion.py`, and this plan.
+- Fix strategy: upstream-root.
+- Blocking predicate: data.
+- Disposition: fix in this PR.
+- Allowed files: `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
+  `atlas_brain/services/eom_first_clean_completion.py`,
+  `tests/test_eom_first_clean_completion.py`,
+  `plans/PR-First-Clean-Completion-Receipt.md`, and
+  `SESSION_STATE.codex-eom-first-clean-completion.local.md`.
+- Max files: 10 (the existing PR-wide file budget; this repair may modify only
+  the four listed files).
+- Parked hardening: no new migration number or runtime API is required because
+  migration 394 is still the un-deployed controlled DBA boundary.
+
 ### Files touched
 
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
@@ -188,9 +215,11 @@ trigger functions to `atlas_eom_handoff_owner`. It first requires migration
 354's guarded handoff table and protected functions, revokes direct
 runtime/NocoDB guard membership, rejects inherited membership, preserves the
 guard owner's operation-table access needed by PostgreSQL foreign-key checks,
-and grants Atlas only `SELECT`, `INSERT`, and `UPDATE` for the row locks and
-writes the service needs. Readiness attests both the exact trusted owner ACL and
-the runtime's limited ACL. The route refuses to serve if receipt
+and transfers the lifecycle append-only table and mutation function to that
+guard. Atlas retains only the lifecycle reads/inserts required by existing
+writers; the earlier lifecycle ordering sequence remains outside this slice.
+Readiness attests both the exact trusted owner ACL and the runtime's limited ACL
+plus the lifecycle trigger binding. The route refuses to serve if receipt
 ownership/ACLs/triggers or the
 prerequisite handoff ownership/functions/triggers and lifecycle integrity
 triggers are not exactly ready, so deploying code before the DBA apply is safe.
@@ -239,11 +268,12 @@ an automatic completion source and is intentionally left outside this slice.
   - Command: ruff check atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py
   - Command: `python -m py_compile atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py`
   - Command: `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py`
-    (`15 passed, 25 skipped`; the skipped cases require the deliberately absent
+    (`15 passed, 27 skipped`; the skipped cases require the deliberately absent
     `ATLAS_MIGRATION_TEST_DATABASE_URL`).
-  - Isolated PostgreSQL probe: the migration ownership/ACL catalog, real receipt
-    write, owner-restoration readiness, and stripped-guard readiness cases passed
-    (`4 passed`) against a disposable local PostgreSQL 16 container.
+  - Isolated PostgreSQL probe: the focused completion/DBA suite passed
+    (`42 passed`) against a disposable local PostgreSQL 16 container. It covers
+    the lifecycle table/function owner, trigger-to-function binding, narrow
+    runtime lifecycle ACL, foreign-key ACL recovery, and real receipt write.
   - Command: `python scripts/sync_pr_plan.py plans/PR-First-Clean-Completion-Receipt.md origin/main`
   - Command: `python scripts/audit_plan_doc.py plans/PR-First-Clean-Completion-Receipt.md`
   - Command: `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-First-Clean-Completion-Receipt.md`
@@ -264,11 +294,11 @@ an automatic completion source and is intentionally left outside this slice.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 12 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 844 |
-| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 435 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 942 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 446 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 85 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 274 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 304 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
-| `tests/test_eom_first_clean_completion.py` | 1552 |
+| `tests/test_eom_first_clean_completion.py` | 1708 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **3653** |
+| **Total** | **3948** |
