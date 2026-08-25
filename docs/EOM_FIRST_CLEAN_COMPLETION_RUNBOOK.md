@@ -30,7 +30,9 @@ only the dedicated runner's explicit selection may apply it.
    creating any receipt evidence. The configured `atlas` runtime must be a
    non-superuser, non-role-admin login that neither owns the current database
    nor has a direct or inherited membership path to an elevated PostgreSQL
-   role.
+   role. If `atlas_eom_handoff_owner` already exists, it must already be
+   `NOLOGIN`; migration 394 refuses it rather than converting a role that may
+   have an authenticated session.
 3. Inject a short-lived, protected PostgreSQL superuser DSN into
    `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL`. Do not put that DSN in
    a command line, browser configuration, source file, or application runtime
@@ -79,8 +81,8 @@ handoff table and its protected functions to be guard-owned, transfers the
 schema plus the two receipt tables, lifecycle table, lifecycle ordering
     sequence, and their trigger functions to `atlas_eom_handoff_owner`, rebuilds
     the lifecycle append-only function and both of its trigger definitions before
-    that ownership transfer, rejects any
-    direct or inherited guard path held by a non-superuser login, rejects
+    that ownership transfer. It rejects a pre-existing login-enabled guard and
+    any direct or inherited guard path held by a non-superuser login, rejects
     database ownership or effective membership in a role with PostgreSQL
     administrative attributes, and grants the
 Atlas runtime only schema `USAGE, CREATE`, table `SELECT, INSERT, UPDATE` for

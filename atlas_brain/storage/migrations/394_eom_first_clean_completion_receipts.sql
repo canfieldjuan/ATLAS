@@ -79,6 +79,21 @@ BEGIN
             'atlas must be an unprivileged login runtime role before running 394_eom_first_clean_completion_receipts';
     END IF;
 
+    -- Never convert a pre-existing login-enabled guard into NOLOGIN here.
+    -- NOLOGIN prevents a new connection but does not revoke an already
+    -- authenticated guard session, which would retain authority after the
+    -- ownership transfers below. Abort before changing any protected object so
+    -- the DBA can end that session and establish a clean guard boundary.
+    IF EXISTS (
+        SELECT 1
+          FROM pg_roles AS guard_role
+         WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+           AND guard_role.rolcanlogin
+    ) THEN
+        RAISE EXCEPTION
+            'a pre-existing atlas_eom_handoff_owner must be NOLOGIN before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1 FROM pg_roles WHERE rolname = 'atlas_eom_handoff_owner'
     ) THEN

@@ -1756,6 +1756,39 @@ async def test_completion_migration_rejects_elevated_runtime_before_guard_ddl() 
 
 
 @pytest.mark.asyncio
+async def test_completion_migration_rejects_preexisting_login_guard_before_ddl() -> None:
+    """A guard with an authenticated-session path cannot be normalized in place."""
+
+    async with _test_store(
+        migrations=tuple(
+            migration
+            for migration in _COMPLETION_SCHEMA_MIGRATIONS
+            if migration != "394_eom_first_clean_completion_receipts"
+        )
+    ) as (pool, _schema):
+        try:
+            await pool._connection.execute("ALTER ROLE atlas_eom_handoff_owner LOGIN")
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="pre-existing atlas_eom_handoff_owner must be NOLOGIN",
+            ):
+                await pool._connection.execute(
+                    (
+                        MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+                    ).read_text()
+                )
+            assert await pool._connection.fetchval(
+                "SELECT rolcanlogin FROM pg_roles "
+                "WHERE rolname = 'atlas_eom_handoff_owner'"
+            )
+            assert await pool._connection.fetchval(
+                "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+            )
+        finally:
+            await pool._connection.execute("ALTER ROLE atlas_eom_handoff_owner NOLOGIN")
+
+
+@pytest.mark.asyncio
 async def test_completion_migration_requires_canonical_lifecycle_sequence_before_ddl() -> (
     None
 ):
