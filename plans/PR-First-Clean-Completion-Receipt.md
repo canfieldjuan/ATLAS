@@ -33,7 +33,7 @@ cannot be safely exercised or a route without the durable invariants it claims.
 ## Scope (this PR)
 
 Ownership lane: eom/onboarding-first-clean-completion
-Slice phase: Provider-first vertical slice
+Slice phase: vertical slice
 
 1. Add a durable ATLAS receipt for one authenticated completion of the first
    residential service for an already canonicalized EOM customer.
@@ -109,7 +109,7 @@ Slice phase: Provider-first vertical slice
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_first_clean_completion.py`
-- `atlas_brain/storage/migrations/393_eom_first_clean_completion_receipts.sql`
+- `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`
 - `plans/PR-First-Clean-Completion-Receipt.md`
 - `tests/test_eom_first_clean_completion.py`
 - `tests/test_eom_missed_call_recovery.py`
@@ -161,6 +161,10 @@ additive; rollback stops the new route/consumer while preserving audit evidence.
   SetupIntent, cancellation policy, and email delivery/retry evidence: #2156.
 - Customer-visible completion/status display: #2156 after the tracker contract
   is deployed and capability-gated.
+- Migration catalog coordination: #2492 is a separate active DBA-only
+  missed-call privilege repair that reserves migration `393`. This slice uses
+  migration `394` to avoid a duplicate catalog name; neither workflow depends
+  on the other.
 
 Parked hardening: none. Existing calendar/booking data cannot safely serve as
 an automatic completion source and is intentionally left outside this slice.
@@ -168,15 +172,12 @@ an automatic completion source and is intentionally left outside this slice.
 ## Verification
 
 - Local fast checks passed:
-  - `ruff check atlas_brain/eom_api/funnel.py
-    atlas_brain/services/eom_first_clean_completion.py
-    tests/test_eom_first_clean_completion.py
-    tests/test_eom_missed_call_recovery.py`
-  - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/main_eom.py
-    atlas_brain/services/eom_first_clean_completion.py`
-  - `pytest -q tests/test_eom_first_clean_completion.py
-    tests/test_eom_funnel_capability_manifest.py
-    tests/test_eom_missed_call_recovery.py::test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled`
+  - Ruff passed for `atlas_brain/eom_api/funnel.py`,
+    `atlas_brain/services/eom_first_clean_completion.py`,
+    `tests/test_eom_first_clean_completion.py`, and
+    `tests/test_eom_missed_call_recovery.py`.
+  - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/main_eom.py atlas_brain/services/eom_first_clean_completion.py`
+  - `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_missed_call_recovery.py::test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled`
     (`15 passed, 15 skipped`; the skipped cases require the deliberately absent
     `ATLAS_MIGRATION_TEST_DATABASE_URL`).
   - `git diff --check`
@@ -193,8 +194,8 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 50 |
 | `atlas_brain/services/eom_first_clean_completion.py` | 573 |
-| `atlas_brain/storage/migrations/393_eom_first_clean_completion_receipts.sql` | 200 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 200 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 200 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 201 |
 | `tests/test_eom_first_clean_completion.py` | 931 |
 | `tests/test_eom_missed_call_recovery.py` | 15 |
-| **Total** | **2092** |
+| **Total** | **2093** |

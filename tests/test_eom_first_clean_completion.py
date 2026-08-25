@@ -261,7 +261,7 @@ def test_slim_eom_completion_migration_helper_uses_curated_set() -> None:
         "351_eom_lead_lifecycle_events",
         "353_eom_customer_handoffs",
         "366_contacts_customer_type",
-        "393_eom_first_clean_completion_receipts",
+        "394_eom_first_clean_completion_receipts",
     )
 
 
