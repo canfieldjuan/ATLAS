@@ -27,6 +27,12 @@ from .config_defaults import (
 
 ENV_FILES = (".env", ".env.local")
 DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
+EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV = (
+    "ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL"
+)
+EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV = (
+    "ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA"
+)
 _IMAP_PORT_ADAPTER = TypeAdapter(Annotated[int, Field(ge=1, le=65535)])
 _IMAP_SSL_ADAPTER = TypeAdapter(bool)
 
@@ -2529,6 +2535,50 @@ class InvoicingConfig(BaseSettings):
         validation_alias=AliasChoices("ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL"),
         description="TEST ONLY: isolated legacy monthly-writer PostgreSQL target. The harness separately accepts only its exact loopback test URL.",
     )
+
+
+class EOMFirstCleanCompletionDBAConfig(BaseSettings):
+    """Protected DBA-only configuration for the first-clean schema runner.
+
+    This is deliberately separate from ``Settings``: the normal Atlas runtime
+    must never need the privileged migration connection, while the controlled
+    command receives one validated deploy-time configuration boundary.
+    """
+
+    model_config = SettingsConfigDict(env_file=ENV_FILES, extra="ignore")
+
+    database_url: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(
+            EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV
+        ),
+        repr=False,
+        description=(
+            "Protected PostgreSQL superuser DSN used only by the controlled "
+            "EOM first-clean completion schema runner."
+        ),
+    )
+    schema_name: str = Field(
+        default="",
+        validation_alias=AliasChoices(EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV),
+        description=(
+            "Canonical PostgreSQL schema shared with the EOM funnel runtime and "
+            "bound on every controlled DBA-runner connection."
+        ),
+    )
+
+    @field_validator("schema_name")
+    @classmethod
+    def validate_schema_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            return ""
+        if not normalized.isascii() or not normalized.isidentifier():
+            raise ValueError(
+                "EOM first-clean completion DBA schema must be one ASCII "
+                "PostgreSQL identifier"
+            )
+        return normalized
 
 
 class ExternalDataConfig(BaseSettings):
