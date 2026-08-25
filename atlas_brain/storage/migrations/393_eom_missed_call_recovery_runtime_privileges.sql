@@ -341,6 +341,191 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- The application schema can remain writable by the normal runtime for
+    -- ordinary migrations. Its guard-owned callbacks therefore cannot rely on
+    -- search-path position alone for user-defined function dispatch: a runtime
+    -- overload with a closer VARCHAR or unknown-literal signature could win.
+    -- The trusted migration-389 bodies above establish the source we are
+    -- replacing. Recreate only the callbacks with user-defined calls so every
+    -- such dispatch names this schema and its exact trusted argument types.
+    EXECUTE format(
+        $definition$
+        CREATE OR REPLACE FUNCTION %1$I.cancel_eom_missed_call_on_recipient_change(
+            target_contact_id UUID
+        )
+        RETURNS VOID
+        LANGUAGE plpgsql
+        AS $body$
+        DECLARE
+            effective_recipient TEXT;
+        BEGIN
+            SELECT %1$I.eom_missed_call_effective_recipient(
+                c.id::UUID,
+                c.email::TEXT
+            )
+              INTO effective_recipient
+              FROM contacts AS c
+             WHERE c.id = target_contact_id
+               AND c.business_context_id = 'effingham_maids';
+
+            IF NOT FOUND THEN
+                RETURN;
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
+                  FROM eom_missed_call_sequences AS sequence
+                 WHERE sequence.contact_id = target_contact_id
+                   AND sequence.state IN ('active', 'blocked_configuration')
+                   AND lower(btrim(sequence.recipient_email)) IS DISTINCT FROM
+                       effective_recipient
+            ) THEN
+                PERFORM %1$I.cancel_eom_missed_call_sequences_for_contact(
+                    target_contact_id::UUID,
+                    'recipient_changed'::VARCHAR,
+                    'interaction_trigger'::VARCHAR
+                );
+            END IF;
+        END;
+        $body$;
+        $definition$,
+        schema_name
+    );
+
+    EXECUTE format(
+        $definition$
+        CREATE OR REPLACE FUNCTION %1$I.cancel_eom_missed_call_on_contact_change()
+        RETURNS TRIGGER
+        LANGUAGE plpgsql
+        AS $body$
+        DECLARE
+            cancellation_reason VARCHAR(64);
+        BEGIN
+            IF OLD.business_context_id = 'effingham_maids'
+               AND NEW.business_context_id IS DISTINCT FROM 'effingham_maids' THEN
+                cancellation_reason := 'tenant_changed';
+            ELSIF NEW.business_context_id IS DISTINCT FROM 'effingham_maids' THEN
+                RETURN NEW;
+            ELSIF NEW.contact_type <> 'lead' THEN
+                cancellation_reason := 'became_customer';
+            ELSIF NEW.status <> 'active' THEN
+                cancellation_reason := 'contact_inactive';
+            ELSIF NEW.lead_stage IS DISTINCT FROM 'new' THEN
+                cancellation_reason := 'lead_advanced';
+            ELSIF NEW.customer_type = 'commercial' THEN
+                cancellation_reason := 'non_residential';
+            ELSIF NEW.email IS DISTINCT FROM OLD.email
+               AND EXISTS (
+                   SELECT 1
+                     FROM eom_missed_call_sequences AS sequence
+                    WHERE sequence.contact_id = NEW.id
+                      AND sequence.state IN ('active', 'blocked_configuration')
+                      AND lower(btrim(sequence.recipient_email)) IS DISTINCT FROM
+                          %1$I.eom_missed_call_effective_recipient(
+                              NEW.id::UUID,
+                              NEW.email::TEXT
+                          )
+               ) THEN
+                cancellation_reason := 'recipient_changed';
+            ELSE
+                RETURN NEW;
+            END IF;
+
+            PERFORM %1$I.cancel_eom_missed_call_sequences_for_contact(
+                NEW.id::UUID,
+                cancellation_reason::VARCHAR,
+                'contact_trigger'::VARCHAR
+            );
+            RETURN NEW;
+        END;
+        $body$;
+        $definition$,
+        schema_name
+    );
+
+    EXECUTE format(
+        $definition$
+        CREATE OR REPLACE FUNCTION %1$I.cancel_eom_missed_call_on_interaction()
+        RETURNS TRIGGER
+        LANGUAGE plpgsql
+        AS $body$
+        DECLARE
+            cancellation_reason VARCHAR(64);
+        BEGIN
+            IF TG_OP <> 'INSERT' THEN
+                PERFORM %1$I.cancel_eom_missed_call_on_recipient_change(
+                    OLD.contact_id::UUID
+                );
+                IF TG_OP = 'UPDATE'
+                   AND NEW.contact_id IS DISTINCT FROM OLD.contact_id THEN
+                    PERFORM %1$I.cancel_eom_missed_call_on_recipient_change(
+                        NEW.contact_id::UUID
+                    );
+                END IF;
+                IF TG_OP = 'DELETE' THEN
+                    RETURN OLD;
+                END IF;
+                RETURN NEW;
+            END IF;
+
+            IF NOT EXISTS (
+                SELECT 1
+                  FROM contacts
+                 WHERE id = NEW.contact_id
+                   AND business_context_id = 'effingham_maids'
+            ) THEN
+                RETURN NEW;
+            END IF;
+
+            IF NEW.metadata->>'missed_call_recovery_cancel_reason' IN (
+                'callback_recorded', 'response_recorded', 'opt_out', 'manual'
+            ) THEN
+                cancellation_reason := NEW.metadata->>'missed_call_recovery_cancel_reason';
+            ELSIF NEW.interaction_type = 'sms'
+               AND %1$I.eom_missed_call_has_proven_inbound_sms(
+                   NEW.metadata::JSONB
+               ) THEN
+                cancellation_reason := 'tracked_inbound_response';
+            ELSIF NEW.interaction_type IN (
+                'email_inbound', 'lead_response', 'callback_completed',
+                'conversation_completed', 'opt_out'
+            ) THEN
+                cancellation_reason := NEW.interaction_type;
+            ELSIF NEW.interaction_type = 'web_form'
+               AND NEW.intent = 'estimate_request' THEN
+                cancellation_reason := 'new_estimate_request';
+            ELSE
+                RETURN NEW;
+            END IF;
+
+            IF NEW.interaction_type = 'opt_out' THEN
+                INSERT INTO eom_missed_call_contact_suppressions (
+                    contact_id, reason_code, actor_name, source
+                ) VALUES (
+                    NEW.contact_id, 'opt_out', 'system', 'interaction_trigger'
+                ) ON CONFLICT (contact_id) DO NOTHING;
+            END IF;
+
+            IF EXISTS (
+                SELECT 1
+                FROM eom_missed_call_sequences AS sequence
+                WHERE sequence.contact_id = NEW.contact_id
+                  AND sequence.state IN ('active', 'blocked_configuration')
+                  AND NEW.occurred_at > sequence.created_at
+            ) THEN
+                PERFORM %1$I.cancel_eom_missed_call_sequences_for_contact(
+                    NEW.contact_id::UUID,
+                    cancellation_reason::VARCHAR,
+                    'interaction_trigger'::VARCHAR
+                );
+            END IF;
+            RETURN NEW;
+        END;
+        $body$;
+        $definition$,
+        schema_name
+    );
+
     FOR relation_name IN
         SELECT unnest(ARRAY[
             'eom_missed_call_operation_receipts',

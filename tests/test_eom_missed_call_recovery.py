@@ -849,9 +849,54 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO {runtime_probe_ident}"
             )
             await connection.execute(
+                f"GRANT CREATE ON SCHEMA {_quote_ident(schema)} TO {runtime_probe_ident}"
+            )
+            await connection.execute(
                 "SELECT pg_catalog.set_config("
                 "'atlas.eom_missed_call_recovery_runtime_role', $1, FALSE)",
                 runtime_probe_role,
+            )
+            runtime_connection = await asyncpg.connect(
+                database_url,
+                user=runtime_probe_role,
+                password=_RUNTIME_PROBE_PASSWORD,
+            )
+            await runtime_connection.execute(
+                f"SET search_path TO {_quote_ident(schema)}, public"
+            )
+            await runtime_connection.execute(
+                """
+                CREATE FUNCTION eom_missed_call_effective_recipient(
+                    target_contact_id UUID,
+                    fallback_contact_email VARCHAR
+                ) RETURNS TEXT
+                LANGUAGE plpgsql
+                AS $body$
+                BEGIN
+                    PERFORM set_config(
+                        'atlas.eom_missed_call_recipient_overload_probe', current_user, FALSE
+                    );
+                    RETURN fallback_contact_email;
+                END;
+                $body$
+                """
+            )
+            await runtime_connection.execute(
+                """
+                CREATE FUNCTION cancel_eom_missed_call_sequences_for_contact(
+                    target_contact_id UUID,
+                    target_reason TEXT,
+                    target_source TEXT
+                ) RETURNS VOID
+                LANGUAGE plpgsql
+                AS $body$
+                BEGIN
+                    PERFORM set_config(
+                        'atlas.eom_missed_call_cancel_overload_probe', current_user, FALSE
+                    );
+                END;
+                $body$
+                """
             )
             runtime_contact_id = await _insert_estimate_lead(
                 admin_pool,
@@ -864,6 +909,20 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             interaction_id = await _insert_estimate_lead(
                 admin_pool,
                 email="interaction@example.test",
+            )
+            overload_contact_id = uuid4()
+            await connection.execute(
+                """
+                INSERT INTO contacts (
+                    id, full_name, email, business_context_id, contact_type, status,
+                    lead_stage, source, customer_type, created_at
+                ) VALUES ($1, 'Overload Probe Lead', $2, $3, 'lead', 'active', 'new',
+                          'test', 'unknown', $4)
+                """,
+                overload_contact_id,
+                "overload-before@example.test",
+                _EOM_CONTEXT,
+                _NOW,
             )
             # A repair must not preserve a prior broad application grant just
             # because the table is being transferred from its old owner.
@@ -1144,16 +1203,49 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             )
             assert stale_column_acl_rows == []
 
-            runtime_connection = await asyncpg.connect(
-                database_url,
-                user=runtime_probe_role,
-                password=_RUNTIME_PROBE_PASSWORD,
-            )
-            await runtime_connection.execute(
-                f"SET search_path TO {_quote_ident(schema)}, public"
-            )
             runtime_pool = _ConnectionPool(runtime_connection)
             assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            assert await runtime_connection.fetchval(
+                "SELECT has_function_privilege("
+                "current_user, to_regprocedure("
+                "'eom_missed_call_effective_recipient(uuid, character varying)'"
+                "), 'EXECUTE')"
+            )
+            assert await runtime_connection.fetchval(
+                "SELECT has_function_privilege("
+                "current_user, to_regprocedure("
+                "'cancel_eom_missed_call_sequences_for_contact(uuid, text, text)'"
+                "), 'EXECUTE')"
+            )
+            assert (
+                await runtime_connection.fetchval(
+                    "SELECT eom_missed_call_effective_recipient($1::UUID, $2::VARCHAR)",
+                    overload_contact_id,
+                    "runtime-overload@example.test",
+                )
+                == "runtime-overload@example.test"
+            )
+            assert (
+                await runtime_connection.fetchval(
+                    "SELECT current_setting("
+                    "'atlas.eom_missed_call_recipient_overload_probe', TRUE)"
+                )
+                == runtime_probe_role
+            )
+            await runtime_connection.execute(
+                "SELECT cancel_eom_missed_call_sequences_for_contact("
+                "$1::UUID, $2::TEXT, $3::TEXT)",
+                overload_contact_id,
+                "runtime_overload",
+                "runtime_probe",
+            )
+            assert (
+                await runtime_connection.fetchval(
+                    "SELECT current_setting("
+                    "'atlas.eom_missed_call_cancel_overload_probe', TRUE)"
+                )
+                == runtime_probe_role
+            )
 
             await connection.execute(
                 f"GRANT SELECT ON TABLE {_quote_ident(schema)}."
@@ -1381,7 +1473,7 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO atlas_nocodb"
             )
             await connection.execute(
-                f"GRANT SELECT, UPDATE (lead_stage) ON TABLE {_quote_ident(schema)}.contacts "
+                f"GRANT SELECT, UPDATE (lead_stage, email) ON TABLE {_quote_ident(schema)}.contacts "
                 "TO atlas_nocodb"
             )
             await connection.execute(
@@ -1413,6 +1505,40 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 await nocodb_connection.fetchval(
                     "SELECT recipient_email FROM eom_missed_call_sequences LIMIT 1"
                 )
+
+            (
+                _overload_contact_id,
+                _overload_attempt_id,
+                overload_sequence_id,
+            ) = await _insert_active_sequence_for_privilege_probe(
+                runtime_pool,
+                email="overload-before@example.test",
+                contact_id=overload_contact_id,
+            )
+            await nocodb_connection.execute(
+                "UPDATE contacts SET email = $2 WHERE id = $1",
+                overload_contact_id,
+                "overload-after@example.test",
+            )
+            assert (
+                await nocodb_connection.fetchval(
+                    "SELECT current_setting("
+                    "'atlas.eom_missed_call_recipient_overload_probe', TRUE)"
+                )
+                is None
+            )
+            assert (
+                await nocodb_connection.fetchval(
+                    "SELECT current_setting("
+                    "'atlas.eom_missed_call_cancel_overload_probe', TRUE)"
+                )
+                is None
+            )
+            assert await connection.fetchval(
+                "SELECT state = 'cancelled' AND cancellation_reason = 'recipient_changed' "
+                "FROM eom_missed_call_sequences WHERE id = $1",
+                overload_sequence_id,
+            )
 
             (
                 _contact_change_id,

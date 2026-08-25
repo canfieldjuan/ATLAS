@@ -276,6 +276,36 @@ Max files: 10
   revoking it restores readiness; and the existing exact runtime/NocoDB
   allowed/denied real-role paths remain green.
 
+### Definer function-resolution repair contract (current review round)
+
+- Root cause: migration 393 deliberately retains the application schema in its
+  guard-owned `SECURITY DEFINER` functions' search paths so the existing CRM and
+  recovery relations remain reachable. Migration 354 and its supported
+  deployment shape can leave that schema owned or `CREATE`-writable by the
+  normal runtime. Three guarded callbacks then call user-defined helpers with
+  non-exact `VARCHAR` or unknown-literal arguments, so a runtime-created
+  overload can win PostgreSQL function resolution and execute in the guard's
+  definer context.
+- Correct fix must touch/change: after attesting the trusted migration-389
+  functions and before marking them `SECURITY DEFINER`, replace only the three
+  callbacks that make user-defined calls. Every such call must be schema
+  qualified and its arguments explicitly cast to the trusted signature. Extend
+  the disposable real-role proof by granting the configured runtime schema
+  `CREATE`, installing competing overloads before migration 393, and proving a
+  permitted NocoDB contact update neither invokes them nor loses its normal
+  guarded terminalization behavior.
+- Must not change: do not transfer the application schema's ownership, revoke
+  the runtime's general schema `CREATE` capability, change migration 354,
+  change table/function role membership or the direct runtime ACL matrix,
+  introduce a new schema/role/table, alter migration 389, alter generic startup
+  or migration-runner behavior, or change CRM/NocoDB APIs, routes, providers,
+  billing, or production deployment data.
+- Acceptance criteria: a malicious `UUID, VARCHAR` effective-recipient
+  overload and a `UUID, TEXT, TEXT` cancellation overload remain present and
+  callable by the runtime, but cannot run during the NocoDB-triggered guarded
+  contact-update path; the legitimate sequence still terminalizes as
+  `recipient_changed` and the existing runtime/NocoDB proof remains green.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -507,14 +537,14 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 11 |
 | `atlas_brain/services/eom_missed_call_recovery.py` | 310 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 783 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 968 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 525 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 555 |
 | `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 445 |
 | `tests/test_eom_missed_call_privilege_runner.py` | 547 |
-| `tests/test_eom_missed_call_recovery.py` | 1333 |
+| `tests/test_eom_missed_call_recovery.py` | 1459 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **4044** |
+| **Total** | **4385** |
 
 ## Diff size rationale
 
