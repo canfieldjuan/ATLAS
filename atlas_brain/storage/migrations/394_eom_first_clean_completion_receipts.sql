@@ -185,7 +185,6 @@ BEGIN
         'GRANT USAGE, CREATE ON SCHEMA %I TO atlas_eom_handoff_owner',
         schema_name
     );
-    EXECUTE format('GRANT USAGE ON SCHEMA %I TO atlas', schema_name);
 END;
 $$;
 
@@ -403,6 +402,19 @@ DECLARE
     sequence_name TEXT := 'eom_lead_lifecycle_events_sequence_seq';
     grantee_name TEXT;
 BEGIN
+    -- Guarding individual relations is insufficient while the runtime owns
+    -- their containing namespace: a schema owner can DROP SCHEMA ... CASCADE
+    -- around every table/function ACL. Transfer the namespace after all
+    -- prerequisite objects have been checked, then re-grant only the runtime
+    -- schema privileges ordinary future migrations need. CREATE cannot alter
+    -- an existing guard-owned object, and the admission functions use their
+    -- fixed guarded search_path rather than caller-created objects.
+    EXECUTE format(
+        'ALTER SCHEMA %I OWNER TO atlas_eom_handoff_owner',
+        schema_name
+    );
+    EXECUTE format('GRANT USAGE, CREATE ON SCHEMA %I TO atlas', schema_name);
+
     ALTER TABLE eom_first_clean_completion_operation_receipts
         OWNER TO atlas_eom_handoff_owner;
     ALTER TABLE eom_first_clean_completion_receipts

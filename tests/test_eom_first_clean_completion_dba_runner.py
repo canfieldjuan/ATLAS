@@ -9,6 +9,7 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
+from pydantic import ValidationError
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,7 +41,9 @@ class _Connection:
     def __init__(self, state: SimpleNamespace) -> None:
         self._state = state
 
-    async def fetchval(self, query: str, *_args: object) -> bool:
+    async def fetchval(self, query: str, *_args: object) -> object:
+        if "current_schema()" in query:
+            return self._state.schema_name
         if "rolsuper" in query:
             return self._state.executor_is_superuser
         if "to_regclass" in query:
@@ -64,23 +67,36 @@ class _Pool:
 
 def test_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
     runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
     monkeypatch.setenv(
         runner.DBA_DSN_ENV,
         "postgresql://operator:secret@example.test:5432/atlas?sslmode=require",
     )
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
         migration_recorded=False,
+        schema_name=schema_name,
     )
-    pool = _Pool(state)
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
     calls: list[object] = []
 
-    async def create_pool(_database_url: str) -> _Pool:
-        return pool
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        calls.append((database_url, schema_name))
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        assert database_url.startswith("postgresql://operator:secret@example.test")
+        assert schema_name == "eom_canonical"
+        return dba_pool
 
     async def run_migrations(*_args: object, **_kwargs: object) -> None:
-        calls.append(object())
+        raise AssertionError("read-only preflight must not apply migration 394")
 
     args = runner._parse_args([])
     result = asyncio.run(
@@ -91,32 +107,53 @@ def test_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
             config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
                 _env_file=None
             ),
+            funnel_config_factory=lambda: SimpleNamespace(
+                db_connection_string=runtime_database_url
+            ),
         )
     )
 
     assert result == {
-        "target": "dsn=example.test:5432/atlas",
+        "target": "dsn=example.test:5432/atlas;schema=eom_canonical",
         "executor_is_superuser": True,
         "migration": runner.MIGRATION_NAME,
         "migration_recorded": False,
         "applied": False,
     }
-    assert calls == []
-    assert pool.closed is True
+    assert calls == [
+        (runtime_database_url, None),
+        (
+            "postgresql://operator:secret@example.test:5432/atlas?sslmode=require",
+            "eom_canonical",
+        ),
+    ]
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
     runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
     monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
     state = SimpleNamespace(
         executor_is_superuser=False,
         migrations_table_exists=True,
         migration_recorded=False,
+        schema_name=schema_name,
     )
-    pool = _Pool(state)
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
 
-    async def create_pool(_database_url: str) -> _Pool:
-        return pool
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        assert schema_name == "eom_canonical"
+        return dba_pool
 
     args = runner._parse_args(["--apply"])
     with pytest.raises(RuntimeError, match="not a PostgreSQL superuser"):
@@ -127,24 +164,39 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
                 config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
                     _env_file=None
                 ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
             )
         )
-    assert pool.closed is True
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
     runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
     monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
         migration_recorded=False,
+        schema_name=schema_name,
     )
-    pool = _Pool(state)
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
     calls: list[tuple[object, tuple[str, ...]]] = []
 
-    async def create_pool(_database_url: str) -> _Pool:
-        return pool
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        assert schema_name == "eom_canonical"
+        return dba_pool
 
     async def run_migrations(observed_pool: object, *, only: tuple[str, ...]) -> None:
         calls.append((observed_pool, only))
@@ -159,13 +211,17 @@ def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
             config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
                 _env_file=None
             ),
+            funnel_config_factory=lambda: SimpleNamespace(
+                db_connection_string=runtime_database_url
+            ),
         )
     )
 
-    assert calls == [(pool, (runner.MIGRATION_NAME,))]
+    assert calls == [(dba_pool, (runner.MIGRATION_NAME,))]
     assert result["migration_recorded"] is True
     assert result["applied"] is True
-    assert pool.closed is True
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:
@@ -184,7 +240,8 @@ def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:
         )
 
     with pytest.raises(
-        RuntimeError, match=f"Missing protected DBA DSN configuration {runner.DBA_DSN_ENV}"
+        RuntimeError,
+        match=f"Missing protected DBA DSN configuration {runner.DBA_DSN_ENV}",
     ):
         asyncio.run(
             runner._run(
@@ -196,6 +253,189 @@ def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:
             )
         )
     assert pool_calls == []
+
+
+def test_runner_rejects_missing_typed_schema_before_pool(monkeypatch) -> None:
+    runner = _load_runner_module()
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.delenv(runner.DBA_SCHEMA_ENV, raising=False)
+    pool_calls: list[str] = []
+
+    async def create_pool(database_url: str, **_kwargs: object) -> _Pool:
+        pool_calls.append(database_url)
+        raise AssertionError("missing schema must fail before opening a pool")
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"Missing or invalid schema from {runner.DBA_SCHEMA_ENV}",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+            )
+        )
+    assert pool_calls == []
+
+
+def test_typed_dba_schema_rejects_non_identifier_configuration(monkeypatch) -> None:
+    runner = _load_runner_module()
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom;drop schema public")
+
+    with pytest.raises(ValidationError, match="one ASCII PostgreSQL identifier"):
+        runner.EOMFirstCleanCompletionDBAConfig(_env_file=None)
+
+
+def test_runner_rejects_runtime_schema_mismatch_before_opening_dba_pool(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    runtime_pool = _Pool(SimpleNamespace(schema_name="other_schema"))
+    pool_calls: list[tuple[str, str | None]] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        pool_calls.append((database_url, schema_name))
+        assert database_url == runtime_database_url
+        assert schema_name is None
+        return runtime_pool
+
+    with pytest.raises(
+        RuntimeError,
+        match="does not match the EOM funnel runtime schema",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+    assert pool_calls == [(runtime_database_url, None)]
+    assert runtime_pool.closed is True
+
+
+def test_runner_rejects_absent_runtime_schema_before_opening_dba_pool(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    runtime_pool = _Pool(SimpleNamespace(schema_name=None))
+    pool_calls: list[tuple[str, str | None]] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        pool_calls.append((database_url, schema_name))
+        assert database_url == runtime_database_url
+        assert schema_name is None
+        return runtime_pool
+
+    with pytest.raises(
+        RuntimeError,
+        match="Missing or invalid schema from EOM funnel runtime current_schema",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+    assert pool_calls == [(runtime_database_url, None)]
+    assert runtime_pool.closed is True
+
+
+def test_runner_rejects_missing_funnel_runtime_dsn_before_pool(monkeypatch) -> None:
+    runner = _load_runner_module()
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    pool_calls: list[str] = []
+
+    async def create_pool(database_url: str, **_kwargs: object) -> _Pool:
+        pool_calls.append(database_url)
+        raise AssertionError("missing runtime DSN must fail before opening a pool")
+
+    with pytest.raises(
+        RuntimeError,
+        match=f"Missing EOM funnel runtime DSN configuration {runner.FUNNEL_DSN_ENV}",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(db_connection_string=""),
+            )
+        )
+    assert pool_calls == []
+
+
+def test_runner_rejects_dba_pool_that_does_not_hold_the_pinned_schema(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    runtime_pool = _Pool(SimpleNamespace(schema_name="eom_canonical"))
+    dba_pool = _Pool(
+        SimpleNamespace(
+            executor_is_superuser=True,
+            migrations_table_exists=True,
+            migration_recorded=False,
+            schema_name="other_schema",
+        )
+    )
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    with pytest.raises(
+        RuntimeError,
+        match="Controlled DBA pool did not resolve to the configured EOM funnel schema",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 def test_runner_rejects_caller_selected_dsn_environment_name() -> None:

@@ -26,12 +26,16 @@ if str(ROOT) not in sys.path:
 
 from atlas_brain.config import (  # noqa: E402
     EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV,
+    EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV,
     EOMFirstCleanCompletionDBAConfig,
 )
+from atlas_brain.eom_api.config import EOMFunnelConfig  # noqa: E402
 from atlas_brain.storage.migrations import run_migrations  # noqa: E402
 
 
 DBA_DSN_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV
+DBA_SCHEMA_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV
+FUNNEL_DSN_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
 MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
 
 
@@ -54,7 +58,24 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _safe_target_label(database_url: str) -> str:
+def _require_schema_name(value: object, *, source: str) -> str:
+    """Accept one canonical PostgreSQL identifier from a named trusted source."""
+
+    if not isinstance(value, str):
+        raise RuntimeError(f"Missing or invalid schema from {source}")
+    schema_name = value.strip()
+    if not schema_name or not schema_name.isascii() or not schema_name.isidentifier():
+        raise RuntimeError(f"Missing or invalid schema from {source}")
+    return schema_name
+
+
+def _schema_search_path(schema_name: str) -> str:
+    """Render the validated schema for an asyncpg startup setting."""
+
+    return f'"{schema_name}", pg_catalog'
+
+
+def _safe_target_label(database_url: str, *, schema_name: str) -> str:
     """Return a target label that never includes credentials or query values."""
 
     try:
@@ -62,25 +83,61 @@ def _safe_target_label(database_url: str) -> str:
         host = parsed.hostname or "connection-string"
         port = f":{parsed.port}" if parsed.port else ""
         database = parsed.path.lstrip("/") or "<database>"
-        return f"dsn={host}{port}/{database}"
+        return f"dsn={host}{port}/{database};schema={schema_name}"
     except ValueError:
-        return "dsn=<configured>"
+        return f"dsn=<configured>;schema={schema_name}"
 
 
-async def _create_pool(database_url: str) -> Any:
+async def _create_pool(
+    database_url: str,
+    *,
+    schema_name: str | None = None,
+) -> Any:
     try:
         import asyncpg
     except ImportError as exc:  # pragma: no cover - host dependency
         raise RuntimeError(
             "asyncpg is required to run the DBA migration preflight"
         ) from exc
-    return await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
+    pool_kwargs: dict[str, Any] = {
+        "dsn": database_url,
+        "min_size": 1,
+        "max_size": 1,
+    }
+    if schema_name is not None:
+        pool_kwargs["server_settings"] = {
+            "search_path": _schema_search_path(schema_name)
+        }
+    return await asyncpg.create_pool(**pool_kwargs)
 
 
-async def _migration_state(pool: Any) -> tuple[bool, bool]:
-    """Return (executor_is_superuser, migration_recorded) without writes."""
+async def _current_schema(pool: Any) -> str:
+    """Read one pool's effective schema without changing its session state."""
 
     async with pool.acquire() as connection:
+        return _require_schema_name(
+            await connection.fetchval("SELECT current_schema()"),
+            source="EOM funnel runtime current_schema()",
+        )
+
+
+async def _migration_state(
+    pool: Any,
+    *,
+    expected_schema_name: str,
+) -> tuple[bool, bool]:
+    """Return executor/migration state after re-attesting the pinned schema."""
+
+    async with pool.acquire() as connection:
+        observed_schema_name = _require_schema_name(
+            await connection.fetchval("SELECT current_schema()"),
+            source="controlled DBA pool current_schema()",
+        )
+        if observed_schema_name != expected_schema_name:
+            raise RuntimeError(
+                "Controlled DBA pool did not resolve to the configured EOM "
+                "funnel schema"
+            )
         executor_is_superuser = bool(
             await connection.fetchval(
                 """
@@ -111,23 +168,43 @@ async def _migration_state(pool: Any) -> tuple[bool, bool]:
 async def _run(
     args: argparse.Namespace,
     *,
-    create_pool: Callable[[str], Awaitable[Any]] = _create_pool,
+    create_pool: Callable[..., Awaitable[Any]] = _create_pool,
     run_migrations_fn: Callable[..., Awaitable[None]] = run_migrations,
     config_factory: Callable[[], EOMFirstCleanCompletionDBAConfig] = (
         EOMFirstCleanCompletionDBAConfig
     ),
+    funnel_config_factory: Callable[[], EOMFunnelConfig] = EOMFunnelConfig,
 ) -> dict[str, object]:
-    database_url = config_factory().database_url.get_secret_value().strip()
+    config = config_factory()
+    database_url = config.database_url.get_secret_value().strip()
     if not database_url:
+        raise RuntimeError(f"Missing protected DBA DSN configuration {DBA_DSN_ENV}")
+    schema_name = _require_schema_name(config.schema_name, source=DBA_SCHEMA_ENV)
+    funnel_database_url = funnel_config_factory().db_connection_string.strip()
+    if not funnel_database_url:
         raise RuntimeError(
-            f"Missing protected DBA DSN configuration {DBA_DSN_ENV}"
+            f"Missing EOM funnel runtime DSN configuration {FUNNEL_DSN_ENV}"
         )
 
-    pool = await create_pool(database_url)
+    runtime_pool = await create_pool(funnel_database_url)
     try:
-        executor_is_superuser, migration_recorded = await _migration_state(pool)
+        runtime_schema_name = await _current_schema(runtime_pool)
+    finally:
+        await runtime_pool.close()
+    if runtime_schema_name != schema_name:
+        raise RuntimeError(
+            "Configured controlled DBA schema does not match the EOM funnel "
+            "runtime schema"
+        )
+
+    pool = await create_pool(database_url, schema_name=schema_name)
+    try:
+        executor_is_superuser, migration_recorded = await _migration_state(
+            pool,
+            expected_schema_name=schema_name,
+        )
         result: dict[str, object] = {
-            "target": _safe_target_label(database_url),
+            "target": _safe_target_label(database_url, schema_name=schema_name),
             "executor_is_superuser": executor_is_superuser,
             "migration": MIGRATION_NAME,
             "migration_recorded": migration_recorded,
@@ -140,7 +217,10 @@ async def _run(
             )
         if args.apply and not migration_recorded:
             await run_migrations_fn(pool, only=(MIGRATION_NAME,))
-            _executor_is_superuser, migration_recorded = await _migration_state(pool)
+            _executor_is_superuser, migration_recorded = await _migration_state(
+                pool,
+                expected_schema_name=schema_name,
+            )
             if not migration_recorded:
                 raise RuntimeError(
                     "Migration runner returned without recording the EOM "

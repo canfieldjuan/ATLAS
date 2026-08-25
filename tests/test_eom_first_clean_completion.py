@@ -505,8 +505,29 @@ def test_slim_eom_profile_does_not_run_dba_completion_migrations() -> None:
 
 @pytest.mark.asyncio
 async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> None:
-    async with _test_store() as (pool, _schema):
+    async with _test_store() as (pool, schema):
         assert await first_clean_completion_schema_ready(pool) is True
+        namespace_access = await pool._connection.fetchrow(
+            """
+            SELECT owner.rolname AS owner,
+                   has_schema_privilege('atlas', current_schema(), 'USAGE')
+                       AS runtime_usage,
+                   has_schema_privilege('atlas', current_schema(), 'CREATE')
+                       AS runtime_create
+            FROM pg_namespace AS namespace
+            JOIN pg_roles AS owner ON owner.oid = namespace.nspowner
+            WHERE namespace.nspname = current_schema()
+            """
+        )
+        assert dict(namespace_access) == {
+            "owner": "atlas_eom_handoff_owner",
+            "runtime_usage": True,
+            "runtime_create": True,
+        }
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await pool._runtime_connection.execute(
+                f"DROP SCHEMA {_quote_ident(schema)} CASCADE"
+            )
         ownership = await pool._connection.fetch(
             """
             SELECT relation.relname, role.rolname AS owner
@@ -1259,6 +1280,25 @@ async def test_schema_readiness_rejects_non_guard_table_ownership() -> None:
                 """
             )
             await _grant_completion_runtime_dml_as_guard(pool._connection)
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_requires_guard_owned_namespace() -> None:
+    """Relation ownership is insufficient while Atlas owns their schema."""
+
+    async with _test_store() as (pool, schema):
+        schema_ident = _quote_ident(schema)
+        assert await first_clean_completion_schema_ready(pool) is True
+        try:
+            await pool._connection.execute(
+                f"ALTER SCHEMA {schema_ident} OWNER TO atlas"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                f"ALTER SCHEMA {schema_ident} OWNER TO atlas_eom_handoff_owner"
+            )
         assert await first_clean_completion_schema_ready(pool) is True
 
 

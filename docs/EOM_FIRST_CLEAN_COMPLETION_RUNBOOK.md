@@ -31,6 +31,11 @@ only the dedicated runner's explicit selection may apply it.
    a command line, browser configuration, source file, or application runtime
    environment. The controlled runner reads only this typed deploy-time setting;
    it does not accept a caller-selected environment-variable name.
+4. Set `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA` to one ASCII PostgreSQL
+   identifier. It must equal `current_schema()` for the configured
+   `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING`; the runner reads that runtime schema
+   before it opens the DBA pool, pins every DBA pool connection to the declared
+   schema, and fails before migration when either value is absent or differs.
 
 ## Apply
 
@@ -40,10 +45,10 @@ Run the read-only preflight first:
 python scripts/apply_eom_first_clean_completion_schema.py --json
 ```
 
-The result redacts credentials and reports only the target host/database label,
-executor status, named migration, and whether it is already recorded. Confirm
-the executor is a superuser and the target is the intended canonical EOM
-database.
+The result redacts credentials and reports only the target host/database/schema
+label, executor status, named migration, and whether it is already recorded.
+Confirm the executor is a superuser and the target is the intended canonical
+EOM database and runtime schema.
 
 Then apply only migration 394:
 
@@ -52,15 +57,14 @@ python scripts/apply_eom_first_clean_completion_schema.py --apply --json
 ```
 
 The migration atomically records its ledger row, requires the pre-existing
-handoff table and its protected functions to be guard-owned, transfers the two
-receipt tables, lifecycle table, lifecycle ordering sequence, and their trigger
-functions to `atlas_eom_handoff_owner`, rejects any direct or inherited guard
-path held by a non-superuser login, and grants the Atlas runtime only the table
-`SELECT`, `INSERT`, and
-`UPDATE` needed for row locking and receipt
-creation plus sequence `USAGE` needed by the lifecycle default. It does not
-grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, sequence `SELECT` or
-`UPDATE`, ownership, or customer delivery authority.
+handoff table and its protected functions to be guard-owned, transfers the
+schema plus the two receipt tables, lifecycle table, lifecycle ordering
+sequence, and their trigger functions to `atlas_eom_handoff_owner`, rejects any
+direct or inherited guard path held by a non-superuser login, and grants the
+Atlas runtime only schema `USAGE, CREATE`, table `SELECT, INSERT, UPDATE` for
+row locking and receipt creation, plus sequence `USAGE` needed by the lifecycle
+default. It does not grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`,
+sequence `SELECT` or `UPDATE`, schema ownership, or customer delivery authority.
 
 Remove the temporary DBA DSN injection after the result reports
 `"migration_recorded": true`.
@@ -72,9 +76,10 @@ Remove the temporary DBA DSN injection after the result reports
 2. Confirm the service-authenticated completion capability is available only
    when the schema readiness check succeeds. Do not post a test completion for
    a real customer or use a production customer/service identity as a probe.
-   The readiness fence also requires guard ownership of the canonical-handoff
-   table and its protected functions, the existing canonical-handoff
-   finalization/append-only triggers, lifecycle append-only triggers, and the
+   The readiness fence also requires guard ownership of the canonical schema,
+   canonical-handoff table and its protected functions, existing
+   canonical-handoff finalization/append-only triggers, lifecycle append-only
+   triggers, and the
    guard-owned lifecycle ordering sequence with its exact runtime `USAGE` ACL.
    It also refuses to serve if a non-superuser login can directly or indirectly
    assume the guard role; a missing, disabled, runtime-owned, or broadened
@@ -88,7 +93,9 @@ Remove the temporary DBA DSN injection after the result reports
 If the DBA preflight or apply fails, leave the route unavailable and correct
 the database prerequisites or guard-role configuration before retrying. The
 normal runtime must not be granted temporary guard membership or `REFERENCES`
-as a workaround.
+as a workaround. If the configured and observed runtime schemas differ, correct
+the typed schema configuration or the funnel DSN's deployment setting; do not
+override `search_path` ad hoc on a command line.
 
 If application code must be rolled back after a successful apply, remove or
 disable the completion consumer/route first and retain the append-only receipt

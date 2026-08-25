@@ -213,6 +213,19 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                               'MEMBER'
                           )
                    )
+                   -- The runtime must not own the namespace containing the
+                   -- guarded relations: schema ownership can DROP SCHEMA ...
+                   -- CASCADE despite every table/function ACL below.
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_namespace AS namespace
+                        WHERE namespace.nspname = current_schema()
+                          AND namespace.nspowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
                    AND (
                        SELECT COUNT(*) = 2
                          FROM pg_class AS relation
