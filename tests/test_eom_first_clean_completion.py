@@ -1555,6 +1555,13 @@ async def test_schema_readiness_requires_guard_owned_namespace() -> None:
             await pool._connection.execute(
                 f"ALTER SCHEMA {schema_ident} OWNER TO atlas_eom_handoff_owner"
             )
+            # Re-owning the schema does not restore the explicit runtime schema
+            # grants that migration 394 establishes. Restore the complete
+            # guarded baseline before asserting readiness again.
+            assert await first_clean_completion_schema_ready(pool) is False
+            await pool._connection.execute(
+                f"GRANT USAGE, CREATE ON SCHEMA {schema_ident} TO atlas"
+            )
         assert await first_clean_completion_schema_ready(pool) is True
 
 
