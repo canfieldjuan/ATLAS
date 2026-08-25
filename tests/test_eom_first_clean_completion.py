@@ -1028,7 +1028,9 @@ async def test_completion_migration_rebuilds_handoff_guards_before_trusting_them
             asyncpg.RaiseError,
             match="eom_customer_handoffs is immutable",
         ):
-            await pool._runtime_connection.execute("TRUNCATE eom_customer_handoffs")
+            await pool._runtime_connection.execute(
+                "TRUNCATE eom_customer_handoffs, eom_first_clean_completion_receipts"
+            )
 
 
 @pytest.mark.asyncio
