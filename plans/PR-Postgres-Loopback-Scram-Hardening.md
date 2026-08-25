@@ -4,33 +4,24 @@
 
 The authorized EOM recovery exposed two deferred operational defects.
 
-PostgreSQL currently accepts every TCP connection from `127.0.0.1` and `::1`
-with `trust`, including connections requested as the `postgres` superuser.
-Atlas defaults to the `atlas` database role without a password. Although
-`DatabaseConfig` exposes `ATLAS_DB_SOCKET_PATH`, the live pool and fixed
-`./ops db inspect` path call `connection_kwargs()`, which currently ignores
-that setting and always selects the TCP host/port. The deployed application
-cannot move from TCP `trust` to Unix-socket peer authentication merely by
-setting the existing environment variable.
+Loopback TCP `trust` accepts unauthenticated connections as every role,
+including `postgres`. Atlas defaults to `atlas` without a password, and its
+live pool/fixed inspection call `connection_kwargs()`, which ignores the
+existing `ATLAS_DB_SOCKET_PATH`. The deployed application therefore cannot
+move to Unix-socket peer authentication by setting that variable alone.
 
-The recovery also emitted a migration-content-integrity warning. The runner
-deliberately reports raw `missing_source` and `mismatched` historical evidence
-even when matching, attested reconciliation records admit a pending migration.
-The runbook previously described that admissible state as requiring no
-`missing_source` records, contradicting the runner.
+The same recovery reported raw `missing_source` and `mismatched` evidence even
+when matching, attested reconciliations admit a pending migration. The runbook
+incorrectly said that admissible state could contain no `missing_source`.
 
 ### Problem-derived contract
 
 #### Root cause
 
-- The local database boundary is too broad: loopback TCP `trust` lets a local
-  process request any database role without authentication.
-- The intended peer-auth replacement is ineffective because
-  `DatabaseConfig.connection_kwargs()` ignores `socket_path`; the generic pool
-  and fixed inspection use those kwargs rather than `DatabaseConfig.dsn`.
-- The migration runbook conflates raw forensic reporting with admission. The
-  runner admits known mismatches and missing sources only after current
-  attestation; it does not erase or suppress their raw report.
+- Loopback TCP `trust` lets a local process request any database role.
+- `connection_kwargs()` ignores `socket_path`, while the pool and fixed
+  inspection call it rather than `DatabaseConfig.dsn`.
+- The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
 
@@ -42,21 +33,16 @@ The runbook previously described that admissible state as requiring no
      socket rather than loopback TCP.
 2. Update focused `DatabaseConfig` tests in
    `tests/test_eom_render_profile.py` to pin both socket-path forms and the
-   existing TCP/complete-DSN precedence behavior.
-3. Replace the provisional credential/SCRAM procedure in
-   `.agent/runbooks/database.md` with the peer procedure: configure the
-   non-secret socket-path setting, map the actual `atlas-api` OS user to the
-   existing `atlas` PostgreSQL role in `pg_ident.conf`, add a specific
-   socket-peer HBA rule, prove the service/inspection/CRM path, then replace
-   all loopback TCP `trust` rules with `scram-sha-256`. Preserve the existing
-   Unix-socket `postgres` peer recovery path and a rollback sequence.
+   existing TCP/complete-DSN precedence behavior, then assert the actual pool
+   and raw-connection callers receive the socket kwargs.
+3. Replace the provisional credential/SCRAM procedure with non-secret socket
+   configuration, an exact `atlas-api` OS-user → `atlas` peer map, staged
+   service/inspection/CRM proof, loopback-SCRAM replacement, and rollback.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
-5. Remove the unviable, uncommitted systemd encrypted-credential experiment
-   and its tests. The running service is a non-root user service; this host
-   cannot provision a protected credential to that manager without a plaintext
-   secret fallback, so it is not a valid solution.
+5. Remove the unviable, uncommitted encrypted-credential experiment and tests;
+   it would require an unsupported plaintext-secret fallback.
 
 #### Explicit non-scope
 
@@ -72,20 +58,16 @@ The runbook previously described that admissible state as requiring no
 
 #### Assumptions and blockers
 
-- `atlas-api.service` runs as local user `juan-canfield` and PostgreSQL's
-  socket directory is `/var/run/postgresql`; the runbook requires a fresh
-  check of both just before cutover.
-- PostgreSQL accepts the `atlas_app` identity map and no live local TCP
-  replication client depends on loopback `trust`; the cutover requires an
-  activity/replication probe before changing those rules.
-- HBA/ident/shared-configuration changes are an owned, post-merge controlled
-  operation. They require deployment of the source revision containing the
-  socket-kwargs correction first.
+- The service user is `juan-canfield` and the socket is `/var/run/postgresql`;
+  recheck both immediately before cutover.
+- Recheck the peer map and local replication activity before changing HBA.
+- HBA/ident/shared configuration changes occur only after this source revision
+  is deployed.
 
 #### Verification plan
 
-- Focused regression: socket `dsn` and `connection_kwargs()` assertions plus
-  existing TCP and complete-DSN assertions.
+- Focused regression: socket `dsn` and `connection_kwargs()` assertions,
+  existing TCP and complete-DSN assertions, and the pool/raw caller seam.
 - Cheap local gates: focused test target, `bash scripts/check_ascii_python.sh`,
   `git diff --check`, and `python scripts/sync_pr_plan.py ... --check`.
 - GitHub remains the complete unit gate.
@@ -140,32 +122,20 @@ Max files: 5
 
 ## Mechanism
 
-`DatabaseConfig` already owns the socket-path setting. Its split connection
-path will consistently translate it into the asyncpg socket host plus the
-configured port. No password is added: the post-merge server-side identity map
-lets the `atlas-api` OS user authenticate as the existing `atlas` role with
-peer authentication. The socket setting is a non-secret shared application
-configuration value, which `atlas-api` and `./ops` already read.
+`DatabaseConfig` now carries its existing socket path and port into asyncpg.
+No password is added: the post-merge identity map lets `atlas-api` authenticate
+as `atlas` over peer. The map/rule are proved while TCP remains available;
+only then do all loopback `trust` entries become `scram-sha-256`.
 
-The HBA sequence is staged. The exact `pg_ident.conf` mapping and specific HBA
-rule are added and proved while current TCP rules remain available. Only after
-the service genuinely uses the socket do all IPv4/IPv6 loopback TCP `trust`
-rules change to `scram-sha-256`. This removes uncredentialed cross-user local
-impersonation without a plaintext credential mechanism.
-
-The migration-runbook change is documentation only. Raw discrepancies stay
-visible and retain the existing forensic nonzero status; the document now
-describes the runner's actual pending-admission condition.
+The migration-runbook change is documentation only: raw discrepancies stay
+visible and retain their forensic nonzero status.
 
 ## Intentional
 
-- Raw migration mismatch/error logging and preflight exit semantics remain
-  unchanged.
-- `ops` source code remains unchanged: it already carries
-  `ATLAS_DB_SOCKET_PATH` to the fixed inspection child.
-- Existing app database role, database ownership, and non-loopback access
-  remain unchanged.
-- The endpoint-level CRM read is production verification, not a new feature.
+- Raw migration reporting/exit semantics, database role/ownership, and
+  non-loopback access remain unchanged.
+- `ops` already carries `ATLAS_DB_SOCKET_PATH`; CRM read is production proof,
+  not a feature.
 
 ## Deferred
 
@@ -181,7 +151,7 @@ blocks the socket-peer path.
 ## Verification
 
 - Pending before push: `./ops test focused tests/test_eom_render_profile.py -q
-  -k 'database_config'`.
+  -k 'database_config or database_pool_uses_configured_connection_kwargs'`.
 - Pending before push: `bash scripts/check_ascii_python.sh`.
 - Pending before push: `git diff --check`.
 - Pending before push: `python scripts/sync_pr_plan.py
@@ -198,6 +168,6 @@ blocks the socket-peer path.
 | `.agent/runbooks/database.md` | 147 |
 | `atlas_brain/storage/config.py` | 7 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 10 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 203 |
-| `tests/test_eom_render_profile.py` | 31 |
-| **Total** | **398** |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 173 |
+| `tests/test_eom_render_profile.py` | 51 |
+| **Total** | **388** |

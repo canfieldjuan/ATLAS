@@ -954,7 +954,6 @@ def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
     from atlas_brain.storage.config import DatabaseConfig
     from atlas_brain.storage import database
 
-    dsn = "postgresql://atlas_eom:secret@atlas-eom-postgres:5432/atlas_eom"
     calls: dict[str, dict[str, object]] = {}
 
     class _FakePool:
@@ -971,7 +970,12 @@ def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
 
     config = DatabaseConfig(
         enabled=True,
-        connection_string=dsn,
+        connection_string="",
+        socket_path="/var/run/postgresql",
+        port=5433,
+        database="atlas",
+        user="atlas",
+        password="",
         min_pool_size=1,
         max_pool_size=3,
         connect_timeout=4.0,
@@ -994,14 +998,22 @@ def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
         database.db_settings = original_settings
 
     assert calls["create_pool"] == {
-        "dsn": dsn,
+        "host": "/var/run/postgresql",
+        "port": 5433,
+        "database": "atlas",
+        "user": "atlas",
+        "password": "",
         "timeout": 4.0,
         "command_timeout": 9.0,
         "min_size": 1,
         "max_size": 3,
     }
     assert calls["connect"] == {
-        "dsn": dsn,
+        "host": "/var/run/postgresql",
+        "port": 5433,
+        "database": "atlas",
+        "user": "atlas",
+        "password": "",
         "timeout": 4.0,
         "command_timeout": 60,
     }
