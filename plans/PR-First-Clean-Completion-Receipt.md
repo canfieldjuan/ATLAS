@@ -119,6 +119,7 @@ Slice phase: vertical slice
 
 ### Files touched
 
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_first_clean_completion.py`
@@ -128,7 +129,6 @@ Slice phase: vertical slice
 - `scripts/apply_eom_first_clean_completion_schema.py`
 - `tests/test_eom_first_clean_completion.py`
 - `tests/test_eom_first_clean_completion_dba_runner.py`
-- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 
 ## Mechanism
 
@@ -213,11 +213,14 @@ an automatic completion source and is intentionally left outside this slice.
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 12 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
-| `atlas_brain/main_eom.py` | 50 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 573 |
-| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 200 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 201 |
-| `tests/test_eom_first_clean_completion.py` | 931 |
-| `tests/test_eom_missed_call_recovery.py` | 15 |
-| **Total** | **2093** |
+| `atlas_brain/main_eom.py` | 1 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 696 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 340 |
+| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 76 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 223 |
+| `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
+| `tests/test_eom_first_clean_completion.py` | 1013 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
+| **Total** | **2811** |
