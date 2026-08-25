@@ -36,6 +36,7 @@ DEFAULT_RECOVERY_INTERVAL_SECONDS = 1.0
 DEFAULT_STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "atlas-api-health"
 DEFAULT_MAINTENANCE_LOCK = Path.home() / ".config" / "atlas" / "atlas-api.maintenance"
 PENDING_ALERTS = frozenset({"down", "recovered", "auto-recovered"})
+STATE_STATUSES = frozenset({"healthy", "down", "maintenance"})
 MAX_COMMAND_DETAIL = 240
 
 
@@ -131,6 +132,79 @@ def observe(settings: Settings, runner: Runner, opener: Opener, sleeper: Callabl
     return Observation("down", f"auto-recovery did not restore {settings.service}: {last_detail}")
 
 
+def _normalized_base_state(value: object) -> dict[str, object] | None:
+    if value == {}:
+        return {}
+    if not isinstance(value, dict):
+        return None
+    status = value.get("status")
+    consecutive = value.get("consecutive")
+    if (
+        not isinstance(status, str)
+        or status not in STATE_STATUSES
+        or type(consecutive) is not int
+        or consecutive < 0
+    ):
+        return None
+    if status == "down" and consecutive < 1:
+        return None
+    if status != "down" and consecutive != 0:
+        return None
+    return {"status": status, "consecutive": consecutive}
+
+
+def _normalized_notification(value: object) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    alert = value.get("alert")
+    detail = value.get("detail")
+    if not isinstance(alert, str) or alert not in PENDING_ALERTS or not isinstance(detail, str):
+        return None
+    return {"alert": alert, "detail": detail}
+
+
+def normalize_state(value: object) -> dict[str, object] | None:
+    """Validate the persisted state and migrate the previous singular queue."""
+    if not isinstance(value, dict):
+        return None
+
+    queued_value = value.get("pending_notifications")
+    legacy_value = value.get("pending_notification")
+    if queued_value is not None and legacy_value is not None:
+        return None
+    if legacy_value is not None:
+        notification = _normalized_notification(legacy_value)
+        next_state = _normalized_base_state(
+            legacy_value.get("next_state") if isinstance(legacy_value, dict) else None
+        )
+        exit_code = legacy_value.get("exit_code") if isinstance(legacy_value, dict) else None
+        if (
+            notification is None
+            or next_state is None
+            or type(exit_code) is not int
+            or exit_code not in {EXIT_OK, EXIT_RECOVERED, EXIT_DOWN}
+        ):
+            return None
+        return {**next_state, "pending_notifications": [notification]}
+
+    state = _normalized_base_state(value)
+    if state is None:
+        return None
+    if queued_value is None:
+        return state
+    if not isinstance(queued_value, list):
+        return None
+    notifications: list[dict[str, str]] = []
+    for candidate in queued_value:
+        notification = _normalized_notification(candidate)
+        if notification is None:
+            return None
+        notifications.append(notification)
+    if notifications:
+        state["pending_notifications"] = notifications
+    return state
+
+
 def read_state(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
@@ -139,7 +213,11 @@ def read_state(path: Path) -> dict[str, object]:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"WARNING state read failed: {type(exc).__name__}", file=sys.stderr)
         return {}
-    return value if isinstance(value, dict) else {}
+    normalized = normalize_state(value)
+    if normalized is None:
+        print("WARNING state schema is invalid; resetting monitor state", file=sys.stderr)
+        return {}
+    return normalized
 
 
 def write_state(path: Path, state: dict[str, object]) -> None:
@@ -147,7 +225,7 @@ def write_state(path: Path, state: dict[str, object]) -> None:
     path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
 
 
-def append_log(state_dir: Path, message: str) -> None:
+def append_log(state_dir: Path, message: str) -> bool:
     log_path = state_dir / "health.log"
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
@@ -155,11 +233,18 @@ def append_log(state_dir: Path, message: str) -> None:
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(f"{stamp} {message}\n")
     except OSError as exc:
-        raise RuntimeError(f"unable to append Atlas API health log at {log_path}") from exc
+        print(
+            f"WARNING health log append failed at {log_path}: {type(exc).__name__}",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def decide_alert(previous: dict[str, object], observation: Observation, realert_every: int) -> tuple[dict[str, object], str | None, int]:
-    previous_status = str(previous.get("status", "healthy"))
+    previous_status = previous.get("status", "healthy")
+    if not isinstance(previous_status, str) or previous_status not in STATE_STATUSES:
+        previous_status = "healthy"
     if observation.status == "maintenance":
         return {"status": "maintenance", "consecutive": 0}, None, EXIT_OK
     if observation.status == "healthy":
@@ -168,48 +253,29 @@ def decide_alert(previous: dict[str, object], observation: Observation, realert_
     if observation.status == "recovered":
         return {"status": "healthy", "consecutive": 0}, "auto-recovered", EXIT_RECOVERED
 
-    consecutive = int(previous.get("consecutive", 0)) + 1 if previous_status == "down" else 1
+    previous_consecutive = previous.get("consecutive", 0)
+    if type(previous_consecutive) is not int or previous_consecutive < 0:
+        previous_consecutive = 0
+    consecutive = previous_consecutive + 1 if previous_status == "down" else 1
     alert = "down" if previous_status != "down" else None
     if alert is None and realert_every > 0 and consecutive % realert_every == 0:
         alert = "down"
     return {"status": "down", "consecutive": consecutive}, alert, EXIT_DOWN
 
 
-def pending_notification(previous: dict[str, object]) -> tuple[str, str, dict[str, object], int] | None:
-    """Load an undelivered alert without treating its transition as acknowledged."""
-    value = previous.get("pending_notification")
-    if not isinstance(value, dict):
-        return None
-    alert = value.get("alert")
-    detail = value.get("detail")
-    next_state = value.get("next_state")
-    exit_code = value.get("exit_code")
-    if (
-        isinstance(alert, str)
-        and alert in PENDING_ALERTS
-        and isinstance(detail, str)
-        and isinstance(next_state, dict)
-        and exit_code in {EXIT_OK, EXIT_RECOVERED, EXIT_DOWN}
-    ):
-        return alert, detail, next_state, exit_code
-    return None
+def pending_notifications(state: dict[str, object]) -> list[dict[str, str]]:
+    value = state.get("pending_notifications", [])
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
-def state_with_pending_notification(
-    previous: dict[str, object],
-    *,
-    alert: str,
-    detail: str,
-    next_state: dict[str, object],
-    exit_code: int,
+def state_with_pending_notifications(
+    next_state: dict[str, object], notifications: list[dict[str, str]]
 ) -> dict[str, object]:
-    state = dict(previous)
-    state["pending_notification"] = {
-        "alert": alert,
-        "detail": detail,
-        "next_state": next_state,
-        "exit_code": exit_code,
-    }
+    state = dict(next_state)
+    if notifications:
+        state["pending_notifications"] = notifications
     return state
 
 
@@ -275,37 +341,32 @@ def run_healthcheck(
         fcntl.flock(lock, fcntl.LOCK_EX)
         observation = observe(settings, runner, opener, sleeper)
         previous = read_state(state_path)
-        pending = pending_notification(previous)
-        if pending is None:
-            next_state, alert, exit_code = decide_alert(previous, observation, settings.realert_every)
-            alert_detail = observation.detail
-        else:
-            alert, alert_detail, next_state, exit_code = pending
+        next_state, alert, exit_code = decide_alert(previous, observation, settings.realert_every)
+        notifications = pending_notifications(previous)
+        if alert is not None:
+            notifications.append({"alert": alert, "detail": observation.detail})
         append_log(settings.state_dir, f"{observation.status.upper()} {observation.detail}")
         print(f"{observation.status.upper()}: {observation.detail}")
 
-        if alert is None:
+        if not notifications:
             write_state(state_path, next_state)
             return exit_code
         if settings.no_alert:
-            print(f"WARNING --no-alert: {alert} notification not sent and state left unchanged")
+            write_state(state_path, state_with_pending_notifications(next_state, notifications))
+            print("WARNING --no-alert: notifications queued for retry")
             return EXIT_ALERT_UNDELIVERED
 
-        title, body, priority, tags = alert_message(alert, alert_detail)
-        if not notifier(settings.ntfy_url, settings.ntfy_topic, title, body, priority, tags):
-            if pending is None:
+        for index, notification in enumerate(notifications):
+            title, body, priority, tags = alert_message(
+                notification["alert"], notification["detail"]
+            )
+            if not notifier(settings.ntfy_url, settings.ntfy_topic, title, body, priority, tags):
                 write_state(
                     state_path,
-                    state_with_pending_notification(
-                        previous,
-                        alert=alert,
-                        detail=alert_detail,
-                        next_state=next_state,
-                        exit_code=exit_code,
-                    ),
+                    state_with_pending_notifications(next_state, notifications[index:]),
                 )
-            print("WARNING alert undelivered; transition remains pending for retry")
-            return EXIT_ALERT_UNDELIVERED
+                print("WARNING alert undelivered; transition remains queued for retry")
+                return EXIT_ALERT_UNDELIVERED
 
         write_state(state_path, next_state)
         return exit_code

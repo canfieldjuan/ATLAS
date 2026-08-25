@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import stat
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Callable, Mapping, Sequence
 
 
@@ -45,6 +46,19 @@ class InstallPaths:
     @property
     def notification_env(self) -> Path:
         return self.config_dir / "atlas-api-healthcheck.env"
+
+
+@dataclass(frozen=True)
+class FileSnapshot:
+    path: Path
+    payload: bytes | None
+    mode: int | None
+
+
+@dataclass(frozen=True)
+class TimerState:
+    enabled: bool
+    active: bool
 
 
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
@@ -125,9 +139,8 @@ def _append_topic(path: Path, topic: str) -> None:
     except OSError as exc:
         raise RuntimeError(f"cannot read notification environment file: {exc}") from exc
     separator = "" if not existing or existing.endswith("\n") else "\n"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"{existing}{separator}{TOPIC_ENV}={topic}\n", encoding="utf-8")
-    path.chmod(0o600)
+    payload = f"{existing}{separator}{TOPIC_ENV}={topic}\n".encode("utf-8")
+    _atomic_write(path, payload, mode=0o600)
 
 
 def ensure_notification_topic(paths: InstallPaths, environment: Mapping[str, str]) -> str:
@@ -149,14 +162,68 @@ def ensure_notification_topic(paths: InstallPaths, environment: Mapping[str, str
     return "migrated private notification topic" if source == "legacy monitor" else "wrote private notification topic"
 
 
+def _atomic_write(destination: Path, payload: bytes, *, mode: int) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=destination.parent,
+            prefix=f".{destination.name}.",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            os.fchmod(handle.fileno(), mode)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, destination)
+        temporary_path = None
+    except OSError as exc:
+        raise RuntimeError(f"cannot atomically write install destination {destination}") from exc
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError as exc:
+                print(
+                    f"WARNING cannot remove installer temporary file: {type(exc).__name__}",
+                    file=sys.stderr,
+                )
+
+
 def _write_copy(source: Path, destination: Path, *, executable: bool) -> None:
     try:
         payload = source.read_bytes()
     except OSError as exc:
         raise RuntimeError(f"cannot read install source {source}: {exc}") from exc
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(payload)
-    destination.chmod(0o755 if executable else 0o644)
+    _atomic_write(destination, payload, mode=0o755 if executable else 0o644)
+
+
+def _snapshot_file(path: Path) -> FileSnapshot:
+    if not path.exists():
+        return FileSnapshot(path=path, payload=None, mode=None)
+    if not path.is_file():
+        raise RuntimeError(f"install destination is not a regular file: {path}")
+    try:
+        return FileSnapshot(
+            path=path,
+            payload=path.read_bytes(),
+            mode=stat.S_IMODE(path.stat().st_mode),
+        )
+    except OSError as exc:
+        raise RuntimeError(f"cannot snapshot install destination {path}") from exc
+
+
+def _restore_file(snapshot: FileSnapshot) -> None:
+    if snapshot.payload is None:
+        try:
+            snapshot.path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise RuntimeError(f"cannot remove new install destination {snapshot.path}") from exc
+        return
+    mode = snapshot.mode if snapshot.mode is not None else 0o600
+    _atomic_write(snapshot.path, snapshot.payload, mode=mode)
 
 
 def _command_detail(result: subprocess.CompletedProcess[str]) -> str:
@@ -174,28 +241,94 @@ def _run_required(runner: Runner, command: Sequence[str], *, action: str) -> Non
         raise RuntimeError(f"{action} failed ({_command_detail(result)})")
 
 
+def _timer_state(runner: Runner) -> TimerState:
+    enabled = runner(("systemctl", "--user", "is-enabled", "--quiet", TIMER_NAME)).returncode == 0
+    active = runner(("systemctl", "--user", "is-active", "--quiet", TIMER_NAME)).returncode == 0
+    return TimerState(enabled=enabled, active=active)
+
+
+def _rollback_install(
+    snapshots: Sequence[FileSnapshot],
+    timer_state: TimerState,
+    runner: Runner,
+    *,
+    enrollment_attempted: bool,
+) -> list[str]:
+    errors: list[str] = []
+
+    def run_rollback(command: Sequence[str], action: str) -> None:
+        try:
+            result = runner(command)
+        except OSError as exc:
+            errors.append(f"{action} ({type(exc).__name__})")
+            return
+        if result.returncode != 0:
+            errors.append(f"{action} ({_command_detail(result)})")
+
+    if enrollment_attempted:
+        run_rollback(
+            ("systemctl", "--user", "disable", "--now", TIMER_NAME),
+            "cannot remove failed timer enrollment",
+        )
+    for snapshot in snapshots:
+        try:
+            _restore_file(snapshot)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+    run_rollback(("systemctl", "--user", "daemon-reload"), "cannot reload restored systemd files")
+    if timer_state.enabled:
+        run_rollback(("systemctl", "--user", "enable", TIMER_NAME), "cannot restore enabled timer")
+    if timer_state.active:
+        run_rollback(("systemctl", "--user", "start", TIMER_NAME), "cannot restore active timer")
+    return errors
+
+
 def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[str, str] | None = None) -> list[str]:
-    """Install the monitor, enable the timer, then invoke the installed service once."""
+    """Install and prove the monitor before enrolling its timer."""
     environment = os.environ if environment is None else environment
     sources = _source_files(paths)
-    topic_message = ensure_notification_topic(paths, environment)
-    messages = [topic_message]
-    for source, destination, executable in sources:
-        _write_copy(source, destination, executable=executable)
-        messages.append(f"wrote: {destination}")
-    _run_required(runner, ("systemctl", "--user", "daemon-reload"), action="systemd reload")
-    _run_required(
-        runner,
-        ("systemctl", "--user", "enable", "--now", TIMER_NAME),
-        action="timer enable",
-    )
-    _run_required(
-        runner,
-        ("systemctl", "--user", "start", "--wait", SERVICE_NAME),
-        action="initial installed-monitor invocation",
-    )
-    messages.append("enabled timer and invoked installed health service")
-    return messages
+    destinations = [destination for _source, destination, _executable in sources]
+    snapshots = [_snapshot_file(path) for path in (*destinations, paths.notification_env)]
+    previous_timer = _timer_state(runner)
+    enrollment_attempted = False
+    try:
+        if previous_timer.active:
+            _run_required(
+                runner,
+                ("systemctl", "--user", "stop", TIMER_NAME),
+                action="existing timer stop",
+            )
+        topic_message = ensure_notification_topic(paths, environment)
+        messages = [topic_message]
+        for source, destination, executable in sources:
+            _write_copy(source, destination, executable=executable)
+            messages.append(f"wrote: {destination}")
+        _run_required(runner, ("systemctl", "--user", "daemon-reload"), action="systemd reload")
+        _run_required(
+            runner,
+            ("systemctl", "--user", "start", "--wait", SERVICE_NAME),
+            action="initial installed-monitor invocation",
+        )
+        enrollment_attempted = True
+        _run_required(
+            runner,
+            ("systemctl", "--user", "enable", "--now", TIMER_NAME),
+            action="timer enable",
+        )
+        messages.append("proved installed health service and enabled timer")
+        return messages
+    except (OSError, RuntimeError) as exc:
+        rollback_errors = _rollback_install(
+            snapshots,
+            previous_timer,
+            runner,
+            enrollment_attempted=enrollment_attempted,
+        )
+        if rollback_errors:
+            raise RuntimeError(
+                f"{exc}; rollback failed: {'; '.join(rollback_errors)}"
+            ) from exc
+        raise
 
 
 def _matches(source: Path, destination: Path, *, executable: bool) -> tuple[bool, str]:

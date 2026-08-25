@@ -74,8 +74,16 @@ class _Runner:
 
 
 class _InstallerRunner:
-    def __init__(self, *, failing_command: tuple[str, ...] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failing_command: tuple[str, ...] | None = None,
+        timer_enabled: bool = False,
+        timer_active: bool = False,
+    ) -> None:
         self.failing_command = failing_command
+        self.timer_enabled = timer_enabled
+        self.timer_active = timer_active
         self.commands: list[tuple[str, ...]] = []
 
     def __call__(self, command):
@@ -83,6 +91,22 @@ class _InstallerRunner:
         self.commands.append(command)
         if command == self.failing_command:
             return subprocess.CompletedProcess(command, 1, "", "unit\n\x1b[31mfailed")
+        if "is-enabled" in command:
+            return subprocess.CompletedProcess(command, 0 if self.timer_enabled else 1, "", "")
+        if "is-active" in command:
+            return subprocess.CompletedProcess(command, 0 if self.timer_active else 3, "", "")
+        if command[2:4] == ("enable", "--now"):
+            self.timer_enabled = True
+            self.timer_active = True
+        elif command[2:4] == ("disable", "--now"):
+            self.timer_enabled = False
+            self.timer_active = False
+        elif command[2:] == ("enable", installer.TIMER_NAME):
+            self.timer_enabled = True
+        elif command[2:] == ("start", installer.TIMER_NAME):
+            self.timer_active = True
+        elif command[2:] == ("stop", installer.TIMER_NAME):
+            self.timer_active = False
         return subprocess.CompletedProcess(command, 0, "", "")
 
 
@@ -297,14 +321,14 @@ def test_undelivered_down_transition_is_retried(tmp_path):
         settings, runner=runner, opener=_opener(503), notifier=notifier, sleeper=lambda _: None
     )
     assert first == healthcheck.EXIT_ALERT_UNDELIVERED
-    assert _state(settings)["pending_notification"]["alert"] == "down"
+    assert _state(settings)["pending_notifications"][0]["alert"] == "down"
 
     second = healthcheck.run_healthcheck(
         settings, runner=runner, opener=_opener(503), notifier=notifier, sleeper=lambda _: None
     )
     assert second == healthcheck.EXIT_DOWN
     assert len(attempts) == 2
-    assert _state(settings) == {"consecutive": 1, "status": "down"}
+    assert _state(settings) == {"consecutive": 2, "status": "down"}
 
 
 def test_undelivered_recovery_transition_is_retried(tmp_path):
@@ -324,7 +348,7 @@ def test_undelivered_recovery_transition_is_retried(tmp_path):
         settings, runner=runner, opener=_opener(204), notifier=notifier, sleeper=lambda _: None
     )
     assert first == healthcheck.EXIT_ALERT_UNDELIVERED
-    assert _state(settings)["pending_notification"]["alert"] == "recovered"
+    assert _state(settings)["pending_notifications"][0]["alert"] == "recovered"
 
     second = healthcheck.run_healthcheck(
         settings, runner=runner, opener=_opener(204), notifier=notifier, sleeper=lambda _: None
@@ -332,6 +356,39 @@ def test_undelivered_recovery_transition_is_retried(tmp_path):
     assert second == healthcheck.EXIT_OK
     assert attempts[1][2] == "atlas-api recovered"
     assert _state(settings) == {"consecutive": 0, "status": "healthy"}
+
+
+def test_pending_recovery_does_not_hide_a_current_outage(tmp_path):
+    settings = _settings(tmp_path)
+    settings.state_dir.mkdir(parents=True)
+    (settings.state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "status": "healthy",
+                "consecutive": 0,
+                "pending_notifications": [
+                    {"alert": "auto-recovered", "detail": "earlier recovery"}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    sent: list[tuple] = []
+
+    result = healthcheck.run_healthcheck(
+        settings,
+        runner=_Runner(active=False, start_returncode=1),
+        opener=_opener(204),
+        notifier=lambda *args: (sent.append(args), True)[1],
+        sleeper=lambda _: None,
+    )
+
+    assert result == healthcheck.EXIT_DOWN
+    assert [message[2] for message in sent] == [
+        "atlas-api auto-recovered",
+        "atlas-api DOWN",
+    ]
+    assert _state(settings) == {"consecutive": 1, "status": "down"}
 
 
 def test_missing_notification_configuration_does_not_block_recovery(tmp_path):
@@ -348,7 +405,7 @@ def test_missing_notification_configuration_does_not_block_recovery(tmp_path):
 
     assert result == healthcheck.EXIT_ALERT_UNDELIVERED
     assert len(_start_commands(runner)) == 1
-    assert _state(settings)["pending_notification"]["alert"] == "auto-recovered"
+    assert _state(settings)["pending_notifications"][0]["alert"] == "auto-recovered"
 
 
 def test_no_alert_does_not_consume_a_transition(tmp_path):
@@ -363,7 +420,7 @@ def test_no_alert_does_not_consume_a_transition(tmp_path):
     )
 
     assert result == healthcheck.EXIT_ALERT_UNDELIVERED
-    assert not (settings.state_dir / "state.json").exists()
+    assert _state(settings)["pending_notifications"][0]["alert"] == "down"
 
 
 def test_invalid_state_is_visible_before_monitor_resets_it(tmp_path, capsys):
@@ -374,12 +431,86 @@ def test_invalid_state_is_visible_before_monitor_resets_it(tmp_path, capsys):
     assert "WARNING state read failed: JSONDecodeError" in capsys.readouterr().err
 
 
-def test_health_log_failure_has_context(tmp_path):
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"status": [], "consecutive": 0},
+        {"status": "down", "consecutive": "1"},
+        {
+            "status": "healthy",
+            "consecutive": 0,
+            "pending_notification": {
+                "alert": "recovered",
+                "detail": "old",
+                "next_state": {"status": "healthy", "consecutive": 0},
+                "exit_code": [],
+            },
+        },
+        {
+            "status": "healthy",
+            "consecutive": 0,
+            "pending_notifications": [{"alert": "unknown", "detail": "old"}],
+        },
+    ],
+)
+def test_malformed_state_shapes_reset_safely(tmp_path, capsys, value):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(json.dumps(value), encoding="utf-8")
+
+    assert healthcheck.read_state(state_path) == {}
+    assert "WARNING state schema is invalid" in capsys.readouterr().err
+
+
+def test_previous_singular_pending_state_migrates_without_an_outer_status(tmp_path):
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "pending_notification": {
+                    "alert": "down",
+                    "detail": "earlier outage",
+                    "next_state": {"status": "down", "consecutive": 1},
+                    "exit_code": healthcheck.EXIT_DOWN,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert healthcheck.read_state(state_path) == {
+        "status": "down",
+        "consecutive": 1,
+        "pending_notifications": [
+            {"alert": "down", "detail": "earlier outage"}
+        ],
+    }
+
+
+def test_health_log_failure_is_visible_but_best_effort(tmp_path, capsys):
     invalid_state_dir = tmp_path / "not-a-directory"
     invalid_state_dir.write_text("occupied", encoding="utf-8")
 
-    with pytest.raises(RuntimeError, match="unable to append Atlas API health log"):
-        healthcheck.append_log(invalid_state_dir, "DOWN test")
+    assert not healthcheck.append_log(invalid_state_dir, "DOWN test")
+    assert "WARNING health log append failed" in capsys.readouterr().err
+
+
+def test_health_log_failure_does_not_suppress_recovery_alert(tmp_path, capsys):
+    settings = _settings(tmp_path)
+    settings.state_dir.mkdir(parents=True)
+    (settings.state_dir / "health.log").mkdir()
+    sent: list[tuple] = []
+
+    result = healthcheck.run_healthcheck(
+        settings,
+        runner=_Runner(active=False),
+        opener=_opener(204),
+        notifier=lambda *args: (sent.append(args), True)[1],
+        sleeper=lambda _: None,
+    )
+
+    assert result == healthcheck.EXIT_RECOVERED
+    assert sent[0][2] == "atlas-api auto-recovered"
+    assert "WARNING health log append failed" in capsys.readouterr().err
 
 
 def test_health_lock_failure_has_context(tmp_path):
@@ -475,12 +606,14 @@ def test_installer_deploys_source_and_invokes_enabled_timer_path(tmp_path):
     assert paths.notification_env.stat().st_mode & 0o077 == 0
     assert "test-private-topic" not in "\n".join(messages)
     assert runner.commands == [
+        ("systemctl", "--user", "is-enabled", "--quiet", installer.TIMER_NAME),
+        ("systemctl", "--user", "is-active", "--quiet", installer.TIMER_NAME),
         ("systemctl", "--user", "daemon-reload"),
-        ("systemctl", "--user", "enable", "--now", installer.TIMER_NAME),
         ("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME),
+        ("systemctl", "--user", "enable", "--now", installer.TIMER_NAME),
     ]
 
-    check_runner = _InstallerRunner()
+    check_runner = _InstallerRunner(timer_enabled=True, timer_active=True)
     ok, check_messages = installer.check_install(paths, runner=check_runner)
     assert ok
     assert all(message.startswith("ok:") for message in check_messages)
@@ -498,7 +631,97 @@ def test_installer_requires_private_topic_before_writing_or_enabling(tmp_path):
         installer.install(paths, runner=runner, environment={})
 
     assert not paths.installed_monitor.exists()
-    assert runner.commands == []
+    assert runner.commands == [
+        ("systemctl", "--user", "is-enabled", "--quiet", installer.TIMER_NAME),
+        ("systemctl", "--user", "is-active", "--quiet", installer.TIMER_NAME),
+        ("systemctl", "--user", "daemon-reload"),
+    ]
+
+
+def test_topic_file_is_private_before_atomic_publish(tmp_path, monkeypatch):
+    destination = tmp_path / "config" / "atlas-api-healthcheck.env"
+    observed_modes: list[int] = []
+    real_replace = installer.os.replace
+
+    def inspect_replace(source, target):
+        if Path(target) == destination:
+            observed_modes.append(Path(source).stat().st_mode & 0o777)
+        return real_replace(source, target)
+
+    monkeypatch.setattr(installer.os, "replace", inspect_replace)
+
+    installer._append_topic(destination, "test-private-topic")
+
+    assert observed_modes == [0o600]
+    assert destination.stat().st_mode & 0o777 == 0o600
+
+
+def test_file_restore_preserves_a_falsy_zero_mode(tmp_path):
+    destination = tmp_path / "restored"
+
+    installer._restore_file(
+        installer.FileSnapshot(path=destination, payload=b"previous", mode=0)
+    )
+
+    assert destination.stat().st_mode & 0o777 == 0
+    destination.chmod(0o600)
+    assert destination.read_bytes() == b"previous"
+
+
+def test_installer_restores_files_and_timer_when_service_proof_fails(tmp_path):
+    paths = _install_paths(tmp_path)
+    installed_files = [
+        paths.installed_monitor,
+        paths.systemd_dir / installer.SERVICE_NAME,
+        paths.systemd_dir / installer.TIMER_NAME,
+        paths.notification_env,
+    ]
+    for index, path in enumerate(installed_files):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(f"previous-{index}".encode("utf-8"))
+        path.chmod(0o600 if path == paths.notification_env else 0o644)
+    paths.notification_env.write_text(
+        f"{installer.TOPIC_ENV}=previous-private-topic\n", encoding="utf-8"
+    )
+    previous_payloads = {path: path.read_bytes() for path in installed_files}
+    runner = _InstallerRunner(
+        failing_command=("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME),
+        timer_enabled=True,
+        timer_active=True,
+    )
+
+    with pytest.raises(RuntimeError, match="initial installed-monitor invocation failed"):
+        installer.install(paths, runner=runner, environment={})
+
+    assert {path: path.read_bytes() for path in installed_files} == previous_payloads
+    assert runner.timer_enabled
+    assert runner.timer_active
+    assert ("systemctl", "--user", "enable", "--now", installer.TIMER_NAME) not in runner.commands
+    assert runner.commands[-3:] == [
+        ("systemctl", "--user", "daemon-reload"),
+        ("systemctl", "--user", "enable", installer.TIMER_NAME),
+        ("systemctl", "--user", "start", installer.TIMER_NAME),
+    ]
+
+
+def test_installer_removes_partial_enrollment_when_timer_enable_fails(tmp_path):
+    paths = _install_paths(tmp_path)
+    runner = _InstallerRunner(
+        failing_command=("systemctl", "--user", "enable", "--now", installer.TIMER_NAME)
+    )
+
+    with pytest.raises(RuntimeError, match="timer enable failed"):
+        installer.install(
+            paths,
+            runner=runner,
+            environment={installer.TOPIC_ENV: "test-private-topic"},
+        )
+
+    assert not runner.timer_enabled
+    assert not runner.timer_active
+    assert not paths.installed_monitor.exists()
+    assert not paths.notification_env.exists()
+    assert ("systemctl", "--user", "disable", "--now", installer.TIMER_NAME) in runner.commands
 
 
 def test_installer_surfaces_sanitized_systemd_failure(tmp_path):
