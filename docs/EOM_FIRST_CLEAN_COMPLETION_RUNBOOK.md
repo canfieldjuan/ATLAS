@@ -16,9 +16,12 @@ own the append-only receipt tables. Use the controlled DBA entrypoint below.
 1. Deploy the Atlas code containing the completion route and schema readiness
    fence. Before migration 394 is applied, the route must remain safely
    unavailable rather than accepting a completion report.
-2. Confirm the canonical EOM funnel database already contains `contacts`,
-   `eom_lead_lifecycle_events`, and `eom_customer_handoffs`. Migration 394
-   verifies these prerequisites before creating any receipt evidence.
+2. Confirm migration 354 has already moved `eom_customer_handoffs` plus
+   `require_eom_customer_handoff_finalization()` and
+   `prevent_eom_customer_handoff_mutation()` to
+   `atlas_eom_handoff_owner`. The canonical EOM funnel database must also
+   contain `contacts` and `eom_lead_lifecycle_events`. Migration 394 verifies
+   these catalog prerequisites before creating any receipt evidence.
 3. Inject a short-lived, protected PostgreSQL superuser DSN into
    `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL`. Do not put that DSN in
    a command line, browser configuration, source file, or application runtime
@@ -43,12 +46,13 @@ Then apply only migration 394:
 python scripts/apply_eom_first_clean_completion_schema.py --apply --json
 ```
 
-The migration atomically records its ledger row, transfers the two receipt
-tables and their trigger functions to `atlas_eom_handoff_owner`, revokes direct
-runtime/NocoDB guard membership, rejects any inherited guard path, and grants
-the Atlas runtime only `SELECT`, `INSERT`, and `UPDATE` needed for row locking
-and receipt creation. It does not grant `DELETE`, `TRUNCATE`, `REFERENCES`,
-`TRIGGER`, ownership, or customer delivery authority.
+The migration atomically records its ledger row, requires the pre-existing
+handoff table and its protected functions to be guard-owned, transfers the two
+receipt tables and their trigger functions to `atlas_eom_handoff_owner`,
+revokes direct runtime/NocoDB guard membership, rejects any inherited guard
+path, and grants the Atlas runtime only `SELECT`, `INSERT`, and `UPDATE` needed
+for row locking and receipt creation. It does not grant `DELETE`, `TRUNCATE`,
+`REFERENCES`, `TRIGGER`, ownership, or customer delivery authority.
 
 Remove the temporary DBA DSN injection after the result reports
 `"migration_recorded": true`.
@@ -60,9 +64,11 @@ Remove the temporary DBA DSN injection after the result reports
 2. Confirm the service-authenticated completion capability is available only
    when the schema readiness check succeeds. Do not post a test completion for
    a real customer or use a production customer/service identity as a probe.
-   The readiness fence also requires the existing canonical-handoff
-   finalization/append-only triggers and lifecycle append-only triggers; a
-   missing or disabled prerequisite leaves the route unavailable.
+   The readiness fence also requires guard ownership of the canonical-handoff
+   table and its protected functions, the existing canonical-handoff
+   finalization/append-only triggers, and lifecycle append-only triggers; a
+   missing, disabled, or runtime-owned prerequisite leaves the route
+   unavailable.
 3. Use the isolated PostgreSQL CI evidence for role ownership, minimal runtime
    ACLs, immutability, idempotency, and concurrency. No test sends customer
    communication or creates an appointment.

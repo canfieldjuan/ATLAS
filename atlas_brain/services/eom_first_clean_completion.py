@@ -224,6 +224,37 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           )
                    )
                    AND (
+                       SELECT COUNT(*) = 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relkind = 'r'
+                          AND relation.relname = 'eom_customer_handoffs'
+                          AND relation.relowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 2
+                         FROM pg_proc AS protected_function
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = protected_function.pronamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND protected_function.proname IN (
+                              'require_eom_customer_handoff_finalization',
+                              'prevent_eom_customer_handoff_mutation'
+                          )
+                          AND protected_function.pronargs = 0
+                          AND protected_function.proowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
+                   AND (
                        SELECT COUNT(*) = 6
                          FROM pg_class AS relation
                          JOIN pg_namespace AS namespace
@@ -613,6 +644,8 @@ class EOMFirstCleanCompletionService:
                 "trackerServiceKind": tracker_service_kind,
                 "trackerServiceId": tracker_service_id,
                 "completedAt": _utc_iso(completed_at),
+                "actorId": actor_id,
+                "actorName": actor_name,
                 "operation": "first_clean_completion",
             }
         )
@@ -655,6 +688,7 @@ class EOMFirstCleanCompletionService:
                     tracker_customer_id=tracker_customer_id,
                     tracker_site_id=tracker_site_id,
                 )
+                handoff_id = _uuid(handoff["id"], "Canonical handoff id")
                 await self._assert_no_existing_completion(
                     conn,
                     contact_id=contact_id,
@@ -683,8 +717,8 @@ class EOMFirstCleanCompletionService:
                     contact_id,
                     lifecycle_actor,
                     operation_key,
-                    receipt_id,
-                    handoff["id"],
+                    str(receipt_id),
+                    str(handoff_id),
                     tracker_customer_id,
                     tracker_site_id,
                     tracker_service_kind,
@@ -708,7 +742,7 @@ class EOMFirstCleanCompletionService:
                     """,
                     receipt_id,
                     contact_id,
-                    handoff["id"],
+                    handoff_id,
                     tracker_customer_id,
                     tracker_site_id,
                     tracker_service_kind,

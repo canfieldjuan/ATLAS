@@ -76,6 +76,43 @@ BEGIN
             'contacts, eom_lead_lifecycle_events, and eom_customer_handoffs must exist before running 394_eom_first_clean_completion_receipts';
     END IF;
 
+    -- Migration 353 creates the handoff relation, but migration 354 moves its
+    -- mutable/append-only boundary out of the runtime role. Completion
+    -- evidence depends on that immutable canonical bridge, so a relation or
+    -- trigger function still owned by Atlas is not an admissible prerequisite.
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_class AS relation
+          JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+         WHERE namespace.nspname = schema_name
+           AND relation.relkind = 'r'
+           AND relation.relname = 'eom_customer_handoffs'
+           AND relation.relowner = (
+               SELECT oid
+                 FROM pg_roles
+                WHERE rolname = 'atlas_eom_handoff_owner'
+           )
+    ) OR (
+        SELECT COUNT(*)
+          FROM pg_proc AS protected_function
+          JOIN pg_namespace AS namespace
+            ON namespace.oid = protected_function.pronamespace
+         WHERE namespace.nspname = schema_name
+           AND protected_function.proname IN (
+               'require_eom_customer_handoff_finalization',
+               'prevent_eom_customer_handoff_mutation'
+           )
+           AND protected_function.pronargs = 0
+           AND protected_function.proowner = (
+               SELECT oid
+                 FROM pg_roles
+                WHERE rolname = 'atlas_eom_handoff_owner'
+           )
+    ) <> 2 THEN
+        RAISE EXCEPTION
+            'eom_customer_handoffs and its protected functions must be guard-owned by atlas_eom_handoff_owner; apply 354_eom_customer_handoff_privileges before 394_eom_first_clean_completion_receipts';
+    END IF;
+
     -- A no-login guard role can own protected objects only when it can create
     -- them in this schema. Runtime and NocoDB must never retain a path to set
     -- that role after the migration commits.

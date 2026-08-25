@@ -43,6 +43,7 @@ _COMPLETION_SCHEMA_MIGRATIONS = (
     "346_contact_lead_pipeline",
     "351_eom_lead_lifecycle_events",
     "353_eom_customer_handoffs",
+    "354_eom_customer_handoff_privileges",
     "366_contacts_customer_type",
     "394_eom_first_clean_completion_receipts",
 )
@@ -52,6 +53,10 @@ _PREREQUISITE_INTEGRITY_TRIGGERS = (
     ("eom_customer_handoffs", "trg_prevent_eom_customer_handoff_truncate"),
     ("eom_lead_lifecycle_events", "trg_prevent_eom_lead_lifecycle_event_mutation"),
     ("eom_lead_lifecycle_events", "trg_prevent_eom_lead_lifecycle_event_truncate"),
+)
+_PREREQUISITE_HANDOFF_GUARD_FUNCTIONS = (
+    "require_eom_customer_handoff_finalization",
+    "prevent_eom_customer_handoff_mutation",
 )
 _ACTOR_ID_LENGTH_BOUNDARIES = (
     1,
@@ -88,7 +93,40 @@ def _database_url_or_skip() -> str:
     return database_url
 
 
-async def _apply_schema(connection: Any, schema: str) -> None:
+async def _provision_nocodb_login(connection: Any) -> None:
+    """Supply migration 354's no-privilege login prerequisite in test only."""
+
+    exists = await connection.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb')"
+    )
+    if exists:
+        await connection.execute(
+            "ALTER ROLE atlas_nocodb LOGIN NOINHERIT NOSUPERUSER "
+            "NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        )
+    else:
+        await connection.execute(
+            "CREATE ROLE atlas_nocodb LOGIN NOINHERIT NOSUPERUSER "
+            "NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+        )
+    assert not await connection.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM pg_auth_members AS membership
+            JOIN pg_roles AS role ON role.oid = membership.member
+            WHERE role.rolname = 'atlas_nocodb'
+        )
+        """
+    )
+
+
+async def _apply_schema(
+    connection: Any,
+    schema: str,
+    *,
+    migrations: tuple[str, ...] = _COMPLETION_SCHEMA_MIGRATIONS,
+) -> None:
     await connection.execute(f'CREATE SCHEMA "{schema}"')
     await connection.execute(f'SET search_path TO "{schema}", public')
     # Migration 035 remains additive to the production appointments relation;
@@ -97,7 +135,8 @@ async def _apply_schema(connection: Any, schema: str) -> None:
     # The completion schema is DBA-only because it references and protects the
     # guard-owned handoff table. Keep this disposable proof limited to its
     # actual canonical prerequisites rather than a developer's broader schema.
-    for migration in _COMPLETION_SCHEMA_MIGRATIONS:
+    await _provision_nocodb_login(connection)
+    for migration in migrations:
         await connection.execute((MIGRATIONS / f"{migration}.sql").read_text())
 
 
@@ -371,15 +410,35 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             ORDER BY relation.relname
             """,
             [
+                "eom_customer_handoffs",
                 "eom_first_clean_completion_operation_receipts",
                 "eom_first_clean_completion_receipts",
             ],
         )
         assert {row["relname"]: row["owner"] for row in ownership} == {
+            "eom_customer_handoffs": "atlas_eom_handoff_owner",
             "eom_first_clean_completion_operation_receipts": (
                 "atlas_eom_handoff_owner"
             ),
             "eom_first_clean_completion_receipts": "atlas_eom_handoff_owner",
+        }
+        handoff_function_ownership = await pool._connection.fetch(
+            """
+            SELECT protected_function.proname, role.rolname AS owner
+            FROM pg_proc AS protected_function
+            JOIN pg_namespace AS namespace
+              ON namespace.oid = protected_function.pronamespace
+            JOIN pg_roles AS role ON role.oid = protected_function.proowner
+            WHERE namespace.nspname = current_schema()
+              AND protected_function.proname = ANY($1::text[])
+              AND protected_function.pronargs = 0
+            ORDER BY protected_function.proname
+            """,
+            list(_PREREQUISITE_HANDOFF_GUARD_FUNCTIONS),
+        )
+        assert {row["proname"]: row["owner"] for row in handoff_function_ownership} == {
+            function_name: "atlas_eom_handoff_owner"
+            for function_name in _PREREQUISITE_HANDOFF_GUARD_FUNCTIONS
         }
         runtime_acl_rows = await pool._connection.fetch(
             """
@@ -429,6 +488,44 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
         )
         assert unexpected_acl_rows == []
         assert not await _has_guard_membership(pool, "atlas")
+
+
+@pytest.mark.asyncio
+async def test_completion_migration_requires_guard_owned_handoff_prerequisites() -> (
+    None
+):
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_first_clean_unguarded_{uuid4().hex}"
+    connection = await asyncpg.connect(database_url)
+    try:
+        await _apply_schema(
+            connection,
+            schema,
+            migrations=tuple(
+                migration
+                for migration in _COMPLETION_SCHEMA_MIGRATIONS
+                if migration
+                not in {
+                    "354_eom_customer_handoff_privileges",
+                    "394_eom_first_clean_completion_receipts",
+                }
+            ),
+        )
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match=(
+                "eom_customer_handoffs and its protected functions must be guard-owned"
+            ),
+        ):
+            await connection.execute(
+                (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
+            )
+    finally:
+        try:
+            await connection.execute("RESET search_path")
+            await connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        finally:
+            await connection.close()
 
 
 @pytest.mark.asyncio
@@ -488,7 +585,49 @@ async def test_schema_readiness_rejects_non_guard_table_ownership() -> None:
                 OWNER TO atlas_eom_handoff_owner
                 """
             )
+            await pool._connection.execute(
+                """
+                GRANT SELECT, INSERT, UPDATE
+                ON TABLE eom_first_clean_completion_receipts TO atlas
+                """
+            )
         assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_requires_guard_owned_handoff_and_functions() -> None:
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        try:
+            await pool._connection.execute(
+                "ALTER TABLE eom_customer_handoffs OWNER TO atlas"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                "ALTER TABLE eom_customer_handoffs OWNER TO atlas_eom_handoff_owner"
+            )
+            await pool._connection.execute(
+                """
+                GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE
+                ON TABLE eom_customer_handoffs TO atlas
+                """
+            )
+        assert await first_clean_completion_schema_ready(pool) is True
+
+        for function_name in _PREREQUISITE_HANDOFF_GUARD_FUNCTIONS:
+            function_ident = _quote_ident(function_name)
+            try:
+                await pool._connection.execute(
+                    f"ALTER FUNCTION {function_ident}() OWNER TO atlas"
+                )
+                assert await first_clean_completion_schema_ready(pool) is False
+            finally:
+                await pool._connection.execute(
+                    "ALTER FUNCTION "
+                    f"{function_ident}() OWNER TO atlas_eom_handoff_owner"
+                )
+            assert await first_clean_completion_schema_ready(pool) is True
 
 
 @pytest.mark.asyncio
@@ -665,6 +804,7 @@ async def test_record_completion_persists_one_receipt_and_lifecycle_evidence() -
         assert lifecycle["source"] == "time_tracker"
         assert lifecycle["operation_key"]
         assert lifecycle["metadata"]["completion_receipt_id"] == result["receiptId"]
+        assert lifecycle["metadata"]["handoff_id"] == result["handoffId"]
         assert lifecycle["metadata"]["tracker_service_id"] == 6001
 
 
@@ -721,6 +861,21 @@ async def test_changed_retry_or_new_source_fails_without_rewriting_history() -> 
                 **{
                     **kwargs,
                     "completed_at": _NOW - timedelta(minutes=30),
+                }
+            )
+        with pytest.raises(EOMFirstCleanCompletionConflictError):
+            await service.record_completion(
+                **{
+                    **kwargs,
+                    "actor_id": 8,
+                    "actor_name": "Other operator",
+                }
+            )
+        with pytest.raises(EOMFirstCleanCompletionConflictError):
+            await service.record_completion(
+                **{
+                    **kwargs,
+                    "actor_name": "Renamed operator",
                 }
             )
         with pytest.raises(EOMFirstCleanCompletionConflictError):
