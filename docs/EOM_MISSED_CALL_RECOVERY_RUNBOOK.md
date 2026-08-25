@@ -60,12 +60,16 @@ claim or send a step.
    python scripts/apply_eom_missed_call_recovery_runtime_privileges.py --apply --json
    ```
 
-   The first command is read-only. The second applies only migration
+   The first command is read-only and reports both the migration-389
+   prerequisite receipt and the migration-393 repair receipt. The second
+   refuses to apply unless migration `389_eom_missed_call_recovery` is already
+   recorded, then applies only
    `393_eom_missed_call_recovery_runtime_privileges` through Atlas's normal
    migration ledger and requires a PostgreSQL superuser. Do not pass a DBA DSN
    on the command line, add it to the normal Atlas service environment, or give
    the `atlas` runtime role guard membership. Confirm the result reports
-   `migration_recorded: true`, then remove the temporary DBA secret injection.
+   `prerequisite_migration_recorded: true` and `migration_recorded: true`, then
+   remove the temporary DBA secret injection.
 3. Start the Atlas entrypoint with recovery still disabled. Verify the full
    application starts, migration 389 and migration 393 are recorded, and no
    worker is running. On the compatible slim EOM profile,

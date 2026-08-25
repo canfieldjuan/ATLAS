@@ -530,9 +530,7 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 FROM pg_attribute AS attribute
                 JOIN pg_class AS relation ON relation.oid = attribute.attrelid
                 JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-                CROSS JOIN LATERAL aclexplode(
-                    COALESCE(attribute.attacl, ARRAY[]::aclitem[])
-                ) AS acl
+                CROSS JOIN LATERAL aclexplode(attribute.attacl) AS acl
                 WHERE namespace.nspname = current_schema()
                   AND relation.relname = ANY($1::text[])
                   AND attribute.attnum > 0

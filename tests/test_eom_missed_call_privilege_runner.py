@@ -40,13 +40,14 @@ class _Connection:
     def __init__(self, state: SimpleNamespace) -> None:
         self._state = state
 
-    async def fetchval(self, query: str, *_args: object) -> bool:
+    async def fetchval(self, query: str, *args: object) -> bool:
         if "rolsuper" in query:
             return self._state.executor_is_superuser
         if "to_regclass" in query:
             return self._state.migrations_table_exists
         if "schema_migrations" in query:
-            return self._state.migration_recorded
+            assert len(args) == 1
+            return args[0] in self._state.recorded_migrations
         raise AssertionError(f"unexpected query: {query}")
 
 
@@ -71,7 +72,7 @@ def test_privilege_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> 
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
-        migration_recorded=False,
+        recorded_migrations=set(),
     )
     pool = _Pool(state)
     calls: list[object] = []
@@ -94,6 +95,8 @@ def test_privilege_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> 
     assert result == {
         "target": "dsn=example.test:5432/atlas",
         "executor_is_superuser": True,
+        "prerequisite_migration": runner.PREREQUISITE_MIGRATION_NAME,
+        "prerequisite_migration_recorded": False,
         "migration": runner.MIGRATION_NAME,
         "migration_recorded": False,
         "applied": False,
@@ -108,7 +111,7 @@ def test_privilege_runner_requires_superuser_before_apply(monkeypatch) -> None:
     state = SimpleNamespace(
         executor_is_superuser=False,
         migrations_table_exists=True,
-        migration_recorded=False,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
     )
     pool = _Pool(state)
 
@@ -129,7 +132,7 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
-        migration_recorded=False,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
     )
     pool = _Pool(state)
     calls: list[tuple[object, tuple[str, ...]]] = []
@@ -139,7 +142,7 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
 
     async def run_migrations(observed_pool: object, *, only: tuple[str, ...]) -> None:
         calls.append((observed_pool, only))
-        state.migration_recorded = True
+        state.recorded_migrations.add(runner.MIGRATION_NAME)
 
     args = runner._parse_args(
         ["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"]
@@ -153,6 +156,72 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
     )
 
     assert calls == [(pool, (runner.MIGRATION_NAME,))]
+    assert result["prerequisite_migration_recorded"] is True
     assert result["migration_recorded"] is True
     assert result["applied"] is True
+    assert pool.closed is True
+
+
+@pytest.mark.parametrize(
+    ("migrations_table_exists", "recorded_migrations"),
+    [
+        (False, frozenset()),
+        (True, frozenset()),
+        (True, frozenset({"388_unrelated_migration"})),
+        (True, frozenset({"393_eom_missed_call_recovery_runtime_privileges"})),
+        (
+            True,
+            frozenset(
+                {
+                    "388_unrelated_migration",
+                    "393_eom_missed_call_recovery_runtime_privileges",
+                }
+            ),
+        ),
+    ],
+    ids=(
+        "no-ledger-table",
+        "empty-ledger",
+        "unrelated-receipt",
+        "repair-without-prerequisite",
+        "mixed-receipts-without-prerequisite",
+    ),
+)
+def test_privilege_runner_refuses_apply_without_prerequisite_receipt(
+    monkeypatch,
+    migrations_table_exists: bool,
+    recorded_migrations: frozenset[str],
+) -> None:
+    runner = _load_runner_module()
+    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=migrations_table_exists,
+        recorded_migrations=set(recorded_migrations),
+    )
+    pool = _Pool(state)
+    calls: list[object] = []
+
+    async def create_pool(_database_url: str) -> _Pool:
+        return pool
+
+    async def run_migrations(*_args: object, **_kwargs: object) -> None:
+        calls.append(object())
+
+    args = runner._parse_args(
+        ["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"]
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="389_eom_missed_call_recovery is not recorded",
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+            )
+        )
+
+    assert calls == []
     assert pool.closed is True

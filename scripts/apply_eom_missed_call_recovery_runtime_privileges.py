@@ -28,6 +28,7 @@ from atlas_brain.storage.migrations import run_migrations  # noqa: E402
 
 
 DEFAULT_DSN_ENV = "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL"
+PREREQUISITE_MIGRATION_NAME = "389_eom_missed_call_recovery"
 MIGRATION_NAME = "393_eom_missed_call_recovery_runtime_privileges"
 
 
@@ -82,8 +83,8 @@ async def _create_pool(database_url: str) -> Any:
     return await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
 
 
-async def _migration_state(pool: Any) -> tuple[bool, bool]:
-    """Return (executor_is_superuser, migration_recorded) without writes."""
+async def _migration_state(pool: Any) -> tuple[bool, bool, bool]:
+    """Return executor, prerequisite, and repair ledger state without writes."""
 
     async with pool.acquire() as connection:
         executor_is_superuser = bool(
@@ -102,15 +103,26 @@ async def _migration_state(pool: Any) -> tuple[bool, bool]:
                 "SELECT to_regclass('schema_migrations') IS NOT NULL"
             )
         )
+        prerequisite_migration_recorded = False
         migration_recorded = False
         if migrations_table_exists:
+            prerequisite_migration_recorded = bool(
+                await connection.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+                    PREREQUISITE_MIGRATION_NAME,
+                )
+            )
             migration_recorded = bool(
                 await connection.fetchval(
                     "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
                     MIGRATION_NAME,
                 )
             )
-    return executor_is_superuser, migration_recorded
+    return (
+        executor_is_superuser,
+        prerequisite_migration_recorded,
+        migration_recorded,
+    )
 
 
 async def _run(
@@ -128,10 +140,16 @@ async def _run(
 
     pool = await create_pool(database_url)
     try:
-        executor_is_superuser, migration_recorded = await _migration_state(pool)
+        (
+            executor_is_superuser,
+            prerequisite_migration_recorded,
+            migration_recorded,
+        ) = await _migration_state(pool)
         result: dict[str, object] = {
             "target": _safe_target_label(database_url),
             "executor_is_superuser": executor_is_superuser,
+            "prerequisite_migration": PREREQUISITE_MIGRATION_NAME,
+            "prerequisite_migration_recorded": prerequisite_migration_recorded,
             "migration": MIGRATION_NAME,
             "migration_recorded": migration_recorded,
             "applied": False,
@@ -141,9 +159,14 @@ async def _run(
                 "Configured DBA connection is not a PostgreSQL superuser; "
                 "refusing to run the privilege repair"
             )
+        if args.apply and not prerequisite_migration_recorded:
+            raise RuntimeError(
+                f"Migration {PREREQUISITE_MIGRATION_NAME} is not recorded; "
+                "run the slim EOM bootstrap before the privilege repair"
+            )
         if args.apply and not migration_recorded:
             await run_migrations_fn(pool, only=(MIGRATION_NAME,))
-            _executor_is_superuser, migration_recorded = await _migration_state(pool)
+            _, _, migration_recorded = await _migration_state(pool)
             if not migration_recorded:
                 raise RuntimeError(
                     "Migration runner returned without recording the EOM "
@@ -165,7 +188,8 @@ async def _main(argv: list[str] | None = None) -> int:
         action = "applied" if result["applied"] else "checked"
         print(
             f"{action} {result['migration']} on {result['target']}; "
-            f"recorded={result['migration_recorded']}"
+            f"recorded={result['migration_recorded']}; "
+            f"prerequisite_recorded={result['prerequisite_migration_recorded']}"
         )
     return 0
 
