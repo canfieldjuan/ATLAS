@@ -163,6 +163,39 @@ would leave an incomplete and unverified operational path between PRs.
   to pytest. This closes the repo-wide fallback without inventing a general
   pytest parser.
 
+### Contract revision 5
+
+- New evidence: current-head review identified a second valid Git common-dir
+  shape. The live Atlas layout currently returns
+  `/home/juan-canfield/Desktop/Atlas/.git`, so the existing `.git`-parent branch
+  resolves shared state correctly; a linked worktree backed directly by a bare
+  common directory returns that directory itself, and the current fallback would
+  incorrectly select the worktree.
+- Revised root cause: the `ops` shared-root resolver distinguishes only a conventional `.git`
+  directory from failure and treats every other successful Git common-dir shape
+  as failure, conflating a bare common directory with an unavailable lookup.
+- Revised required change surface: return the parent for a conventional `.git`
+  common directory, return any other successfully resolved common directory
+  itself, preserve the repository-root fallback only for command failure, cover
+  all three outcomes in a focused resolver regression, and record the distinction
+  in the existing worktree-layout discovery entry.
+- Revised non-scope: do not change worktree discovery, copy shared ignored state,
+  alter Git configuration, add provider lookup behavior, or touch application,
+  database, deployment, CI, schema, or product code.
+- Revised verification plan: prove the bare-directory regression fails before
+  implementation, then run the focused operations-contract suite, compile,
+  plan/body/mechanical audits, and a live `ops` shared-root probe; GitHub retains
+  the full unit gate.
+
+#### Shared-root resolver closure declaration
+
+- Membership is **CLOSED** by Git command outcome and path shape: command failure
+  falls back to the checked-out repository root; a successful common directory
+  named `.git` resolves to its parent; every other successful absolute common
+  directory resolves to itself.
+- The regression covers each member directly, including the live Atlas
+  conventional `.git` shape and the alternate bare-directory shape.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
@@ -217,13 +250,15 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   read-only execution; integration-test database-variable admission; unit-test
   database-environment isolation; integration-test target admission;
   dependency-free database status fallback; Brain health-detail redaction; and
-  `./ops env keys` secret-value suppression.
+  `./ops env keys` secret-value suppression; Git common-directory shared-root
+  resolution.
 - Replaced-path behaviors: N/A - no existing runtime path is replaced.
 - Guard-relevant fields: inspection name, complete PostgreSQL connection string,
   the canonical disposable-test URL set, open `*_DATABASE_URL` environment-key
   class, Git origin userinfo, environment assignment key/value split, and
   subprocess output redaction; configured Brain URL; integration target path,
-  node suffix, and trailing pytest arguments.
+  node suffix, trailing pytest arguments, Git lookup result, and common-dir
+  basename.
 - Caller x input shape: shell caller x fixed connectivity/migrations names;
   shell caller x arbitrary/unknown query names; test caller x each canonical
   disposable database URL independently; unit caller x current/novel database
@@ -231,7 +266,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   x blank/comment/export/quoted/escaped/interpolated/canary-secret assignments;
   fresh system Python x missing `python-dotenv`; configured Brain endpoint x
   credential-bearing URL; integration caller x file/node/option-only/directory/
-  missing/out-of-tree/additional-positional targets.
+  missing/out-of-tree/additional-positional targets; worktree x conventional
+  `.git`/direct bare common directory/Git lookup failure.
 
 ### Deployed-config probing
 
@@ -251,7 +287,8 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   auth context, linked project, env file, or database is absent.
 - Default-session/default-context probe: run from the dedicated worktree, where
   ignored environment/provider link files are absent, and from the shared root
-  context via explicit discovery only.
+  context via explicit discovery only; the live worktree resolves its shared
+  root to `/home/juan-canfield/Desktop/Atlas`.
 - Side-effect ordering: fixed inspection selection occurs before the database
   client receives SQL; the exact DSN remains in the child environment rather
   than argv; unit-mode database URLs are removed before pytest starts; Git
@@ -320,7 +357,11 @@ Parked hardening: none.
 - The four new boundary regression groups failed before implementation with
   `10 failed`, covering missing dependency, configured-URL disclosure,
   unbounded integration targets, and the nonexistent capability command.
-- `./ops test focused tests/test_agent_operations_contract.py -q` - 29 passed.
+- The bare common-directory resolver regression failed before implementation
+  with `1 failed, 2 passed`; only the successful direct-bare member was wrong.
+- `./ops test focused tests/test_agent_operations_contract.py -q` - 32 passed.
+- Direct live `ops` shared-root probe -
+  `/home/juan-canfield/Desktop/Atlas` from the current linked worktree.
 - `./ops test focused tests/test_eom_render_profile.py::test_database_config_prefers_connection_string_for_asyncpg_kwargs -q` - 1 passed.
 - `./ops doctor` - pass; live systemd/Brain ping, Docker, Vercel, Render CLI,
   PostgreSQL fixed inspection, GitHub auth, and environment-source discovery
@@ -350,7 +391,7 @@ Parked hardening: none.
 | `.agent/runbooks/ci.md` | 65 |
 | `.agent/runbooks/database.md` | 85 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 249 |
+| `.agent/runbooks/discovery-ledger.md` | 252 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
 | `.agent/runbooks/testing.md` | 101 |
@@ -358,6 +399,6 @@ Parked hardening: none.
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
 | `ops` | 827 |
-| `plans/PR-Agent-Operations-Contract.md` | 363 |
-| `tests/test_agent_operations_contract.py` | 468 |
-| **Total** | **2795** |
+| `plans/PR-Agent-Operations-Contract.md` | 404 |
+| `tests/test_agent_operations_contract.py` | 494 |
+| **Total** | **2865** |

@@ -118,7 +118,7 @@ def shared_root() -> Path:
     if result.returncode != 0:
         return repo_root()
     common = Path(result.stdout.strip()).resolve()
-    return common.parent if common.name == ".git" else repo_root()
+    return common.parent if common.name == ".git" else common
 
 
 def command_version(name: str) -> str | None:

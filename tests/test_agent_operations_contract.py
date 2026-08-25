@@ -22,6 +22,32 @@ database_inspection_command = OPS_MODULE["database_inspection_command"]
 database_runtime_environment = OPS_MODULE["database_runtime_environment"]
 
 
+@pytest.mark.parametrize(
+    ("returncode", "common_dir", "expected"),
+    (
+        (0, "/srv/atlas/.git", Path("/srv/atlas")),
+        (0, "/srv/Atlas", Path("/srv/Atlas")),
+        (1, "", Path("/workspace/atlas-worktree")),
+    ),
+)
+def test_shared_root_resolves_conventional_bare_and_failure_layouts(
+    returncode: int,
+    common_dir: str,
+    expected: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo = Path("/workspace/atlas-worktree")
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args, returncode, f"{common_dir}\n", "")
+
+    function_globals = OPS_MODULE["shared_root"].__globals__
+    monkeypatch.setitem(function_globals, "repo_root", lambda: repo)
+    monkeypatch.setitem(function_globals, "run", fake_run)
+
+    assert OPS_MODULE["shared_root"]() == expected
+
+
 def test_database_surface_contains_only_fixed_inspections() -> None:
     assert DATABASE_INSPECTIONS == {
         "connectivity": "SELECT 1 AS ok",

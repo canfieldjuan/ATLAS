@@ -13,7 +13,8 @@ Finding:
 The shared root can be registered as bare/common state and reject `git status`.
 Dedicated worktrees under the repository's worktree locations are the editable
 contexts. Ignored `.env`, `.venv`, and `.vercel` state can remain at the shared
-root.
+root. Git may report that shared state as a conventional `.git` directory or as
+the bare common directory itself.
 
 Canonical method:
 Run `./ops doctor`, `git worktree list`, and work from the task's dedicated
@@ -21,11 +22,13 @@ worktree. `./ops` resolves the Git common directory for read-only shared state.
 
 Verified:
 2026-08-24: `git status` failed at the shared root; a fresh worktree from
-`origin/main` was clean and operational.
+`origin/main` was clean and operational. A focused resolver regression covers
+the conventional `.git`, direct bare-directory, and Git-command-failure shapes.
 
 Failure notes:
 Do not repair the shared root with reset/checkout/clean. Do not copy ignored
-secrets into the worktree.
+secrets into the worktree. Do not assume every successful common-dir path is
+named `.git`: only command failure falls back to the current repository root.
 
 ## Brain deployment
 
