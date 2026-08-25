@@ -62,6 +62,12 @@ class Observation:
     detail: str
 
 
+@dataclass(frozen=True)
+class UnitState:
+    load_state: str
+    active_state: str
+
+
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 Opener = Callable[..., object]
 Notifier = Callable[[str, str, str, str, str, str], bool]
@@ -98,8 +104,38 @@ def serialized_monitor_state(settings: Settings) -> Iterator[TextIO]:
         yield lock
 
 
-def service_is_active(service: str, runner: Runner) -> bool:
-    return runner(("systemctl", "--user", "is-active", "--quiet", service)).returncode == 0
+def query_unit_state(service: str, runner: Runner) -> tuple[UnitState | None, str | None]:
+    command = (
+        "systemctl",
+        "--user",
+        "show",
+        "--property=LoadState",
+        "--property=ActiveState",
+        service,
+    )
+    result = runner(command)
+    if result.returncode != 0:
+        return None, f"unit-state query failed ({command_failure_detail(result)})"
+    fields: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in {"LoadState", "ActiveState"}:
+            fields[key] = value.strip()
+    if not fields.get("LoadState") or not fields.get("ActiveState"):
+        return None, "unit-state query returned incomplete LoadState/ActiveState fields"
+    return UnitState(fields["LoadState"], fields["ActiveState"]), None
+
+
+def maintenance_is_active(path: Path) -> bool:
+    try:
+        path.stat()
+    except FileNotFoundError:
+        present = False
+    except OSError as exc:
+        raise RuntimeError(f"unable to inspect Atlas API maintenance lock at {path}") from exc
+    else:
+        present = True
+    return present
 
 
 def enter_maintenance(settings: Settings, *, runner: Runner = _run) -> int:
@@ -163,12 +199,26 @@ def observe(
     before_start: Callable[[], None] | None = None,
 ) -> Observation:
     """Observe the provider and recover only an inactive, non-maintenance unit."""
-    if settings.maintenance_lock.exists():
+    if maintenance_is_active(settings.maintenance_lock):
         return Observation("maintenance", f"maintenance lock present: {settings.maintenance_lock}")
 
-    if service_is_active(settings.service, runner):
+    unit_state, query_error = query_unit_state(settings.service, runner)
+    if unit_state is None:
+        return Observation("down", query_error or "unit-state query failed")
+    if unit_state.load_state != "loaded":
+        return Observation(
+            "down",
+            f"unit {settings.service} is not loaded (LoadState={unit_state.load_state})",
+        )
+    if unit_state.active_state == "active":
         healthy, detail = probe_lead_intake(settings.probe_url, opener)
         return Observation("healthy" if healthy else "down", detail)
+    if unit_state.active_state != "inactive":
+        return Observation(
+            "down",
+            f"unit {settings.service} is not eligible for recovery "
+            f"(ActiveState={unit_state.active_state})",
+        )
 
     if before_start is not None:
         before_start()
@@ -181,13 +231,24 @@ def observe(
 
     last_detail = f"started inactive unit {settings.service}; waiting for lead-intake probe"
     for attempt in range(settings.recovery_attempts):
-        if service_is_active(settings.service, runner):
+        unit_state, query_error = query_unit_state(settings.service, runner)
+        if unit_state is None:
+            last_detail = query_error or "unit-state query failed after start"
+        elif unit_state.load_state != "loaded":
+            last_detail = (
+                f"unit {settings.service} is not loaded after start "
+                f"(LoadState={unit_state.load_state})"
+            )
+        elif unit_state.active_state == "active":
             healthy, detail = probe_lead_intake(settings.probe_url, opener)
             if healthy:
                 return Observation("recovered", f"auto-recovered {settings.service}: {detail}")
             last_detail = detail
         else:
-            last_detail = f"unit {settings.service} is still inactive after start"
+            last_detail = (
+                f"unit {settings.service} is not active after start "
+                f"(ActiveState={unit_state.active_state})"
+            )
         if attempt + 1 < settings.recovery_attempts:
             sleeper(settings.recovery_interval_seconds)
     return Observation("down", f"auto-recovery did not restore {settings.service}: {last_detail}")
@@ -477,13 +538,14 @@ def run_healthcheck(
             if alert == "auto-recovered" and recovered_service is not None:
                 detail = f"auto-recovered {recovered_service}: {detail}"
             notifications.append({"alert": alert, "detail": detail})
-        append_log(settings.state_dir, f"{observation.status.upper()} {observation.detail}")
-        print(f"{observation.status.upper()}: {observation.detail}")
-
         if not notifications:
             write_state(state_path, next_state)
+            append_log(settings.state_dir, f"{observation.status.upper()} {observation.detail}")
+            print(f"{observation.status.upper()}: {observation.detail}")
             return exit_code
         write_state(state_path, state_with_pending_notifications(next_state, notifications))
+        append_log(settings.state_dir, f"{observation.status.upper()} {observation.detail}")
+        print(f"{observation.status.upper()}: {observation.detail}")
         if settings.no_alert:
             print("WARNING --no-alert: notifications queued for retry")
             return EXIT_ALERT_UNDELIVERED

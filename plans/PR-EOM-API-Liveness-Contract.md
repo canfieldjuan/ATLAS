@@ -127,6 +127,84 @@ Max files: 6
   `systemd-analyze verify`, and use the installer `--check` plus its initial
   systemd service invocation as the post-merge deployment proof.
 
+### Contract revision: closed systemd state and open-execution model
+
+- New evidence: `systemctl is-active` collapses every non-active result into one
+  boolean even though recovery is safe only for a loaded unit whose
+  `ActiveState` is exactly `inactive`. The installer likewise treats a missing
+  old healthcheck unit as a stop failure, while `--check` compares disk bytes
+  without proving that systemd loaded them.
+- Revised root cause: monitor, installer, and verifier do not share one explicit
+  systemd state model, and the contract describes sampled schedules rather than
+  the property that must survive every admitted interleaving.
+- Revised required change surface: query and parse `LoadState` plus
+  `ActiveState` once through the monitor-owned state model; recover only
+  `loaded/inactive`; surface absent, transitional, failed, incomplete, and query
+  error states without a start. Reuse that model to admit a clean install with
+  no old unit and to quiesce a loaded old unit. Require `NeedDaemonReload=no`
+  for both installed units before `--check` succeeds.
+- Revised explicit non-scope: do not add a supervisor, database, dependency,
+  schema, deployment write, active-but-unhealthy restart, or broader systemd
+  policy. The private topic, timer cadence, probe, and public CLI stay unchanged.
+  Out-of-band edits to the monitor state file and underlying filesystem or
+  storage corruption are also excluded; admitted state transitions are the
+  atomic, schema-validated writes made by this monitor.
+- Revised verification plan: exercise loaded/active, loaded/inactive,
+  not-found, transitional, query-failure, incomplete-response, clean-install,
+  unsupported-load-state, and daemon-reload-needed boundaries in the focused
+  test file. GitHub runs the full unit gate.
+
+#### Admitted actors and serialization
+
+1. The user-systemd timer or a manual healthcheck invocation runs one monitor
+   cycle. The oneshot service and `state.lock` serialize monitor cycles.
+2. The supported maintenance command holds the same lock while publishing the
+   marker and stopping `atlas-api.service`, so maintenance and recovery have a
+   total order.
+3. The installer first stops the timer, queries the old healthcheck unit, and
+   waits for a loaded old oneshot to stop before replacing files. A missing old
+   unit is the admitted clean-host state. Direct manual monitor launches during
+   installation are excluded; installation is a single-operator maintenance
+   action.
+4. The systemd user manager owns unit load/active state. The monitor and
+   installer act only on successfully parsed `LoadState`/`ActiveState` values;
+   query failures and non-admitted states fail closed.
+5. The remote ntfy service is an external at-least-once delivery consumer. It
+   cannot participate in the local atomic state write.
+
+#### Crash and cancellation boundaries
+
+- Before recovery-intent persistence: no start is issued.
+- After intent persistence but before/during start or re-probe: the next cycle
+  retains the intent and reconciles the explicit systemd state.
+- After outbox persistence but before notification: the next cycle retries.
+- After successful notification but before acknowledgement persistence: a
+  duplicate notification is admitted; silent loss is not.
+- If state cannot be read, decoded, locked, or atomically written, the cycle
+  fails before issuing a new recovery side effect. A SIGKILL cannot interrupt an
+  atomic file replacement, although it can select either the prior or next
+  complete state.
+
+#### Property invariant
+
+For every admitted interleaving: the monitor never starts an unloaded,
+transitional, failed, query-unknown, or maintenance-protected provider; every
+issued recovery start is preceded by durable intent; every derived alert is
+either durably queued or acknowledged after delivery; and installation is
+reported verified only when source bytes, private configuration, timer state,
+and systemd's loaded definitions agree. Notification delivery is at-least-once,
+not exactly-once.
+
+#### Closed-surface alternatives
+
+- `Restart=always` alone is rejected because an operator stop is intentionally
+  not restarted and it cannot encode the maintenance-marker boundary.
+- SQLite is rejected for this single-host, serialized record because it adds a
+  schema/migration surface while still being unable to atomically couple a
+  remote ntfy response with local acknowledgement. The mode-0600 atomic state
+  file plus `flock` is the smaller closed local surface; its admitted duplicate
+  boundary is explicit above.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -136,11 +214,12 @@ The recovery decision is a system state boundary, not an open-input guard.
 - Replaced-path behaviors: inactive service previously notified only; it now
   recovers only if maintenance is absent. Active/healthy remains no-op;
   active/unhealthy remains alert-only.
-- Guard-relevant fields: unit active state, maintenance-lock path, start result,
-  and post-start CORS probe result.
-- Caller x input shape: timer invocation x active/healthy; timer x inactive/no
-  lock; timer x inactive/lock; timer x inactive/start failure; timer x
-  active/failed probe.
+- Guard-relevant fields: unit load state, unit active state, maintenance-lock
+  path, state-query result, start result, and post-start CORS probe result.
+- Caller x input shape: timer invocation x loaded-active/healthy; timer x
+  loaded-inactive/no lock; timer x loaded-inactive/lock; timer x not-found;
+  timer x transitional; timer x query failure; timer x loaded-inactive/start
+  failure; timer x loaded-active/failed probe.
 
 ### Deployed-config probing
 
@@ -238,8 +317,8 @@ Parked hardening: none.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 245 |
-| `scripts/atlas_api_healthcheck.py` | 562 |
-| `scripts/install_atlas_api_healthcheck.py` | 402 |
-| `tests/test_atlas_api_healthcheck.py` | 971 |
-| **Total** | **2208** |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 324 |
+| `scripts/atlas_api_healthcheck.py` | 624 |
+| `scripts/install_atlas_api_healthcheck.py` | 472 |
+| `tests/test_atlas_api_healthcheck.py` | 1262 |
+| **Total** | **2710** |

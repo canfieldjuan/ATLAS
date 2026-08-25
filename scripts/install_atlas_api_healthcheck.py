@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+import atlas_api_healthcheck as healthcheck_runtime
+
 
 SERVICE_NAME = "atlas-api-healthcheck.service"
 TIMER_NAME = "atlas-api-healthcheck.timer"
@@ -242,9 +244,70 @@ def _run_required(runner: Runner, command: Sequence[str], *, action: str) -> Non
 
 
 def _timer_state(runner: Runner) -> TimerState:
-    enabled = runner(("systemctl", "--user", "is-enabled", "--quiet", TIMER_NAME)).returncode == 0
-    active = runner(("systemctl", "--user", "is-active", "--quiet", TIMER_NAME)).returncode == 0
-    return TimerState(enabled=enabled, active=active)
+    unit_state, query_error = healthcheck_runtime.query_unit_state(TIMER_NAME, runner)
+    if unit_state is None:
+        raise RuntimeError(query_error or "cannot query existing health timer")
+    if unit_state.load_state == "not-found":
+        return TimerState(enabled=False, active=False)
+    if unit_state.load_state != "loaded":
+        raise RuntimeError(f"health timer has unsupported LoadState={unit_state.load_state}")
+    if unit_state.active_state not in {"active", "inactive", "failed"}:
+        raise RuntimeError(f"health timer has unsupported ActiveState={unit_state.active_state}")
+
+    command = (
+        "systemctl",
+        "--user",
+        "show",
+        "--property=UnitFileState",
+        "--value",
+        TIMER_NAME,
+    )
+    result = runner(command)
+    if result.returncode != 0:
+        raise RuntimeError(f"cannot query health timer enablement ({_command_detail(result)})")
+    unit_file_state = result.stdout.strip().lower()
+    if unit_file_state in {"enabled", "enabled-runtime"}:
+        enabled = True
+    elif unit_file_state in {"disabled", "static"}:
+        enabled = False
+    else:
+        raise RuntimeError(
+            f"health timer has unsupported UnitFileState={unit_file_state or 'empty'}"
+        )
+    return TimerState(enabled=enabled, active=unit_state.active_state == "active")
+
+
+def _existing_health_service_is_loaded(runner: Runner) -> bool:
+    unit_state, query_error = healthcheck_runtime.query_unit_state(SERVICE_NAME, runner)
+    if unit_state is None:
+        raise RuntimeError(query_error or "cannot query existing health service")
+    if unit_state.load_state == "not-found":
+        return False
+    if unit_state.load_state != "loaded":
+        raise RuntimeError(
+            f"existing health service has unsupported LoadState={unit_state.load_state}"
+        )
+    return True
+
+
+def _loaded_unit_is_current(unit: str, runner: Runner) -> tuple[bool, str]:
+    command = (
+        "systemctl",
+        "--user",
+        "show",
+        "--property=NeedDaemonReload",
+        "--value",
+        unit,
+    )
+    result = runner(command)
+    if result.returncode != 0:
+        return False, f"cannot query loaded definition for {unit} ({_command_detail(result)})"
+    needs_reload = result.stdout.strip().lower()
+    if needs_reload == "no":
+        return True, f"ok: loaded definition is current for {unit}"
+    if needs_reload == "yes":
+        return False, f"systemd requires daemon-reload for {unit}"
+    return False, f"invalid NeedDaemonReload state for {unit}: {needs_reload or 'empty'}"
 
 
 def _rollback_install(
@@ -300,11 +363,12 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
             )
         topic_message = ensure_notification_topic(paths, environment)
         messages = [topic_message]
-        _run_required(
-            runner,
-            ("systemctl", "--user", "stop", SERVICE_NAME),
-            action="existing health service stop",
-        )
+        if _existing_health_service_is_loaded(runner):
+            _run_required(
+                runner,
+                ("systemctl", "--user", "stop", SERVICE_NAME),
+                action="existing health service stop",
+            )
         for source, destination, executable in sources:
             _write_copy(source, destination, executable=executable)
             messages.append(f"wrote: {destination}")
@@ -364,12 +428,18 @@ def check_install(paths: InstallPaths, *, runner: Runner = _run) -> tuple[bool, 
             checks.append((True, f"ok: private notification environment {paths.notification_env}"))
     except (OSError, RuntimeError) as exc:
         checks.append((False, str(exc)))
-    for command, label in (
-        (("systemctl", "--user", "is-enabled", "--quiet", TIMER_NAME), "timer is not enabled"),
-        (("systemctl", "--user", "is-active", "--quiet", TIMER_NAME), "timer is not active"),
-    ):
-        result = runner(command)
-        checks.append((result.returncode == 0, f"ok: {TIMER_NAME}" if result.returncode == 0 else label))
+    try:
+        timer_state = _timer_state(runner)
+        checks.append(
+            (timer_state.enabled, f"ok: {TIMER_NAME} is enabled" if timer_state.enabled else "timer is not enabled")
+        )
+        checks.append(
+            (timer_state.active, f"ok: {TIMER_NAME} is active" if timer_state.active else "timer is not active")
+        )
+    except RuntimeError as exc:
+        checks.append((False, str(exc)))
+    for unit in (SERVICE_NAME, TIMER_NAME):
+        checks.append(_loaded_unit_is_current(unit, runner))
     return all(passed for passed, _message in checks), [message for _passed, message in checks]
 
 

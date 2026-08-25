@@ -51,21 +51,37 @@ class _Runner:
         start_returncode: int = 0,
         start_stdout: str = "",
         start_stderr: str = "",
+        load_state: str = "loaded",
+        active_state: str | None = None,
+        query_returncode: int = 0,
+        query_stdout: str | None = None,
+        query_stderr: str = "",
     ) -> None:
         self.active = active
+        self.load_state = load_state
+        self.active_state = active_state or ("active" if active else "inactive")
         self.start_returncode = start_returncode
         self.start_stdout = start_stdout
         self.start_stderr = start_stderr
+        self.query_returncode = query_returncode
+        self.query_stdout = query_stdout
+        self.query_stderr = query_stderr
         self.commands: list[tuple[str, ...]] = []
 
     def __call__(self, command):
         command = tuple(command)
         self.commands.append(command)
-        if "is-active" in command:
-            return subprocess.CompletedProcess(command, 0 if self.active else 3, "", "")
+        if "show" in command:
+            stdout = self.query_stdout
+            if stdout is None:
+                stdout = f"LoadState={self.load_state}\nActiveState={self.active_state}\n"
+            return subprocess.CompletedProcess(
+                command, self.query_returncode, stdout, self.query_stderr
+            )
         assert "start" in command
         if self.start_returncode == 0:
             self.active = True
+            self.active_state = "active"
         return subprocess.CompletedProcess(
             command,
             self.start_returncode,
@@ -81,10 +97,21 @@ class _InstallerRunner:
         failing_command: tuple[str, ...] | None = None,
         timer_enabled: bool = False,
         timer_active: bool = False,
+        timer_load_state: str = "loaded",
+        health_service_load_state: str = "loaded",
+        health_service_active_state: str = "inactive",
+        need_daemon_reload: dict[str, str] | None = None,
     ) -> None:
         self.failing_command = failing_command
         self.timer_enabled = timer_enabled
         self.timer_active = timer_active
+        self.timer_load_state = timer_load_state
+        self.health_service_load_state = health_service_load_state
+        self.health_service_active_state = health_service_active_state
+        self.need_daemon_reload = need_daemon_reload or {
+            installer.SERVICE_NAME: "no",
+            installer.TIMER_NAME: "no",
+        }
         self.commands: list[tuple[str, ...]] = []
 
     def __call__(self, command):
@@ -92,10 +119,26 @@ class _InstallerRunner:
         self.commands.append(command)
         if command == self.failing_command:
             return subprocess.CompletedProcess(command, 1, "", "unit\n\x1b[31mfailed")
-        if "is-enabled" in command:
-            return subprocess.CompletedProcess(command, 0 if self.timer_enabled else 1, "", "")
-        if "is-active" in command:
-            return subprocess.CompletedProcess(command, 0 if self.timer_active else 3, "", "")
+        if "show" in command and "--property=LoadState" in command:
+            if command[-1] == installer.TIMER_NAME:
+                load_state = self.timer_load_state
+                active_state = "active" if self.timer_active else "inactive"
+            else:
+                load_state = self.health_service_load_state
+                active_state = self.health_service_active_state
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                f"LoadState={load_state}\nActiveState={active_state}\n",
+                "",
+            )
+        if "show" in command and "--property=NeedDaemonReload" in command:
+            return subprocess.CompletedProcess(
+                command, 0, self.need_daemon_reload.get(command[-1], "") + "\n", ""
+            )
+        if "show" in command and "--property=UnitFileState" in command:
+            state = "enabled" if self.timer_enabled else "disabled"
+            return subprocess.CompletedProcess(command, 0, state + "\n", "")
         if command[2:4] == ("enable", "--now"):
             self.timer_enabled = True
             self.timer_active = True
@@ -238,6 +281,30 @@ def test_maintenance_lock_never_starts_service(tmp_path):
     assert _state(settings) == {"consecutive": 0, "status": "maintenance"}
 
 
+def test_unreadable_maintenance_lock_fails_before_query_or_start(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    runner = _Runner(active=False)
+    real_stat = Path.stat
+
+    def fail_only_for_maintenance(path):
+        if path == settings.maintenance_lock:
+            raise PermissionError("simulated unreadable maintenance marker")
+        return real_stat(path)
+
+    monkeypatch.setattr(Path, "stat", fail_only_for_maintenance)
+
+    with pytest.raises(RuntimeError, match="unable to inspect Atlas API maintenance lock"):
+        healthcheck.run_healthcheck(
+            settings,
+            runner=runner,
+            opener=_opener(204),
+            notifier=lambda *args: True,
+            sleeper=lambda _: None,
+        )
+
+    assert runner.commands == []
+
+
 def test_enter_maintenance_serializes_with_an_inflight_recovery(tmp_path):
     settings = _settings(tmp_path)
     first_status_read = threading.Event()
@@ -252,11 +319,14 @@ def test_enter_maintenance_serializes_with_an_inflight_recovery(tmp_path):
         def __call__(self, command):
             command = tuple(command)
             self.commands.append(command)
-            if "is-active" in command:
+            if "show" in command:
                 if not first_status_read.is_set():
                     first_status_read.set()
                     assert release_status_read.wait(timeout=2)
-                return subprocess.CompletedProcess(command, 0 if self.active else 3, "", "")
+                active_state = "active" if self.active else "inactive"
+                return subprocess.CompletedProcess(
+                    command, 0, f"LoadState=loaded\nActiveState={active_state}\n", ""
+                )
             if "start" in command:
                 self.active = True
             elif "stop" in command:
@@ -383,6 +453,46 @@ def test_active_unhealthy_service_alerts_without_restart(tmp_path):
     assert _state(settings) == {"consecutive": 1, "status": "down"}
 
 
+@pytest.mark.parametrize(
+    ("runner", "expected_detail"),
+    [
+        (
+            _Runner(active=False, load_state="not-found"),
+            "LoadState=not-found",
+        ),
+        (
+            _Runner(active=False, active_state="activating"),
+            "ActiveState=activating",
+        ),
+        (
+            _Runner(active=False, query_returncode=1, query_stderr="manager unavailable"),
+            "unit-state query failed",
+        ),
+        (
+            _Runner(active=False, query_stdout="LoadState=loaded\n"),
+            "incomplete LoadState/ActiveState",
+        ),
+    ],
+)
+def test_only_explicit_loaded_inactive_state_is_recoverable(
+    tmp_path, runner, expected_detail
+):
+    settings = _settings(tmp_path)
+    sent: list[tuple] = []
+
+    result = healthcheck.run_healthcheck(
+        settings,
+        runner=runner,
+        opener=_opener(204),
+        notifier=lambda *args: (sent.append(args), True)[1],
+        sleeper=lambda _: None,
+    )
+
+    assert result == healthcheck.EXIT_DOWN
+    assert _start_commands(runner) == []
+    assert expected_detail in sent[0][3]
+
+
 def test_undelivered_down_transition_is_retried(tmp_path):
     settings = _settings(tmp_path)
     runner = _Runner(active=True)
@@ -504,6 +614,35 @@ def test_recovery_outbox_is_persisted_before_a_delivery_crash(tmp_path):
     assert _state(settings) == {"consecutive": 0, "status": "healthy"}
 
 
+def test_recovery_outbox_is_persisted_before_console_output_crash(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+
+    monkeypatch.setattr(
+        "builtins.print",
+        lambda *args, **kwargs: (_ for _ in ()).throw(BrokenPipeError("simulated console loss")),
+    )
+
+    with pytest.raises(BrokenPipeError, match="simulated console loss"):
+        healthcheck.run_healthcheck(
+            settings,
+            runner=_Runner(active=False),
+            opener=_opener(204),
+            notifier=lambda *args: True,
+            sleeper=lambda _: None,
+        )
+
+    assert _state(settings) == {
+        "status": "healthy",
+        "consecutive": 0,
+        "pending_notifications": [
+            {
+                "alert": "auto-recovered",
+                "detail": "auto-recovered atlas-api.service: lead-intake probe returned HTTP 204",
+            }
+        ],
+    }
+
+
 def test_recovery_intent_is_persisted_before_start_and_replayed_after_crash(tmp_path):
     settings = _settings(tmp_path)
     crashed_commands: list[tuple[str, ...]] = []
@@ -511,8 +650,10 @@ def test_recovery_intent_is_persisted_before_start_and_replayed_after_crash(tmp_
     def crash_after_start(command):
         command = tuple(command)
         crashed_commands.append(command)
-        if "is-active" in command:
-            return subprocess.CompletedProcess(command, 3, "", "")
+        if "show" in command:
+            return subprocess.CompletedProcess(
+                command, 0, "LoadState=loaded\nActiveState=inactive\n", ""
+            )
         raise SystemExit("simulated crash after systemd accepted start")
 
     with pytest.raises(SystemExit, match="simulated crash"):
@@ -797,8 +938,30 @@ def test_installer_deploys_source_and_invokes_enabled_timer_path(tmp_path):
     assert paths.notification_env.stat().st_mode & 0o077 == 0
     assert "test-private-topic" not in "\n".join(messages)
     assert runner.commands == [
-        ("systemctl", "--user", "is-enabled", "--quiet", installer.TIMER_NAME),
-        ("systemctl", "--user", "is-active", "--quiet", installer.TIMER_NAME),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=LoadState",
+            "--property=ActiveState",
+            installer.TIMER_NAME,
+        ),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=UnitFileState",
+            "--value",
+            installer.TIMER_NAME,
+        ),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=LoadState",
+            "--property=ActiveState",
+            installer.SERVICE_NAME,
+        ),
         ("systemctl", "--user", "stop", installer.SERVICE_NAME),
         ("systemctl", "--user", "daemon-reload"),
         ("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME),
@@ -810,8 +973,38 @@ def test_installer_deploys_source_and_invokes_enabled_timer_path(tmp_path):
     assert ok
     assert all(message.startswith("ok:") for message in check_messages)
     assert check_runner.commands == [
-        ("systemctl", "--user", "is-enabled", "--quiet", installer.TIMER_NAME),
-        ("systemctl", "--user", "is-active", "--quiet", installer.TIMER_NAME),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=LoadState",
+            "--property=ActiveState",
+            installer.TIMER_NAME,
+        ),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=UnitFileState",
+            "--value",
+            installer.TIMER_NAME,
+        ),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=NeedDaemonReload",
+            "--value",
+            installer.SERVICE_NAME,
+        ),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=NeedDaemonReload",
+            "--value",
+            installer.TIMER_NAME,
+        ),
     ]
 
 
@@ -824,10 +1017,108 @@ def test_installer_requires_private_topic_before_writing_or_enabling(tmp_path):
 
     assert not paths.installed_monitor.exists()
     assert runner.commands == [
-        ("systemctl", "--user", "is-enabled", "--quiet", installer.TIMER_NAME),
-        ("systemctl", "--user", "is-active", "--quiet", installer.TIMER_NAME),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=LoadState",
+            "--property=ActiveState",
+            installer.TIMER_NAME,
+        ),
+        (
+            "systemctl",
+            "--user",
+            "show",
+            "--property=UnitFileState",
+            "--value",
+            installer.TIMER_NAME,
+        ),
         ("systemctl", "--user", "daemon-reload"),
     ]
+
+
+def test_clean_install_allows_an_absent_old_health_service(tmp_path):
+    paths = _install_paths(tmp_path)
+    runner = _InstallerRunner(
+        timer_load_state="not-found", health_service_load_state="not-found"
+    )
+
+    installer.install(
+        paths,
+        runner=runner,
+        environment={installer.TOPIC_ENV: "test-private-topic"},
+    )
+
+    assert ("systemctl", "--user", "stop", installer.SERVICE_NAME) not in runner.commands
+    assert (
+        "systemctl",
+        "--user",
+        "start",
+        "--wait",
+        installer.SERVICE_NAME,
+    ) in runner.commands
+    assert paths.installed_monitor.exists()
+
+
+def test_installer_rejects_an_unsupported_old_unit_load_state(tmp_path):
+    paths = _install_paths(tmp_path)
+    runner = _InstallerRunner(health_service_load_state="error")
+
+    with pytest.raises(RuntimeError, match="unsupported LoadState=error"):
+        installer.install(
+            paths,
+            runner=runner,
+            environment={installer.TOPIC_ENV: "test-private-topic"},
+        )
+
+    assert not paths.installed_monitor.exists()
+
+
+def test_installer_fails_closed_when_existing_timer_state_cannot_be_queried(tmp_path):
+    paths = _install_paths(tmp_path)
+    timer_query = (
+        "systemctl",
+        "--user",
+        "show",
+        "--property=LoadState",
+        "--property=ActiveState",
+        installer.TIMER_NAME,
+    )
+    runner = _InstallerRunner(failing_command=timer_query)
+
+    with pytest.raises(RuntimeError, match="unit-state query failed"):
+        installer.install(
+            paths,
+            runner=runner,
+            environment={installer.TOPIC_ENV: "test-private-topic"},
+        )
+
+    assert runner.commands == [timer_query]
+    assert not paths.installed_monitor.exists()
+
+
+def test_install_check_rejects_stale_loaded_unit_definitions(tmp_path):
+    paths = _install_paths(tmp_path)
+    installer.install(
+        paths,
+        runner=_InstallerRunner(
+            timer_load_state="not-found", health_service_load_state="not-found"
+        ),
+        environment={installer.TOPIC_ENV: "test-private-topic"},
+    )
+    check_runner = _InstallerRunner(
+        timer_enabled=True,
+        timer_active=True,
+        need_daemon_reload={
+            installer.SERVICE_NAME: "yes",
+            installer.TIMER_NAME: "no",
+        },
+    )
+
+    ok, messages = installer.check_install(paths, runner=check_runner)
+
+    assert not ok
+    assert f"systemd requires daemon-reload for {installer.SERVICE_NAME}" in messages
 
 
 def test_installer_quiesces_old_service_before_replacing_files(tmp_path, monkeypatch):
