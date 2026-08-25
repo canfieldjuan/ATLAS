@@ -65,7 +65,7 @@ class _Pool:
 def test_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
     runner = _load_runner_module()
     monkeypatch.setenv(
-        "TEST_EOM_DBA_DSN",
+        runner.DBA_DSN_ENV,
         "postgresql://operator:secret@example.test:5432/atlas?sslmode=require",
     )
     state = SimpleNamespace(
@@ -82,12 +82,15 @@ def test_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
     async def run_migrations(*_args: object, **_kwargs: object) -> None:
         calls.append(object())
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN"])
+    args = runner._parse_args([])
     result = asyncio.run(
         runner._run(
             args,
             create_pool=create_pool,
             run_migrations_fn=run_migrations,
+            config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                _env_file=None
+            ),
         )
     )
 
@@ -104,7 +107,7 @@ def test_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
 
 def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=False,
         migrations_table_exists=True,
@@ -115,15 +118,23 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
     async def create_pool(_database_url: str) -> _Pool:
         return pool
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     with pytest.raises(RuntimeError, match="not a PostgreSQL superuser"):
-        asyncio.run(runner._run(args, create_pool=create_pool))
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+            )
+        )
     assert pool.closed is True
 
 
 def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
     runner = _load_runner_module()
-    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
     state = SimpleNamespace(
         executor_is_superuser=True,
         migrations_table_exists=True,
@@ -139,12 +150,15 @@ def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
         calls.append((observed_pool, only))
         state.migration_recorded = True
 
-    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    args = runner._parse_args(["--apply"])
     result = asyncio.run(
         runner._run(
             args,
             create_pool=create_pool,
             run_migrations_fn=run_migrations,
+            config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                _env_file=None
+            ),
         )
     )
 
@@ -152,3 +166,40 @@ def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
     assert result["migration_recorded"] is True
     assert result["applied"] is True
     assert pool.closed is True
+
+
+def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:
+    runner = _load_runner_module()
+    monkeypatch.delenv(runner.DBA_DSN_ENV, raising=False)
+    pool_calls: list[str] = []
+
+    async def create_pool(database_url: str) -> _Pool:
+        pool_calls.append(database_url)
+        return _Pool(
+            SimpleNamespace(
+                executor_is_superuser=True,
+                migrations_table_exists=True,
+                migration_recorded=False,
+            )
+        )
+
+    with pytest.raises(
+        RuntimeError, match=f"Missing protected DBA DSN configuration {runner.DBA_DSN_ENV}"
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args([]),
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+            )
+        )
+    assert pool_calls == []
+
+
+def test_runner_rejects_caller_selected_dsn_environment_name() -> None:
+    runner = _load_runner_module()
+
+    with pytest.raises(SystemExit):
+        runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN"])

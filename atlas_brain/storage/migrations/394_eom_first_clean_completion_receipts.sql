@@ -80,9 +80,47 @@ BEGIN
 
     IF to_regclass(format('%I.contacts', schema_name)) IS NULL
        OR to_regclass(format('%I.eom_lead_lifecycle_events', schema_name)) IS NULL
+       OR to_regclass(format(
+           '%I.eom_lead_lifecycle_events_sequence_seq', schema_name
+       )) IS NULL
        OR to_regclass(format('%I.eom_customer_handoffs', schema_name)) IS NULL THEN
         RAISE EXCEPTION
-            'contacts, eom_lead_lifecycle_events, and eom_customer_handoffs must exist before running 394_eom_first_clean_completion_receipts';
+            'contacts, eom_lead_lifecycle_events, its ordering sequence, and eom_customer_handoffs must exist before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
+    IF to_regclass(pg_get_serial_sequence(
+        format('%I.%I', schema_name, 'eom_lead_lifecycle_events'),
+        'lifecycle_sequence'
+    )) IS DISTINCT FROM to_regclass(format(
+        '%I.eom_lead_lifecycle_events_sequence_seq', schema_name
+    )) THEN
+        RAISE EXCEPTION
+            'eom_lead_lifecycle_events.lifecycle_sequence must use its canonical ordering sequence before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_attrdef AS attribute_default
+          JOIN pg_attribute AS attribute
+            ON attribute.attrelid = attribute_default.adrelid
+           AND attribute.attnum = attribute_default.adnum
+          JOIN pg_depend AS dependency
+            ON dependency.classid = 'pg_attrdef'::regclass
+           AND dependency.objid = attribute_default.oid
+           AND dependency.refclassid = 'pg_class'::regclass
+          JOIN pg_class AS sequence ON sequence.oid = dependency.refobjid
+          JOIN pg_namespace AS sequence_namespace
+            ON sequence_namespace.oid = sequence.relnamespace
+         WHERE attribute_default.adrelid = to_regclass(
+                   format('%I.%I', schema_name, 'eom_lead_lifecycle_events')
+               )
+           AND attribute.attname = 'lifecycle_sequence'
+           AND sequence_namespace.nspname = schema_name
+           AND sequence.relkind = 'S'
+           AND sequence.relname = 'eom_lead_lifecycle_events_sequence_seq'
+    ) THEN
+        RAISE EXCEPTION
+            'eom_lead_lifecycle_events.lifecycle_sequence must retain its canonical nextval default before running 394_eom_first_clean_completion_receipts';
     END IF;
 
     -- Migration 353 creates the handoff relation, but migration 354 moves its
@@ -399,6 +437,7 @@ DO $$
 DECLARE
     schema_name TEXT := current_schema();
     table_name TEXT;
+    sequence_name TEXT := 'eom_lead_lifecycle_events_sequence_seq';
     grantee_name TEXT;
 BEGIN
     ALTER TABLE eom_first_clean_completion_operation_receipts
@@ -407,6 +446,15 @@ BEGIN
         OWNER TO atlas_eom_handoff_owner;
     ALTER TABLE eom_lead_lifecycle_events
         OWNER TO atlas_eom_handoff_owner;
+    -- Migration 363 gives lifecycle_sequence a nextval() default.  The table
+    -- transfer above does not grant its runtime writers the sequence access
+    -- that default consumes, so bind the canonical sequence to the same guard
+    -- and restore only nextval()/USAGE for the direct Atlas runtime.
+    EXECUTE format(
+        'ALTER SEQUENCE %I.%I OWNER TO atlas_eom_handoff_owner',
+        schema_name,
+        sequence_name
+    );
     ALTER FUNCTION prevent_eom_lead_lifecycle_event_mutation()
         OWNER TO atlas_eom_handoff_owner;
     ALTER FUNCTION prevent_eom_first_clean_completion_mutation()
@@ -455,6 +503,32 @@ BEGIN
         END LOOP;
     END LOOP;
     EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON SEQUENCE %I.%I FROM PUBLIC',
+        schema_name,
+        sequence_name
+    );
+    FOR grantee_name IN
+        SELECT DISTINCT grantee_role.rolname
+          FROM pg_class AS relation
+          JOIN pg_namespace AS namespace
+            ON namespace.oid = relation.relnamespace
+          CROSS JOIN LATERAL aclexplode(
+              COALESCE(relation.relacl, ARRAY[]::aclitem[])
+          ) AS acl
+          JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+         WHERE namespace.nspname = schema_name
+           AND relation.relkind = 'S'
+           AND relation.relname = sequence_name
+           AND grantee_role.rolname <> 'atlas_eom_handoff_owner'
+    LOOP
+        EXECUTE format(
+            'REVOKE ALL PRIVILEGES ON SEQUENCE %I.%I FROM %I',
+            schema_name,
+            sequence_name,
+            grantee_name
+        );
+    END LOOP;
+    EXECUTE format(
         'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_first_clean_completion_operation_receipts TO atlas',
         schema_name
     );
@@ -467,6 +541,11 @@ BEGIN
     EXECUTE format(
         'GRANT SELECT, INSERT ON TABLE %I.eom_lead_lifecycle_events TO atlas',
         schema_name
+    );
+    EXECUTE format(
+        'GRANT USAGE ON SEQUENCE %I.%I TO atlas',
+        schema_name,
+        sequence_name
     );
 END;
 $$;

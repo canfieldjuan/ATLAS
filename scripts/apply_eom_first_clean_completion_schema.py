@@ -4,8 +4,8 @@
 The normal Atlas runtime must never gain the authority needed to create a
 foreign key to the guard-owned handoff table or to own immutable completion
 evidence. This command defaults to a read-only preflight and applies only
-migration 394 after an explicit ``--apply`` using a protected DBA DSN
-environment variable.
+migration 394 after an explicit ``--apply`` using a protected typed DBA DSN
+configuration.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 import sys
@@ -25,10 +24,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from atlas_brain.config import (  # noqa: E402
+    EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV,
+    EOMFirstCleanCompletionDBAConfig,
+)
 from atlas_brain.storage.migrations import run_migrations  # noqa: E402
 
 
-DEFAULT_DSN_ENV = "ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL"
+DBA_DSN_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV
 MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
 
 
@@ -37,14 +40,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         description=(
             "Preflight or apply the DBA-only EOM first-clean completion schema."
         )
-    )
-    parser.add_argument(
-        "--database-url-env",
-        default=DEFAULT_DSN_ENV,
-        help=(
-            "Environment variable holding the protected DBA PostgreSQL DSN "
-            f"(default: {DEFAULT_DSN_ENV})."
-        ),
     )
     parser.add_argument(
         "--apply",
@@ -118,11 +113,14 @@ async def _run(
     *,
     create_pool: Callable[[str], Awaitable[Any]] = _create_pool,
     run_migrations_fn: Callable[..., Awaitable[None]] = run_migrations,
+    config_factory: Callable[[], EOMFirstCleanCompletionDBAConfig] = (
+        EOMFirstCleanCompletionDBAConfig
+    ),
 ) -> dict[str, object]:
-    database_url = os.environ.get(args.database_url_env, "").strip()
+    database_url = config_factory().database_url.get_secret_value().strip()
     if not database_url:
         raise RuntimeError(
-            f"Missing protected DBA DSN environment variable {args.database_url_env}"
+            f"Missing protected DBA DSN configuration {DBA_DSN_ENV}"
         )
 
     pool = await create_pool(database_url)

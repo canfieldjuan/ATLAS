@@ -19,13 +19,16 @@ own the append-only receipt tables. Use the controlled DBA entrypoint below.
 2. Confirm migration 354 has already moved `eom_customer_handoffs` plus
    `require_eom_customer_handoff_finalization()` and
    `prevent_eom_customer_handoff_mutation()` to
-   `atlas_eom_handoff_owner`. The canonical EOM funnel database must also
-   contain `contacts` and `eom_lead_lifecycle_events`. Migration 394 verifies
+   `atlas_eom_handoff_owner`. Migration 363 must also have created the
+   `eom_lead_lifecycle_events_sequence_seq` default owned by
+   `eom_lead_lifecycle_events.lifecycle_sequence`. The canonical EOM funnel
+   database must contain those objects plus `contacts`. Migration 394 verifies
    these catalog prerequisites before creating any receipt evidence.
 3. Inject a short-lived, protected PostgreSQL superuser DSN into
    `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL`. Do not put that DSN in
    a command line, browser configuration, source file, or application runtime
-   environment.
+   environment. The controlled runner reads only this typed deploy-time setting;
+   it does not accept a caller-selected environment-variable name.
 
 ## Apply
 
@@ -48,11 +51,13 @@ python scripts/apply_eom_first_clean_completion_schema.py --apply --json
 
 The migration atomically records its ledger row, requires the pre-existing
 handoff table and its protected functions to be guard-owned, transfers the two
-receipt tables and their trigger functions to `atlas_eom_handoff_owner`,
-revokes direct runtime/NocoDB guard membership, rejects any inherited guard
-path, and grants the Atlas runtime only `SELECT`, `INSERT`, and `UPDATE` needed
-for row locking and receipt creation. It does not grant `DELETE`, `TRUNCATE`,
-`REFERENCES`, `TRIGGER`, ownership, or customer delivery authority.
+receipt tables, lifecycle table, lifecycle ordering sequence, and their trigger
+functions to `atlas_eom_handoff_owner`, revokes direct runtime/NocoDB guard
+membership, rejects any inherited guard path, and grants the Atlas runtime only
+the table `SELECT`, `INSERT`, and `UPDATE` needed for row locking and receipt
+creation plus sequence `USAGE` needed by the lifecycle default. It does not
+grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, sequence `SELECT` or
+`UPDATE`, ownership, or customer delivery authority.
 
 Remove the temporary DBA DSN injection after the result reports
 `"migration_recorded": true`.
@@ -66,9 +71,10 @@ Remove the temporary DBA DSN injection after the result reports
    a real customer or use a production customer/service identity as a probe.
    The readiness fence also requires guard ownership of the canonical-handoff
    table and its protected functions, the existing canonical-handoff
-   finalization/append-only triggers, and lifecycle append-only triggers; a
-   missing, disabled, or runtime-owned prerequisite leaves the route
-   unavailable.
+   finalization/append-only triggers, lifecycle append-only triggers, and the
+   guard-owned lifecycle ordering sequence with its exact runtime `USAGE` ACL;
+   a missing, disabled, runtime-owned, or broadened prerequisite leaves the
+   route unavailable.
 3. Use the isolated PostgreSQL CI evidence for role ownership, minimal runtime
    ACLs, immutability, idempotency, and concurrency. No test sends customer
    communication or creates an appointment.

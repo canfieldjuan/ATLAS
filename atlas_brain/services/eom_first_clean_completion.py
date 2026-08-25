@@ -239,6 +239,39 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                                WHERE rolname = 'atlas_eom_handoff_owner'
                           )
                    )
+                   AND to_regclass(pg_get_serial_sequence(
+                       format('%I.%I', current_schema(), 'eom_lead_lifecycle_events'),
+                       'lifecycle_sequence'
+                   )) = to_regclass(format(
+                       '%I.eom_lead_lifecycle_events_sequence_seq',
+                       current_schema()
+                   ))
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_attrdef AS attribute_default
+                         JOIN pg_attribute AS attribute
+                           ON attribute.attrelid = attribute_default.adrelid
+                          AND attribute.attnum = attribute_default.adnum
+                         JOIN pg_depend AS dependency
+                           ON dependency.classid = 'pg_attrdef'::regclass
+                          AND dependency.objid = attribute_default.oid
+                          AND dependency.refclassid = 'pg_class'::regclass
+                         JOIN pg_class AS sequence ON sequence.oid = dependency.refobjid
+                         JOIN pg_namespace AS sequence_namespace
+                           ON sequence_namespace.oid = sequence.relnamespace
+                        WHERE attribute_default.adrelid = to_regclass(
+                                  format(
+                                      '%I.%I',
+                                      current_schema(),
+                                      'eom_lead_lifecycle_events'
+                                  )
+                              )
+                          AND attribute.attname = 'lifecycle_sequence'
+                          AND sequence_namespace.nspname = current_schema()
+                          AND sequence.relkind = 'S'
+                          AND sequence.relname =
+                              'eom_lead_lifecycle_events_sequence_seq'
+                   )
                    AND (
                        SELECT COUNT(*) = 1
                          FROM pg_class AS relation
@@ -247,6 +280,21 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                         WHERE namespace.nspname = current_schema()
                           AND relation.relkind = 'r'
                           AND relation.relname = 'eom_customer_handoffs'
+                          AND relation.relowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relkind = 'S'
+                          AND relation.relname =
+                              'eom_lead_lifecycle_events_sequence_seq'
                           AND relation.relowner = (
                               SELECT oid
                                 FROM pg_roles
@@ -402,6 +450,54 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           AND acl.privilege_type NOT IN ('SELECT', 'INSERT')
                    )
                    AND (
+                       SELECT COUNT(*) = 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relkind = 'S'
+                          AND relation.relname =
+                              'eom_lead_lifecycle_events_sequence_seq'
+                          AND acl.grantee = (
+                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+                          )
+                          AND acl.privilege_type = 'USAGE'
+                          AND NOT acl.is_grantable
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relkind = 'S'
+                          AND relation.relname =
+                              'eom_lead_lifecycle_events_sequence_seq'
+                          AND (
+                              acl.grantee NOT IN (
+                                  SELECT oid
+                                    FROM pg_roles
+                                   WHERE rolname IN (
+                                      'atlas', 'atlas_eom_handoff_owner'
+                                   )
+                              )
+                              OR acl.is_grantable
+                              OR (
+                                  acl.grantee = (
+                                      SELECT oid FROM pg_roles
+                                       WHERE rolname = 'atlas'
+                                  )
+                                  AND acl.privilege_type <> 'USAGE'
+                              )
+                          )
+                   )
+                   AND (
                        SELECT COUNT(*) = 14
                          FROM pg_class AS relation
                          JOIN pg_namespace AS namespace
@@ -535,6 +631,15 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                        current_user,
                        'eom_lead_lifecycle_events',
                        'INSERT'
+                   )
+                   AND has_sequence_privilege(
+                       current_user,
+                       format(
+                           '%I.%I',
+                           current_schema(),
+                           'eom_lead_lifecycle_events_sequence_seq'
+                       ),
+                       'USAGE'
                    )
                    AND (
                        SELECT COUNT(*) = 4

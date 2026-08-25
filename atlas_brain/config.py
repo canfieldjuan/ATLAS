@@ -27,6 +27,9 @@ from .config_defaults import (
 
 ENV_FILES = (".env", ".env.local")
 DEFAULT_OPENROUTER_CLAUDE_SONNET_MODEL = "anthropic/claude-sonnet-4-5"
+EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV = (
+    "ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL"
+)
 _IMAP_PORT_ADAPTER = TypeAdapter(Annotated[int, Field(ge=1, le=65535)])
 _IMAP_SSL_ADAPTER = TypeAdapter(bool)
 
@@ -2528,6 +2531,29 @@ class InvoicingConfig(BaseSettings):
         default="",
         validation_alias=AliasChoices("ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL"),
         description="TEST ONLY: isolated legacy monthly-writer PostgreSQL target. The harness separately accepts only its exact loopback test URL.",
+    )
+
+
+class EOMFirstCleanCompletionDBAConfig(BaseSettings):
+    """Protected DBA-only configuration for the first-clean schema runner.
+
+    This is deliberately separate from ``Settings``: the normal Atlas runtime
+    must never need the privileged migration connection, while the controlled
+    command receives one validated deploy-time configuration boundary.
+    """
+
+    model_config = SettingsConfigDict(env_file=ENV_FILES, extra="ignore")
+
+    database_url: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(
+            EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV
+        ),
+        repr=False,
+        description=(
+            "Protected PostgreSQL superuser DSN used only by the controlled "
+            "EOM first-clean completion schema runner."
+        ),
     )
 
 

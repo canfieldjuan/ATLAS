@@ -46,6 +46,7 @@ _COMPLETION_SCHEMA_MIGRATIONS = (
     "351_eom_lead_lifecycle_events",
     "353_eom_customer_handoffs",
     "354_eom_customer_handoff_privileges",
+    "363_eom_lead_lifecycle_sequence",
     "366_contacts_customer_type",
     "394_eom_first_clean_completion_receipts",
 )
@@ -190,6 +191,10 @@ async def _grant_completion_runtime_dml_as_guard(connection: Any) -> None:
         )
         await connection.execute(
             "GRANT SELECT, INSERT ON TABLE eom_lead_lifecycle_events TO atlas"
+        )
+        await connection.execute(
+            "GRANT USAGE ON SEQUENCE eom_lead_lifecycle_events_sequence_seq "
+            "TO atlas"
         )
     finally:
         await connection.execute("RESET ROLE")
@@ -527,6 +532,72 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             ),
             "eom_first_clean_completion_receipts": "atlas_eom_handoff_owner",
         }
+        lifecycle_sequence = await pool._connection.fetchrow(
+            """
+            SELECT owner.rolname AS owner,
+                   has_sequence_privilege(
+                       'atlas',
+                       'eom_lead_lifecycle_events_sequence_seq',
+                       'USAGE'
+                   ) AS runtime_usage,
+                   has_sequence_privilege(
+                       'atlas',
+                       'eom_lead_lifecycle_events_sequence_seq',
+                       'SELECT'
+                   ) AS runtime_select
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            JOIN pg_roles AS owner ON owner.oid = relation.relowner
+            WHERE namespace.nspname = current_schema()
+              AND relation.relkind = 'S'
+              AND relation.relname = 'eom_lead_lifecycle_events_sequence_seq'
+            """
+        )
+        assert dict(lifecycle_sequence) == {
+            "owner": "atlas_eom_handoff_owner",
+            "runtime_usage": True,
+            "runtime_select": False,
+        }
+        assert await pool._connection.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM pg_attrdef AS attribute_default
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = attribute_default.adrelid
+                 AND attribute.attnum = attribute_default.adnum
+                JOIN pg_depend AS dependency
+                  ON dependency.classid = 'pg_attrdef'::regclass
+                 AND dependency.objid = attribute_default.oid
+                 AND dependency.refclassid = 'pg_class'::regclass
+                 AND dependency.refobjid = relation.oid
+                WHERE attribute_default.adrelid = 'eom_lead_lifecycle_events'::regclass
+                  AND attribute.attname = 'lifecycle_sequence'
+            )
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            WHERE namespace.nspname = current_schema()
+              AND relation.relkind = 'S'
+              AND relation.relname = 'eom_lead_lifecycle_events_sequence_seq'
+            """
+        )
+        lifecycle_sequence_acl = await pool._connection.fetch(
+            """
+            SELECT acl.privilege_type, acl.is_grantable
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            CROSS JOIN LATERAL aclexplode(
+                COALESCE(relation.relacl, ARRAY[]::aclitem[])
+            ) AS acl
+            WHERE namespace.nspname = current_schema()
+              AND relation.relkind = 'S'
+              AND relation.relname = 'eom_lead_lifecycle_events_sequence_seq'
+              AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'atlas')
+            """
+        )
+        assert [dict(row) for row in lifecycle_sequence_acl] == [
+            {"privilege_type": "USAGE", "is_grantable": False}
+        ]
         protected_function_ownership = await pool._connection.fetch(
             """
             SELECT protected_function.proname, role.rolname AS owner
@@ -975,6 +1046,62 @@ async def test_completion_migration_rejects_elevated_runtime_before_guard_ddl() 
 
 
 @pytest.mark.asyncio
+async def test_completion_migration_requires_canonical_lifecycle_sequence_before_ddl() -> (
+    None
+):
+    """A partial migration chain cannot create receipts with a broken default."""
+
+    async with _test_store(
+        migrations=tuple(
+            migration
+            for migration in _COMPLETION_SCHEMA_MIGRATIONS
+            if migration
+            not in {
+                "363_eom_lead_lifecycle_sequence",
+                "394_eom_first_clean_completion_receipts",
+            }
+        )
+    ) as (pool, _schema):
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="its ordering sequence",
+        ):
+            await pool._connection.execute(
+                (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
+            )
+        assert await pool._connection.fetchval(
+            "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+        )
+
+
+@pytest.mark.asyncio
+async def test_completion_migration_requires_lifecycle_default_before_ddl() -> None:
+    """An owned sequence alone cannot substitute for the canonical nextval default."""
+
+    async with _test_store(
+        migrations=tuple(
+            migration
+            for migration in _COMPLETION_SCHEMA_MIGRATIONS
+            if migration != "394_eom_first_clean_completion_receipts"
+        )
+    ) as (pool, _schema):
+        await pool._connection.execute(
+            "ALTER TABLE eom_lead_lifecycle_events "
+            "ALTER COLUMN lifecycle_sequence DROP DEFAULT"
+        )
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="canonical nextval default",
+        ):
+            await pool._connection.execute(
+                (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
+            )
+        assert await pool._connection.fetchval(
+            "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+        )
+
+
+@pytest.mark.asyncio
 async def test_completion_migration_requires_guard_owned_handoff_prerequisites() -> (
     None
 ):
@@ -1281,6 +1408,92 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
                     f"eom_first_clean_completion_receipts FROM {role_ident}"
                 )
                 await pool._connection.execute(f"DROP ROLE {role_ident}")
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_requires_guarded_lifecycle_sequence_usage() -> None:
+    """The lifecycle default is usable by runtime, but no broader sequence ACL."""
+
+    async with _test_store() as (pool, _schema):
+        sequence_name = "eom_lead_lifecycle_events_sequence_seq"
+        assert await first_clean_completion_schema_ready(pool) is True
+        await pool._connection.execute(
+            f"REVOKE USAGE ON SEQUENCE {sequence_name} FROM atlas"
+        )
+        assert await first_clean_completion_schema_ready(pool) is False
+        await pool._connection.execute(
+            f"GRANT USAGE ON SEQUENCE {sequence_name} TO atlas"
+        )
+        assert await first_clean_completion_schema_ready(pool) is True
+        await pool._connection.execute(
+            f"GRANT SELECT ON SEQUENCE {sequence_name} TO atlas"
+        )
+        assert await first_clean_completion_schema_ready(pool) is False
+        await pool._connection.execute(
+            f"REVOKE SELECT ON SEQUENCE {sequence_name} FROM atlas"
+        )
+        assert await first_clean_completion_schema_ready(pool) is True
+        await pool._connection.execute(
+            f"GRANT USAGE ON SEQUENCE {sequence_name} TO atlas WITH GRANT OPTION"
+        )
+        assert await first_clean_completion_schema_ready(pool) is False
+        await pool._connection.execute(
+            f"REVOKE GRANT OPTION FOR USAGE ON SEQUENCE {sequence_name} FROM atlas"
+        )
+        assert await first_clean_completion_schema_ready(pool) is True
+        external_role_name = f"eom_sequence_acl_{uuid4().hex[:16]}"
+        external_role_ident = _quote_ident(external_role_name)
+        await pool._connection.execute(
+            f"CREATE ROLE {external_role_ident} NOLOGIN NOINHERIT"
+        )
+        try:
+            await pool._connection.execute(
+                f"GRANT USAGE ON SEQUENCE {sequence_name} TO {external_role_ident}"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                f"REVOKE ALL PRIVILEGES ON SEQUENCE {sequence_name} "
+                f"FROM {external_role_ident}"
+            )
+            await pool._connection.execute(f"DROP ROLE {external_role_ident}")
+        assert await first_clean_completion_schema_ready(pool) is True
+        await pool._connection.execute(
+            f"GRANT USAGE ON SEQUENCE {sequence_name} TO PUBLIC"
+        )
+        assert await first_clean_completion_schema_ready(pool) is False
+        await pool._connection.execute(
+            f"REVOKE ALL PRIVILEGES ON SEQUENCE {sequence_name} FROM PUBLIC"
+        )
+        assert await first_clean_completion_schema_ready(pool) is True
+        await pool._connection.execute(
+            f"ALTER SEQUENCE {sequence_name} OWNED BY NONE"
+        )
+        await pool._connection.execute(f"ALTER SEQUENCE {sequence_name} OWNER TO atlas")
+        assert await first_clean_completion_schema_ready(pool) is False
+        await pool._connection.execute(
+            f"ALTER SEQUENCE {sequence_name} OWNER TO atlas_eom_handoff_owner"
+        )
+        await pool._connection.execute(
+            f"GRANT USAGE ON SEQUENCE {sequence_name} TO atlas"
+        )
+        assert await first_clean_completion_schema_ready(pool) is False
+        await pool._connection.execute(
+            f"ALTER SEQUENCE {sequence_name} OWNED BY "
+            "eom_lead_lifecycle_events.lifecycle_sequence"
+        )
+        assert await first_clean_completion_schema_ready(pool) is True
+        await pool._connection.execute(
+            "ALTER TABLE eom_lead_lifecycle_events "
+            "ALTER COLUMN lifecycle_sequence DROP DEFAULT"
+        )
+        assert await first_clean_completion_schema_ready(pool) is False
+        await pool._connection.execute(
+            "ALTER TABLE eom_lead_lifecycle_events "
+            "ALTER COLUMN lifecycle_sequence SET DEFAULT "
+            "nextval('eom_lead_lifecycle_events_sequence_seq'::regclass)"
+        )
         assert await first_clean_completion_schema_ready(pool) is True
 
 
