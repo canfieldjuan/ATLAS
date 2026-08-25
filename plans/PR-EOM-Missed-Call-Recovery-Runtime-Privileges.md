@@ -433,9 +433,9 @@ Max files: 11
 - Revised required test surface: load that executable file through an explicit
   `importlib` file-spec fixture in the test instead of relying on package
   import discovery.
-- Explicit non-scope remains unchanged: do not create `scripts/__init__.py`,
-  alter Python packaging, or change the command's CLI behavior merely to make
-  its internal helper importable.
+- Explicit non-scope remains unchanged: do not turn `scripts/` into an import
+  package, alter Python packaging, or change the command's CLI behavior merely
+  to make its internal helper importable.
 
 ### Review Contract
 
