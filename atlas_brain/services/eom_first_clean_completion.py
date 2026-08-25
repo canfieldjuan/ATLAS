@@ -188,6 +188,27 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           AND NOT runtime_role.rolcreatedb
                           AND NOT runtime_role.rolreplication
                           AND NOT runtime_role.rolbypassrls
+                          AND NOT EXISTS (
+                              SELECT 1
+                                FROM pg_database AS database
+                               WHERE database.datname = current_database()
+                                 AND database.datdba = runtime_role.oid
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                                FROM pg_roles AS elevated_role
+                               WHERE elevated_role.oid <> runtime_role.oid
+                                 AND (
+                                     elevated_role.rolsuper
+                                     OR elevated_role.rolcreaterole
+                                     OR elevated_role.rolcreatedb
+                                     OR elevated_role.rolreplication
+                                     OR elevated_role.rolbypassrls
+                                 )
+                                 AND pg_has_role(
+                                     runtime_role.oid, elevated_role.oid, 'MEMBER'
+                                 )
+                          )
                    )
                    AND EXISTS (
                        SELECT 1
@@ -678,6 +699,75 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                               'uq_eom_first_clean_completion_tracker_service'
                           )
                    )
+                   AND (
+                       SELECT COUNT(*) = 6
+                         FROM (
+                             VALUES
+                                 ('eom_customer_handoffs', 'contact_id',
+                                  'contacts', 'id'),
+                                 ('eom_lead_lifecycle_events', 'contact_id',
+                                  'contacts', 'id'),
+                                 ('eom_first_clean_completion_operation_receipts',
+                                  'contact_id', 'contacts', 'id'),
+                                 ('eom_first_clean_completion_receipts',
+                                  'contact_id', 'contacts', 'id'),
+                                 ('eom_first_clean_completion_receipts',
+                                  'handoff_id', 'eom_customer_handoffs', 'id'),
+                                 ('eom_first_clean_completion_receipts',
+                                  'operation_key',
+                                  'eom_first_clean_completion_operation_receipts',
+                                  'operation_key')
+                         ) AS expected(
+                             source_relation,
+                             source_column,
+                             target_relation,
+                             target_column
+                         )
+                        WHERE EXISTS (
+                            SELECT 1
+                              FROM pg_constraint AS foreign_key
+                             WHERE foreign_key.contype = 'f'
+                               AND foreign_key.conrelid = to_regclass(
+                                   format(
+                                       '%I.%I',
+                                       current_schema(),
+                                       expected.source_relation
+                                   )
+                               )
+                               AND foreign_key.confrelid = to_regclass(
+                                   format(
+                                       '%I.%I',
+                                       current_schema(),
+                                       expected.target_relation
+                                   )
+                               )
+                               AND foreign_key.conkey = ARRAY[
+                                   (
+                                       SELECT attribute.attnum
+                                         FROM pg_attribute AS attribute
+                                        WHERE attribute.attrelid =
+                                              foreign_key.conrelid
+                                          AND attribute.attname =
+                                              expected.source_column
+                                          AND NOT attribute.attisdropped
+                                   )
+                               ]::smallint[]
+                               AND foreign_key.confkey = ARRAY[
+                                   (
+                                       SELECT attribute.attnum
+                                         FROM pg_attribute AS attribute
+                                        WHERE attribute.attrelid =
+                                              foreign_key.confrelid
+                                          AND attribute.attname =
+                                              expected.target_column
+                                          AND NOT attribute.attisdropped
+                                   )
+                               ]::smallint[]
+                               AND foreign_key.confdeltype = 'r'
+                               AND foreign_key.convalidated
+                               AND NOT foreign_key.condeferrable
+                        )
+                   )
                    AND NOT EXISTS (
                        WITH expected_trigger(
                            relation_name, trigger_name, function_name
@@ -1006,6 +1096,16 @@ class EOMFirstCleanCompletionService:
         receipt_id = uuid4()
         try:
             async with self.pool.transaction() as conn:
+                # The canonical CRM table remains runtime-owned for ordinary
+                # CRM writes. Hold a compatible read lock before catalog
+                # attestation so a concurrent DROP TABLE contacts CASCADE
+                # cannot remove protected foreign keys between readiness and
+                # receipt admission.
+                await conn.execute("LOCK TABLE contacts IN ACCESS SHARE MODE")
+                if not await first_clean_completion_schema_ready(conn):
+                    raise EOMFirstCleanCompletionUnavailableError(
+                        "First-clean completion schema is unavailable"
+                    )
                 lock_keys = sorted(
                     {
                         f"eom-first-clean-completion:contact:{contact_id}",
@@ -1114,7 +1214,7 @@ class EOMFirstCleanCompletionService:
                 return _receipt_result(receipt, idempotent=False)
         except EOMFirstCleanCompletionError:
             raise
-        except (asyncpg.PostgresError, OSError) as exc:
+        except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
             raise EOMFirstCleanCompletionUnavailableError(
                 "First-clean completion could not be recorded"
             ) from exc

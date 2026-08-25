@@ -47,6 +47,31 @@ BEGIN
            AND NOT runtime_role.rolcreatedb
            AND NOT runtime_role.rolreplication
            AND NOT runtime_role.rolbypassrls
+           -- Database ownership is an effective administrative path even when
+           -- the login's direct role attributes are otherwise least-privilege.
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM pg_database AS database
+                WHERE database.datname = current_database()
+                  AND database.datdba = runtime_role.oid
+           )
+           -- NOLOGIN roles can still be assumed through SET ROLE. Attest the
+           -- complete membership graph rather than only Atlas's direct flags.
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM pg_roles AS elevated_role
+                WHERE elevated_role.oid <> runtime_role.oid
+                  AND (
+                      elevated_role.rolsuper
+                      OR elevated_role.rolcreaterole
+                      OR elevated_role.rolcreatedb
+                      OR elevated_role.rolreplication
+                      OR elevated_role.rolbypassrls
+                  )
+                  AND pg_has_role(
+                      runtime_role.oid, elevated_role.oid, 'MEMBER'
+                  )
+           )
     )
       INTO runtime_role_ready;
     IF NOT runtime_role_ready THEN
@@ -104,6 +129,57 @@ BEGIN
        OR to_regclass(format('%I.eom_customer_handoffs', schema_name)) IS NULL THEN
         RAISE EXCEPTION
             'contacts, eom_lead_lifecycle_events, its ordering sequence, and eom_customer_handoffs must exist before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
+    -- `contacts` remains the canonical CRM relation and is deliberately not
+    -- transferred into this receipt guard's ownership lane. Before trusting
+    -- the immutable handoff/lifecycle evidence that references it, require the
+    -- exact validated, nondeferrable RESTRICT foreign keys that bind both
+    -- protected relations to the canonical contact identity. A dropped and
+    -- recreated runtime-owned contacts relation must therefore fail before this
+    -- migration can bless the receipt boundary.
+    IF (
+        SELECT COUNT(*)
+          FROM (
+              VALUES
+                  ('eom_customer_handoffs', 'contact_id'),
+                  ('eom_lead_lifecycle_events', 'contact_id')
+          ) AS expected(source_relation, source_column)
+         WHERE EXISTS (
+             SELECT 1
+               FROM pg_constraint AS foreign_key
+              WHERE foreign_key.contype = 'f'
+                AND foreign_key.conrelid = to_regclass(
+                    format('%I.%I', schema_name, expected.source_relation)
+                )
+                AND foreign_key.confrelid = to_regclass(
+                    format('%I.contacts', schema_name)
+                )
+                AND foreign_key.conkey = ARRAY[
+                    (
+                        SELECT attribute.attnum
+                          FROM pg_attribute AS attribute
+                         WHERE attribute.attrelid = foreign_key.conrelid
+                           AND attribute.attname = expected.source_column
+                           AND NOT attribute.attisdropped
+                    )
+                ]::smallint[]
+                AND foreign_key.confkey = ARRAY[
+                    (
+                        SELECT attribute.attnum
+                          FROM pg_attribute AS attribute
+                         WHERE attribute.attrelid = foreign_key.confrelid
+                           AND attribute.attname = 'id'
+                           AND NOT attribute.attisdropped
+                    )
+                ]::smallint[]
+                AND foreign_key.confdeltype = 'r'
+                AND foreign_key.convalidated
+                AND NOT foreign_key.condeferrable
+         )
+    ) <> 2 THEN
+        RAISE EXCEPTION
+            'eom_customer_handoffs and eom_lead_lifecycle_events must retain validated contact foreign keys before running 394_eom_first_clean_completion_receipts';
     END IF;
 
     IF to_regclass(pg_get_serial_sequence(

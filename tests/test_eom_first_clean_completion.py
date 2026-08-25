@@ -27,6 +27,7 @@ from atlas_brain.eom_api import funnel_auth as funnel_auth_mod  # noqa: E402
 from atlas_brain.services.eom_first_clean_completion import (  # noqa: E402
     EOMFirstCleanCompletionConflictError,
     EOMFirstCleanCompletionService,
+    EOMFirstCleanCompletionUnavailableError,
     EOMFirstCleanCompletionValidationError,
     first_clean_completion_schema_ready,
 )
@@ -86,6 +87,13 @@ _ACTOR_ID_LENGTH_BOUNDARIES = (
     1_000_000,
     2_147_483_647,
     9_223_372_036_854_775_807,
+)
+_EFFECTIVE_RUNTIME_PRIVILEGE_OPTIONS = (
+    "SUPERUSER",
+    "CREATEROLE",
+    "CREATEDB",
+    "REPLICATION",
+    "BYPASSRLS",
 )
 
 
@@ -1460,6 +1468,81 @@ async def test_schema_readiness_rejects_privileged_or_reassumed_runtime(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("privileged_option", _EFFECTIVE_RUNTIME_PRIVILEGE_OPTIONS)
+async def test_schema_readiness_rejects_effective_runtime_privilege_membership(
+    privileged_option: str,
+) -> None:
+    """A NOLOGIN administrator is still reachable through SET ROLE."""
+
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        role_name = f"eom_completion_effective_{uuid4().hex[:16]}"
+        role_ident = _quote_ident(role_name)
+        role_created = False
+        try:
+            can_administer_roles = await pool._connection.fetchval(
+                """
+                SELECT rolsuper OR rolcreaterole
+                FROM pg_roles
+                WHERE rolname = current_user
+                """
+            )
+            if not can_administer_roles:
+                pytest.skip(
+                    "effective-runtime membership proof requires role administration"
+                )
+            await pool._connection.execute(
+                f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT {privileged_option}"
+            )
+            role_created = True
+            await pool._connection.execute(f"GRANT {role_ident} TO atlas")
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            if role_created:
+                await pool._connection.execute(f"REVOKE {role_ident} FROM atlas")
+                await pool._connection.execute(f"DROP ROLE {role_ident}")
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_atlas_database_ownership() -> None:
+    """Owning the database is an effective administrative path."""
+
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        database = await pool._connection.fetchrow(
+            """
+            SELECT database.datname, owner.rolname AS owner
+            FROM pg_database AS database
+            JOIN pg_roles AS owner ON owner.oid = database.datdba
+            WHERE database.datname = current_database()
+            """
+        )
+        assert database is not None
+        database_ident = _quote_ident(str(database["datname"]))
+        owner_ident = _quote_ident(str(database["owner"]))
+        can_alter_database = await pool._connection.fetchval(
+            """
+            SELECT rolsuper OR rolcreatedb
+            FROM pg_roles
+            WHERE rolname = current_user
+            """
+        )
+        if not can_alter_database:
+            pytest.skip("database-owner proof requires database administration")
+        try:
+            await pool._connection.execute(
+                f"ALTER DATABASE {database_ident} OWNER TO atlas"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                f"ALTER DATABASE {database_ident} OWNER TO {owner_ident}"
+            )
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
 async def test_schema_readiness_reattests_receipt_guard_owners_and_paths() -> None:
     """A runtime cannot retain a stale ready state after guard drift."""
 
@@ -1535,6 +1618,109 @@ async def test_completion_migration_rejects_privileged_atlas_runtime(
                 )
         finally:
             await pool._connection.execute(f"ALTER ROLE atlas {unprivileged_option}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("privileged_option", _EFFECTIVE_RUNTIME_PRIVILEGE_OPTIONS)
+async def test_completion_migration_rejects_effective_runtime_privilege_membership(
+    privileged_option: str,
+) -> None:
+    """The DBA path rejects every indirect elevated runtime role."""
+
+    migrations = tuple(
+        migration
+        for migration in _COMPLETION_SCHEMA_MIGRATIONS
+        if migration != "394_eom_first_clean_completion_receipts"
+    )
+    async with _test_store(migrations=migrations) as (pool, _schema):
+        role_name = f"eom_completion_preflight_effective_{uuid4().hex[:16]}"
+        role_ident = _quote_ident(role_name)
+        role_created = False
+        try:
+            can_administer_roles = await pool._connection.fetchval(
+                """
+                SELECT rolsuper OR rolcreaterole
+                FROM pg_roles
+                WHERE rolname = current_user
+                """
+            )
+            if not can_administer_roles:
+                pytest.skip(
+                    "effective-runtime migration proof requires role administration"
+                )
+            await pool._connection.execute(
+                f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT {privileged_option}"
+            )
+            role_created = True
+            await pool._connection.execute(f"GRANT {role_ident} TO atlas")
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="atlas must be an unprivileged login runtime role",
+            ):
+                await pool._connection.execute(
+                    (
+                        MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+                    ).read_text()
+                )
+            assert await pool._connection.fetchval(
+                "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+            )
+        finally:
+            if role_created:
+                await pool._connection.execute(f"REVOKE {role_ident} FROM atlas")
+                await pool._connection.execute(f"DROP ROLE {role_ident}")
+
+
+@pytest.mark.asyncio
+async def test_completion_migration_rejects_atlas_database_ownership() -> None:
+    """The DBA path rejects database ownership before it creates receipts."""
+
+    migrations = tuple(
+        migration
+        for migration in _COMPLETION_SCHEMA_MIGRATIONS
+        if migration != "394_eom_first_clean_completion_receipts"
+    )
+    async with _test_store(migrations=migrations) as (pool, _schema):
+        database = await pool._connection.fetchrow(
+            """
+            SELECT database.datname, owner.rolname AS owner
+            FROM pg_database AS database
+            JOIN pg_roles AS owner ON owner.oid = database.datdba
+            WHERE database.datname = current_database()
+            """
+        )
+        assert database is not None
+        database_ident = _quote_ident(str(database["datname"]))
+        owner_ident = _quote_ident(str(database["owner"]))
+        can_alter_database = await pool._connection.fetchval(
+            """
+            SELECT rolsuper OR rolcreatedb
+            FROM pg_roles
+            WHERE rolname = current_user
+            """
+        )
+        if not can_alter_database:
+            pytest.skip("database-owner migration proof requires database administration")
+        try:
+            await pool._connection.execute(
+                f"ALTER DATABASE {database_ident} OWNER TO atlas"
+            )
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="atlas must be an unprivileged login runtime role",
+            ):
+                await pool._connection.execute(
+                    (
+                        MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+                    ).read_text()
+                )
+            assert await pool._connection.fetchval(
+                "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+            )
+        finally:
+            await pool._connection.execute(
+                f"ALTER DATABASE {database_ident} OWNER TO {owner_ident}"
+            )
 
 
 @pytest.mark.asyncio
@@ -1649,6 +1835,43 @@ async def test_completion_migration_requires_guard_owned_handoff_prerequisites()
             await pool._connection.execute(
                 (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
             )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("relation_name", "constraint_name"),
+    (
+        ("eom_customer_handoffs", "eom_customer_handoffs_contact_id_fkey"),
+        ("eom_lead_lifecycle_events", "eom_lead_lifecycle_events_contact_id_fkey"),
+    ),
+)
+async def test_completion_migration_requires_canonical_contact_foreign_keys(
+    relation_name: str,
+    constraint_name: str,
+) -> None:
+    """A compromised prerequisite cannot be blessed by the DBA migration."""
+
+    migrations = tuple(
+        migration
+        for migration in _COMPLETION_SCHEMA_MIGRATIONS
+        if migration != "394_eom_first_clean_completion_receipts"
+    )
+    async with _test_store(migrations=migrations) as (pool, _schema):
+        await pool._connection.execute(
+            "ALTER TABLE "
+            f"{_quote_ident(relation_name)} DROP CONSTRAINT "
+            f"{_quote_ident(constraint_name)}"
+        )
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="must retain validated contact foreign keys",
+        ):
+            await pool._connection.execute(
+                (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
+            )
+        assert await pool._connection.fetchval(
+            "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+        )
 
 
 @pytest.mark.asyncio
@@ -2700,6 +2923,97 @@ async def test_route_fails_closed_when_the_additive_schema_is_not_ready() -> Non
 
     assert response.status_code == 503
     assert response.json()["detail"] == "First-clean completion schema is unavailable"
+
+
+@pytest.mark.asyncio
+async def test_route_translates_database_command_timeout_to_unavailable() -> None:
+    """A stalled advisory lock must preserve the route's safe error contract."""
+
+    class _TimeoutConnection:
+        async def execute(self, *_args: Any, **_kwargs: Any) -> None:
+            raise TimeoutError("command timed out")
+
+    class _TimeoutPool:
+        is_initialized = True
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield _TimeoutConnection()
+
+        async def fetchval(self, *_args: Any, **_kwargs: Any) -> bool:
+            return True
+
+    contact_id = uuid4()
+    app = _app(EOMFirstCleanCompletionService(pool=_TimeoutPool(), now=lambda: _NOW))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            f"/api/v1/eom-funnel/customer-handoffs/{contact_id}/first-clean-completions",
+            headers={"Idempotency-Key": _operation_key("command-timeout")},
+            json=_payload(1, 2),
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "First-clean completion could not be recorded"
+
+
+@pytest.mark.asyncio
+async def test_completion_rechecks_contact_foreign_keys_inside_its_transaction() -> None:
+    """A cascaded runtime-owned contact relation cannot race past readiness."""
+
+    async with _test_store() as (pool, _schema):
+        contact_id, customer_id, site_id = await _insert_customer(pool)
+        assert customer_id is not None and site_id is not None
+        assert await first_clean_completion_schema_ready(pool) is True
+
+        await pool._runtime_connection.execute("DROP TABLE contacts CASCADE")
+        await pool._runtime_connection.execute(
+            """
+            CREATE TABLE contacts (
+                id UUID PRIMARY KEY,
+                business_context_id VARCHAR(64) NOT NULL,
+                contact_type VARCHAR(32) NOT NULL,
+                customer_type VARCHAR(32),
+                status VARCHAR(32) NOT NULL
+            )
+            """
+        )
+
+        assert await first_clean_completion_schema_ready(pool) is False
+        with pytest.raises(
+            EOMFirstCleanCompletionUnavailableError,
+            match="First-clean completion schema is unavailable",
+        ):
+            await _service(pool).record_completion(
+                **_completion_kwargs(
+                    contact_id=contact_id,
+                    tracker_customer_id=customer_id,
+                    tracker_site_id=site_id,
+                    operation_key=_operation_key("cascaded-contact-fk"),
+                )
+            )
+        assert (
+            await pool.fetchval(
+                "SELECT COUNT(*) FROM eom_first_clean_completion_receipts"
+            )
+            == 0
+        )
+
+
+@pytest.mark.asyncio
+async def test_contact_dependency_lock_blocks_cascaded_ddl_during_completion() -> None:
+    """The transaction fence prevents a post-attestation contact cascade."""
+
+    async with _test_store() as (pool, _schema):
+        async with pool._runtime_connection.transaction():
+            await pool._runtime_connection.execute(
+                "LOCK TABLE contacts IN ACCESS SHARE MODE"
+            )
+            async with pool._connection.transaction():
+                await pool._connection.execute("SET LOCAL lock_timeout = '100ms'")
+                with pytest.raises(asyncpg.LockNotAvailableError):
+                    await pool._connection.execute("DROP TABLE contacts CASCADE")
 
 
 @pytest.mark.asyncio
