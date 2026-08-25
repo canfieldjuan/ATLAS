@@ -34,6 +34,7 @@ cannot be safely exercised or a route without the durable invariants it claims.
 
 Ownership lane: eom/onboarding-first-clean-completion
 Slice phase: vertical slice
+Max files: 10
 
 1. Add a durable ATLAS receipt for one authenticated completion of the first
    residential service for an already canonicalized EOM customer.
@@ -224,8 +225,8 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/services/eom_first_clean_completion.py` | 732 |
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 394 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 79 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 231 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 232 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
 | `tests/test_eom_first_clean_completion.py` | 1286 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **3185** |
+| **Total** | **3186** |
