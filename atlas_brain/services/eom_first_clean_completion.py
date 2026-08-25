@@ -201,25 +201,16 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                    AND NOT EXISTS (
                        SELECT 1
                          FROM pg_roles AS member_role
-                        WHERE member_role.rolname IN ('atlas', 'atlas_nocodb')
-                          AND EXISTS (
-                              WITH RECURSIVE role_chain(roleid) AS (
-                                  SELECT membership.roleid
-                                    FROM pg_auth_members AS membership
-                                   WHERE membership.member = member_role.oid
-                                  UNION
-                                  SELECT membership.roleid
-                                    FROM pg_auth_members AS membership
-                                    JOIN role_chain
-                                      ON membership.member = role_chain.roleid
-                              )
-                              SELECT 1
-                                FROM role_chain
-                               WHERE roleid = (
-                                   SELECT oid
-                                     FROM pg_roles
-                                    WHERE rolname = 'atlas_eom_handoff_owner'
-                               )
+                        WHERE member_role.rolcanlogin
+                          AND NOT member_role.rolsuper
+                          AND pg_has_role(
+                              member_role.oid,
+                              (
+                                  SELECT oid
+                                    FROM pg_roles
+                                   WHERE rolname = 'atlas_eom_handoff_owner'
+                              ),
+                              'MEMBER'
                           )
                    )
                    AND (
@@ -420,7 +411,7 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           AND acl.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE')
                    )
                    AND (
-                       SELECT COUNT(*) = 2
+                       SELECT COUNT(*) = 3
                          FROM pg_class AS relation
                          JOIN pg_namespace AS namespace
                            ON namespace.oid = relation.relnamespace
@@ -432,7 +423,7 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           AND acl.grantee = (
                               SELECT oid FROM pg_roles WHERE rolname = 'atlas'
                           )
-                          AND acl.privilege_type IN ('SELECT', 'INSERT')
+                          AND acl.privilege_type IN ('SELECT', 'INSERT', 'UPDATE')
                    )
                    AND NOT EXISTS (
                        SELECT 1
@@ -447,7 +438,7 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           AND acl.grantee = (
                               SELECT oid FROM pg_roles WHERE rolname = 'atlas'
                           )
-                          AND acl.privilege_type NOT IN ('SELECT', 'INSERT')
+                          AND acl.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE')
                    )
                    AND (
                        SELECT COUNT(*) = 1
@@ -631,6 +622,11 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                        current_user,
                        'eom_lead_lifecycle_events',
                        'INSERT'
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_lead_lifecycle_events',
+                       'UPDATE'
                    )
                    AND has_sequence_privilege(
                        current_user,

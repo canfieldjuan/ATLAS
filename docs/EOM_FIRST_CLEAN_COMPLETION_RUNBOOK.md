@@ -52,9 +52,10 @@ python scripts/apply_eom_first_clean_completion_schema.py --apply --json
 The migration atomically records its ledger row, requires the pre-existing
 handoff table and its protected functions to be guard-owned, transfers the two
 receipt tables, lifecycle table, lifecycle ordering sequence, and their trigger
-functions to `atlas_eom_handoff_owner`, revokes direct runtime/NocoDB guard
-membership, rejects any inherited guard path, and grants the Atlas runtime only
-the table `SELECT`, `INSERT`, and `UPDATE` needed for row locking and receipt
+functions to `atlas_eom_handoff_owner`, rejects any direct or inherited guard
+path held by a non-superuser login, and grants the Atlas runtime only the table
+`SELECT`, `INSERT`, and
+`UPDATE` needed for row locking and receipt
 creation plus sequence `USAGE` needed by the lifecycle default. It does not
 grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, sequence `SELECT` or
 `UPDATE`, ownership, or customer delivery authority.
@@ -72,9 +73,10 @@ Remove the temporary DBA DSN injection after the result reports
    The readiness fence also requires guard ownership of the canonical-handoff
    table and its protected functions, the existing canonical-handoff
    finalization/append-only triggers, lifecycle append-only triggers, and the
-   guard-owned lifecycle ordering sequence with its exact runtime `USAGE` ACL;
-   a missing, disabled, runtime-owned, or broadened prerequisite leaves the
-   route unavailable.
+   guard-owned lifecycle ordering sequence with its exact runtime `USAGE` ACL.
+   It also refuses to serve if a non-superuser login can directly or indirectly
+   assume the guard role; a missing, disabled, runtime-owned, or broadened
+   prerequisite leaves the route unavailable.
 3. Use the isolated PostgreSQL CI evidence for role ownership, minimal runtime
    ACLs, immutability, idempotency, and concurrency. No test sends customer
    communication or creates an appointment.

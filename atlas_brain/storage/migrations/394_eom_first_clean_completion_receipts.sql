@@ -78,6 +78,24 @@ BEGIN
             'atlas_eom_handoff_owner must be a no-login, membership-isolated guard role before running 394_eom_first_clean_completion_receipts';
     END IF;
 
+    -- A no-login owner role is not an effective guard if any ordinary login
+    -- can assume it, directly or through another role. Superusers already
+    -- bypass this boundary, so match the repository's canonical guard
+    -- predicate and reject every non-superuser login member before any receipt
+    -- object is created or transferred.
+    IF EXISTS (
+        SELECT 1
+          FROM pg_roles AS member_role
+          JOIN pg_roles AS guard_role
+            ON guard_role.rolname = 'atlas_eom_handoff_owner'
+         WHERE member_role.rolcanlogin
+           AND NOT member_role.rolsuper
+           AND pg_has_role(member_role.oid, guard_role.oid, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION
+            'no non-superuser login may retain direct or inherited membership in atlas_eom_handoff_owner';
+    END IF;
+
     IF to_regclass(format('%I.contacts', schema_name)) IS NULL
        OR to_regclass(format('%I.eom_lead_lifecycle_events', schema_name)) IS NULL
        OR to_regclass(format(
@@ -161,68 +179,13 @@ BEGIN
     END IF;
 
     -- A no-login guard role can own protected objects only when it can create
-    -- them in this schema. Runtime and NocoDB must never retain a path to set
-    -- that role after the migration commits.
+    -- them in this schema. No non-superuser login may retain a path to set that
+    -- role after the migration commits.
     EXECUTE format(
         'GRANT USAGE, CREATE ON SCHEMA %I TO atlas_eom_handoff_owner',
         schema_name
     );
     EXECUTE format('GRANT USAGE ON SCHEMA %I TO atlas', schema_name);
-    EXECUTE format('REVOKE %I FROM %I', 'atlas_eom_handoff_owner', 'atlas');
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb') THEN
-        EXECUTE format(
-            'REVOKE %I FROM %I',
-            'atlas_eom_handoff_owner',
-            'atlas_nocodb'
-        );
-    END IF;
-    IF EXISTS (
-        WITH RECURSIVE role_chain(roleid) AS (
-            SELECT membership.roleid
-              FROM pg_auth_members AS membership
-             WHERE membership.member = (
-                 SELECT oid FROM pg_roles WHERE rolname = 'atlas'
-             )
-            UNION
-            SELECT membership.roleid
-              FROM pg_auth_members AS membership
-              JOIN role_chain ON membership.member = role_chain.roleid
-        )
-        SELECT 1
-          FROM role_chain
-         WHERE roleid = (
-             SELECT oid
-               FROM pg_roles
-              WHERE rolname = 'atlas_eom_handoff_owner'
-         )
-    ) THEN
-        RAISE EXCEPTION
-            'atlas must not retain direct or inherited membership in atlas_eom_handoff_owner';
-    END IF;
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb')
-       AND EXISTS (
-           WITH RECURSIVE role_chain(roleid) AS (
-               SELECT membership.roleid
-                 FROM pg_auth_members AS membership
-                WHERE membership.member = (
-                    SELECT oid FROM pg_roles WHERE rolname = 'atlas_nocodb'
-                )
-               UNION
-               SELECT membership.roleid
-                 FROM pg_auth_members AS membership
-                 JOIN role_chain ON membership.member = role_chain.roleid
-           )
-           SELECT 1
-             FROM role_chain
-            WHERE roleid = (
-                SELECT oid
-                  FROM pg_roles
-                 WHERE rolname = 'atlas_eom_handoff_owner'
-            )
-       ) THEN
-        RAISE EXCEPTION
-            'atlas_nocodb must not retain direct or inherited membership in atlas_eom_handoff_owner';
-    END IF;
 END;
 $$;
 
@@ -536,10 +499,11 @@ BEGIN
         'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_first_clean_completion_receipts TO atlas',
         schema_name
     );
-    -- Existing lifecycle writers append evidence; they never need table
-    -- ownership or mutation authority.
+    -- Existing lifecycle writers append evidence. They require UPDATE only to
+    -- take row locks on idempotency/booking reads; the guard-owned append-only
+    -- trigger still rejects every actual UPDATE or DELETE.
     EXECUTE format(
-        'GRANT SELECT, INSERT ON TABLE %I.eom_lead_lifecycle_events TO atlas',
+        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_lead_lifecycle_events TO atlas',
         schema_name
     );
     EXECUTE format(

@@ -225,19 +225,26 @@ Max files: 11
 - Parked hardening: none; the new isolated service is required to prove the
   production role separation rather than emulate it with a test-only bypass.
 
-### Lifecycle sequence and DBA configuration P1 disposition preflight
+### Lifecycle ACL, guard-membership, sequence, and DBA configuration P1 disposition preflight
 
 - Root decision: require the canonical lifecycle ordering sequence before the
   DBA-only boundary mutates guarded objects; transfer that sequence to the
-  guard owner, permit the runtime only `USAGE`, and attest the exact ACL.
-  Resolve the DBA DSN only through a typed, secret configuration field with no
-  caller-selected environment-variable override.
+  guard owner, permit the runtime only sequence `USAGE` and lifecycle
+  `SELECT, INSERT, UPDATE` needed by existing row locks, and attest those exact
+  ACLs. Reject every direct or inherited guard membership held by a
+  non-superuser login. Resolve the DBA DSN only through a typed, secret
+  configuration field with no caller-selected environment-variable override.
 - Source trace: migration 363 gives `lifecycle_sequence` a
   `nextval(eom_lead_lifecycle_events_sequence_seq)` default -> migration 394
   grants only table `SELECT, INSERT` -> a direct non-superuser lifecycle insert
   fails with `permission denied for sequence`; separately, runner `_run`
   reads `os.environ[args.database_url_env]` -> an arbitrary CLI value bypasses
   configuration validation and absence cannot be proven before pool creation.
+  Separately, migration 394 transfers the lifecycle table to the guard owner
+  but grants the runtime only `SELECT, INSERT`, while existing operator and
+  booking idempotency reads use `SELECT … FOR UPDATE`; its named-role
+  membership check also leaves any other non-superuser login able to assume the
+  guard owner.
 - Upstream files: `atlas_brain/config.py`,
   `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`,
   `atlas_brain/services/eom_first_clean_completion.py`,
@@ -295,10 +302,10 @@ keys to the guarded handoff table and transfers its two receipt tables,
 lifecycle table/ordering sequence, and trigger functions to
 `atlas_eom_handoff_owner`. It first requires migration 354's guarded handoff
 table/protected functions and migration 363's canonical lifecycle default,
-revokes direct runtime/NocoDB guard membership, rejects inherited membership,
+rejects every direct or inherited guard path held by a non-superuser login,
 preserves the guard owner's operation-table access needed by PostgreSQL
 foreign-key checks, and grants the direct runtime only lifecycle table
-reads/inserts plus sequence `USAGE` for that default. The target `atlas` login
+reads/inserts/row-lock `UPDATE` plus sequence `USAGE` for that default. The target `atlas` login
 must be a direct nonprivileged runtime, and the two receipt-admission functions
 pin their guarded schema first with `pg_temp` explicitly last, so a caller's
 temporary relation cannot shadow canonical evidence. Readiness attests the
@@ -354,7 +361,7 @@ an automatic completion source and is intentionally left outside this slice.
   - Command: ruff check atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py
   - Command: `python -m py_compile atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py`
   - Command: `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py`
-    against a disposable PostgreSQL 16 DBA/runtime split (`60 passed`).
+    against a disposable PostgreSQL 16 DBA/runtime split (`62 passed`).
   - Boundary probes: an unqualified trigger accepted a fabricated temporary
     handoff/lifecycle source before the repair; the pinned-path regression now
     rejects that same permanent-receipt attempt. Separate parameterized checks
@@ -369,6 +376,10 @@ an automatic completion source and is intentionally left outside this slice.
     broadened ACLs. The DBA runner tests cover exact typed configuration,
     missing configuration before pool creation, and rejection of the former
     caller-selected environment-variable flag.
+  - The post-394 runtime can take an existing lifecycle `FOR UPDATE` row lock,
+    while the guarded append-only trigger still rejects an actual `UPDATE`.
+    Migration preflight and serving readiness both reject direct and inherited
+    guard membership held by a disposable non-superuser login.
   - Command: `python scripts/sync_pr_plan.py plans/PR-First-Clean-Completion-Receipt.md origin/main`
   - Command: `python scripts/audit_plan_doc.py plans/PR-First-Clean-Completion-Receipt.md`
   - Command: `python scripts/audit_plan_code_consistency.py --base-ref origin/main plans/PR-First-Clean-Completion-Receipt.md`
@@ -390,11 +401,11 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/config.py` | 26 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 1095 |
-| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 556 |
-| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 91 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 400 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 1091 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 520 |
+| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 93 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 411 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 171 |
-| `tests/test_eom_first_clean_completion.py` | 2251 |
+| `tests/test_eom_first_clean_completion.py` | 2367 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 205 |
-| **Total** | **4977** |
+| **Total** | **5066** |

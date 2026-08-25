@@ -190,7 +190,7 @@ async def _grant_completion_runtime_dml_as_guard(connection: Any) -> None:
             "ON TABLE eom_first_clean_completion_receipts TO atlas"
         )
         await connection.execute(
-            "GRANT SELECT, INSERT ON TABLE eom_lead_lifecycle_events TO atlas"
+            "GRANT SELECT, INSERT, UPDATE ON TABLE eom_lead_lifecycle_events TO atlas"
         )
         await connection.execute(
             "GRANT USAGE ON SEQUENCE eom_lead_lifecycle_events_sequence_seq "
@@ -676,7 +676,7 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
                 "SELECT",
                 "UPDATE",
             },
-            "eom_lead_lifecycle_events": {"INSERT", "SELECT"},
+            "eom_lead_lifecycle_events": {"INSERT", "SELECT", "UPDATE"},
         }
         guard_acl_rows = await pool._connection.fetch(
             """
@@ -1128,12 +1128,65 @@ async def test_completion_migration_requires_guard_owned_handoff_prerequisites()
 
 
 @pytest.mark.asyncio
-async def test_schema_readiness_rejects_indirect_runtime_guard_membership() -> None:
+async def test_completion_migration_rejects_non_superuser_login_guard_membership() -> None:
+    """A foreign login cannot become the guard owner during the DBA migration."""
+
+    migrations = tuple(
+        migration
+        for migration in _COMPLETION_SCHEMA_MIGRATIONS
+        if migration != "394_eom_first_clean_completion_receipts"
+    )
+    async with _test_store(migrations=migrations) as (pool, _schema):
+        login_name = f"eom_completion_preflight_login_{uuid4().hex[:16]}"
+        login_ident = _quote_ident(login_name)
+        login_created = False
+        try:
+            can_administer_roles = await pool._connection.fetchval(
+                """
+                SELECT rolsuper OR rolcreaterole
+                FROM pg_roles
+                WHERE rolname = current_user
+                """
+            )
+            if not can_administer_roles:
+                pytest.skip(
+                    "guard-membership preflight proof requires role administration"
+                )
+            await pool._connection.execute(
+                f"CREATE ROLE {login_ident} LOGIN NOINHERIT NOSUPERUSER"
+            )
+            login_created = True
+            await pool._connection.execute(
+                f"GRANT atlas_eom_handoff_owner TO {login_ident}"
+            )
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="no non-superuser login may retain direct or inherited membership",
+            ):
+                await pool._connection.execute(
+                    (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
+                )
+            assert await pool._connection.fetchval(
+                "SELECT to_regclass('eom_first_clean_completion_receipts') IS NULL"
+            )
+        finally:
+            if login_created:
+                await pool._connection.execute(
+                    f"REVOKE atlas_eom_handoff_owner FROM {login_ident}"
+                )
+                await pool._connection.execute(f"DROP ROLE {login_ident}")
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_non_superuser_login_guard_membership() -> None:
     async with _test_store() as (pool, _schema):
         assert await first_clean_completion_schema_ready(pool) is True
-        role_name = f"eom_completion_membership_{uuid4().hex[:16]}"
-        role_ident = _quote_ident(role_name)
-        role_created = False
+        login_name = f"eom_completion_login_{uuid4().hex[:16]}"
+        login_ident = _quote_ident(login_name)
+        intermediary_name = f"eom_completion_membership_{uuid4().hex[:16]}"
+        intermediary_ident = _quote_ident(intermediary_name)
+        login_created = False
+        intermediary_created = False
         try:
             can_administer_roles = await pool._connection.fetchval(
                 """
@@ -1147,21 +1200,42 @@ async def test_schema_readiness_rejects_indirect_runtime_guard_membership() -> N
                     "guard-membership proof requires disposable role administration"
                 )
             await pool._connection.execute(
-                f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT"
+                f"CREATE ROLE {login_ident} LOGIN NOINHERIT NOSUPERUSER"
             )
-            role_created = True
+            login_created = True
             await pool._connection.execute(
-                f"GRANT atlas_eom_handoff_owner TO {role_ident}"
+                f"GRANT atlas_eom_handoff_owner TO {login_ident}"
             )
-            await pool._connection.execute(f"GRANT {role_ident} TO atlas")
+            assert await first_clean_completion_schema_ready(pool) is False
+            await pool._connection.execute(
+                f"REVOKE atlas_eom_handoff_owner FROM {login_ident}"
+            )
+            assert await first_clean_completion_schema_ready(pool) is True
+            await pool._connection.execute(
+                f"CREATE ROLE {intermediary_ident} NOLOGIN NOINHERIT"
+            )
+            intermediary_created = True
+            await pool._connection.execute(
+                f"GRANT atlas_eom_handoff_owner TO {intermediary_ident}"
+            )
+            await pool._connection.execute(
+                f"GRANT {intermediary_ident} TO {login_ident}"
+            )
             assert await first_clean_completion_schema_ready(pool) is False
         finally:
-            if role_created:
-                await pool._connection.execute(f"REVOKE {role_ident} FROM atlas")
+            if intermediary_created:
                 await pool._connection.execute(
-                    f"REVOKE atlas_eom_handoff_owner FROM {role_ident}"
+                    f"REVOKE {intermediary_ident} FROM {login_ident}"
                 )
-                await pool._connection.execute(f"DROP ROLE {role_ident}")
+                await pool._connection.execute(
+                    f"REVOKE atlas_eom_handoff_owner FROM {intermediary_ident}"
+                )
+                await pool._connection.execute(f"DROP ROLE {intermediary_ident}")
+            if login_created:
+                await pool._connection.execute(
+                    f"REVOKE atlas_eom_handoff_owner FROM {login_ident}"
+                )
+                await pool._connection.execute(f"DROP ROLE {login_ident}")
         assert await first_clean_completion_schema_ready(pool) is True
 
 
@@ -1382,12 +1456,11 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
                 """
             )
             await pool._connection.execute(
-                "GRANT UPDATE ON TABLE eom_lead_lifecycle_events TO atlas"
-            )
-            assert await first_clean_completion_schema_ready(pool) is False
-            await pool._connection.execute(
                 "REVOKE UPDATE ON TABLE eom_lead_lifecycle_events FROM atlas"
             )
+            assert await first_clean_completion_schema_ready(pool) is False
+            await _grant_completion_runtime_dml_as_guard(pool._connection)
+            assert await first_clean_completion_schema_ready(pool) is True
             await pool._connection.execute(
                 "GRANT SELECT ON TABLE eom_first_clean_completion_receipts "
                 f"TO {role_ident}"
@@ -1399,9 +1472,6 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
                 REVOKE DELETE ON TABLE eom_first_clean_completion_receipts FROM atlas
                 """
             )
-            await pool._connection.execute(
-                "REVOKE UPDATE ON TABLE eom_lead_lifecycle_events FROM atlas"
-            )
             if role_created:
                 await pool._connection.execute(
                     "REVOKE ALL PRIVILEGES ON TABLE "
@@ -1409,6 +1479,52 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
                 )
                 await pool._connection.execute(f"DROP ROLE {role_ident}")
         assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_runtime_can_lock_existing_lifecycle_evidence_but_cannot_mutate() -> None:
+    """Existing operator/booking row locks work without weakening append-only evidence."""
+
+    async with _test_store() as (pool, _schema):
+        contact_id, customer_id, site_id = await _insert_customer(pool)
+        assert customer_id is not None and site_id is not None
+        operation_key = _operation_key("runtime-lifecycle-lock")
+        await _service(pool).record_completion(
+            **_completion_kwargs(
+                contact_id=contact_id,
+                tracker_customer_id=customer_id,
+                tracker_site_id=site_id,
+                operation_key=operation_key,
+            )
+        )
+
+        runtime_connection = pool._runtime_connection
+        async with runtime_connection.transaction():
+            lifecycle = await runtime_connection.fetchrow(
+                """
+                SELECT contact_id, event_type, operation_key
+                FROM eom_lead_lifecycle_events
+                WHERE operation_key = $1
+                  AND event_type = 'first_clean_completed'
+                FOR UPDATE
+                """,
+                operation_key,
+            )
+            assert lifecycle is not None
+            assert lifecycle["contact_id"] == contact_id
+
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="eom_lead_lifecycle_events is append-only",
+        ):
+            await runtime_connection.execute(
+                """
+                UPDATE eom_lead_lifecycle_events
+                SET actor = actor
+                WHERE operation_key = $1
+                """,
+                operation_key,
+            )
 
 
 @pytest.mark.asyncio
