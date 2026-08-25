@@ -466,6 +466,44 @@ def test_pending_recovery_does_not_hide_a_current_outage(tmp_path):
     assert _state(settings) == {"consecutive": 1, "status": "down"}
 
 
+def test_recovery_outbox_is_persisted_before_a_delivery_crash(tmp_path):
+    settings = _settings(tmp_path)
+    runner = _Runner(active=False)
+
+    with pytest.raises(SystemExit, match="simulated crash"):
+        healthcheck.run_healthcheck(
+            settings,
+            runner=runner,
+            opener=_opener(204),
+            notifier=lambda *args: (_ for _ in ()).throw(SystemExit("simulated crash")),
+            sleeper=lambda _: None,
+        )
+
+    assert _state(settings) == {
+        "status": "healthy",
+        "consecutive": 0,
+        "pending_notifications": [
+            {
+                "alert": "auto-recovered",
+                "detail": "auto-recovered atlas-api.service: lead-intake probe returned HTTP 204",
+            }
+        ],
+    }
+
+    sent: list[tuple] = []
+    result = healthcheck.run_healthcheck(
+        settings,
+        runner=runner,
+        opener=_opener(204),
+        notifier=lambda *args: (sent.append(args), True)[1],
+        sleeper=lambda _: None,
+    )
+
+    assert result == healthcheck.EXIT_OK
+    assert sent[0][2] == "atlas-api auto-recovered"
+    assert _state(settings) == {"consecutive": 0, "status": "healthy"}
+
+
 def test_missing_notification_configuration_does_not_block_recovery(tmp_path):
     settings = _settings(tmp_path, ntfy_topic="")
     runner = _Runner(active=False)

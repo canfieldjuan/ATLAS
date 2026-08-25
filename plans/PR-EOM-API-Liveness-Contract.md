@@ -82,8 +82,8 @@ Max files: 6
    `tests/test_atlas_api_healthcheck.py::test_installer_deploys_source_and_invokes_enabled_timer_path`.
 - Reachability proof: On deployment, the timer invokes the installed monitor;
   `python scripts/install_atlas_api_healthcheck.py --install` copies the source,
-  reloads user systemd, enables the timer, and invokes the installed health
-  service once. That service makes the real OPTIONS request to
+  reloads user systemd, invokes the installed health service once, and enables
+  the timer only after that proof succeeds. That service makes the real OPTIONS request to
   `/api/v1/leads/intake`; `--check` subsequently verifies the installed copies,
   private topic file, and enabled/active timer without writing. Local tests
   exercise the same install command order and probe seam without stopping the
@@ -102,9 +102,9 @@ Max files: 6
   atlas-api-healthcheck.sh; neither the new Python monitor nor
   its notification environment file is installed. The current template only
   names an `install` command, so the source change has no deployment path.
-  Separately, the monitor persists `next_state` after an undelivered transition
-  alert, which suppresses its retry, and it drops the details returned by a
-  failed `systemctl --user start` command.
+  Separately, notification transitions need a crash-safe outbox rather than an
+  in-memory decision, and failed `systemctl --user start` details must remain
+  observable.
 - Revised root cause: source-managed monitor files alone cannot change a
   user-systemd deployment, and the alert state machine acknowledges a
   notification before it knows that delivery succeeded.
@@ -112,11 +112,10 @@ Max files: 6
   `scripts/install_atlas_api_healthcheck.py` installer/checker that copies the
   monitor and templates outside the runtime worktree, preserves or safely
   migrates the private local notification topic without logging it, reloads and
-  enables the user timer, then invokes the installed health service once as the
-  deployment proof. Update the template invocation, make transition state
-  persist only when no alert is needed or delivery succeeds, carry bounded
-  sanitized start-failure detail into the observation, and add focused tests for
-  installation, timer/service activation, retry, and diagnostics.
+  proves the installed health service, then enables the user timer. Persist each
+  transition in an atomic, fsynced outbox before delivery and acknowledge only
+  after success; carry bounded sanitized start-failure detail into the
+  observation; and test installation, rollback, crash-point retry, and diagnostics.
 - Revised explicit non-scope: do not run the installer against the live user
   systemd configuration in this PR; deployment remains a post-merge host
   action. Do not change `atlas_brain`, funnel routes, CRM, migrations, tracker
@@ -239,8 +238,8 @@ Parked hardening: none.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 246 |
-| `scripts/atlas_api_healthcheck.py` | 475 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 245 |
+| `scripts/atlas_api_healthcheck.py` | 506 |
 | `scripts/install_atlas_api_healthcheck.py` | 397 |
-| `tests/test_atlas_api_healthcheck.py` | 814 |
-| **Total** | **1960** |
+| `tests/test_atlas_api_healthcheck.py` | 852 |
+| **Total** | **2028** |

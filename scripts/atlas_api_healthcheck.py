@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -273,7 +274,38 @@ def read_state(path: Path) -> dict[str, object]:
 
 def write_state(path: Path, state: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, sort_keys=True), encoding="utf-8")
+    payload = json.dumps(state, sort_keys=True).encode("utf-8")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        temporary_path = None
+    except OSError as exc:
+        raise RuntimeError(f"unable to atomically persist Atlas API health state at {path}") from exc
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            try:
+                temporary_path.unlink()
+            except OSError as exc:
+                print(
+                    f"WARNING state temporary cleanup failed: {type(exc).__name__}",
+                    file=sys.stderr,
+                )
 
 
 def append_log(state_dir: Path, message: str) -> bool:
@@ -395,8 +427,8 @@ def run_healthcheck(
         if not notifications:
             write_state(state_path, next_state)
             return exit_code
+        write_state(state_path, state_with_pending_notifications(next_state, notifications))
         if settings.no_alert:
-            write_state(state_path, state_with_pending_notifications(next_state, notifications))
             print("WARNING --no-alert: notifications queued for retry")
             return EXIT_ALERT_UNDELIVERED
 
@@ -405,14 +437,13 @@ def run_healthcheck(
                 notification["alert"], notification["detail"]
             )
             if not notifier(settings.ntfy_url, settings.ntfy_topic, title, body, priority, tags):
-                write_state(
-                    state_path,
-                    state_with_pending_notifications(next_state, notifications[index:]),
-                )
                 print("WARNING alert undelivered; transition remains queued for retry")
                 return EXIT_ALERT_UNDELIVERED
+            write_state(
+                state_path,
+                state_with_pending_notifications(next_state, notifications[index + 1 :]),
+            )
 
-        write_state(state_path, next_state)
         return exit_code
 
 
