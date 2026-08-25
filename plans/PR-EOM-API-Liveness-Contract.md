@@ -356,7 +356,7 @@ Notification delivery is at-least-once, not exactly-once.
   destination behavior, source/unit paths, service/timer commands, recovery,
   notification delivery, public CLI, schemas, dependencies, or live deployment.
 - Revised verification plan: focused symlink-target privacy and rollback tests,
-  the existing 67 focused cases, syntax/systemd/maturity/plan/diff checks, and
+  the complete focused test file, syntax/systemd/maturity/plan/diff checks, and
   the managed full Unit Gate before push.
 
 ### Contract revision: installer preflight and deployed-copy identity closure
