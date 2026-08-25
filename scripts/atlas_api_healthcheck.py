@@ -286,7 +286,7 @@ def read_state(path: Path) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return {}
+        value = {}
     except OSError as exc:
         raise RuntimeError(f"unable to read Atlas API health state at {path}") from exc
     except json.JSONDecodeError as exc:
