@@ -1,0 +1,879 @@
+#!/usr/bin/env python3
+"""Stable, read-only-first operational entrypoint for Atlas agents."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+from urllib.request import urlopen
+
+
+PROJECT = "Atlas"
+REPOSITORY = "canfieldjuan/ATLAS"
+SYSTEMD_UNIT = "atlas-api"
+VERCEL_PROJECT = "atlas-churn-ui"
+KNOWN_CONTAINERS = (
+    "atlas_brain",
+    "atlas_nocodb",
+    "atlas-neo4j",
+    "atlas-graphiti-wrapper",
+)
+ENV_KEY_RE = re.compile(
+    r"^\s*(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=",
+)
+SAFE_SQL_LEADS = frozenset(("select", "show", "table", "values"))
+
+
+class OpsError(RuntimeError):
+    """An actionable operational error safe to show to the caller."""
+
+
+def run(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    timeout: int = 15,
+) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            args,
+            cwd=cwd,
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return subprocess.CompletedProcess(args, 127, "", str(exc))
+
+
+def exec_command(args: list[str], *, cwd: Path | None = None) -> int:
+    try:
+        return subprocess.call(args, cwd=cwd)
+    except OSError as exc:
+        raise OpsError(str(exc)) from exc
+
+
+def repo_root() -> Path:
+    return Path(__file__).resolve().parent
+
+
+def worktree_root() -> Path | None:
+    result = run(
+        ["git", "-C", str(repo_root()), "rev-parse", "--show-toplevel"],
+        timeout=5,
+    )
+    if result.returncode != 0:
+        return None
+    return Path(result.stdout.strip()).resolve()
+
+
+def shared_root() -> Path:
+    result = run(
+        [
+            "git",
+            "-C",
+            str(repo_root()),
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ],
+        timeout=5,
+    )
+    if result.returncode != 0:
+        return repo_root()
+    common = Path(result.stdout.strip()).resolve()
+    return common.parent if common.name == ".git" else repo_root()
+
+
+def command_version(name: str) -> str | None:
+    if shutil.which(name) is None:
+        return None
+    options = {
+        "python": [sys.executable, "--version"],
+        "gh": ["gh", "--version"],
+        "render": ["render", "--version"],
+        "vercel": ["vercel", "--version"],
+    }
+    result = run(options.get(name, [name, "--version"]), timeout=5)
+    combined = "\n".join((result.stdout, result.stderr)).strip()
+    return combined.splitlines()[0] if combined else "available"
+
+
+def interpreter_version(path: Path) -> str:
+    result = run([str(path), "--version"], timeout=5)
+    combined = "\n".join((result.stdout, result.stderr)).strip()
+    return combined.splitlines()[0] if result.returncode == 0 and combined else "UNKNOWN"
+
+
+def status_line(label: str, state: str, detail: str = "") -> None:
+    suffix = f" ({detail})" if detail else ""
+    print(f"  {label}: {state}{suffix}")
+
+
+def offline() -> bool:
+    return os.environ.get("ATLAS_OPS_OFFLINE") == "1"
+
+
+def env_files() -> list[Path]:
+    override = os.environ.get("ATLAS_OPS_ENV_FILES")
+    if override is not None:
+        candidates = [Path(item).expanduser() for item in override.split(os.pathsep) if item]
+    else:
+        roots = [root for root in (worktree_root(), shared_root()) if root is not None]
+        candidates = []
+        for root in roots:
+            candidates.extend((root / ".env", root / ".env.local", root / ".env.tailscale"))
+        candidates.extend(
+            (
+                repo_root() / "atlas-ui/.env.example",
+                repo_root() / "atlas_video-processing/.env.example",
+                repo_root() / "graphiti-wrapper/.env.example",
+            )
+        )
+        if shutil.which("systemctl"):
+            result = run(
+                [
+                    "systemctl",
+                    "--user",
+                    "show",
+                    SYSTEMD_UNIT,
+                    "--property=EnvironmentFiles",
+                    "--value",
+                    "--no-pager",
+                ],
+                timeout=5,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.splitlines():
+                    raw_path = line.strip().split(" ", 1)[0]
+                    if raw_path:
+                        candidates.append(Path(raw_path).expanduser())
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved not in seen:
+            seen.add(resolved)
+            unique.append(resolved)
+    return unique
+
+
+def parse_env_keys(path: Path) -> list[str]:
+    keys: set[str] = set()
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return []
+    for line in lines:
+        match = ENV_KEY_RE.match(line)
+        if match:
+            keys.add(match.group("key"))
+    return sorted(keys)
+
+
+def parse_env_values(path: Path, allowed: set[str]) -> dict[str, str]:
+    """Read only selected dotenv assignments without executing the file."""
+    values: dict[str, str] = {}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return values
+    for line in lines:
+        match = ENV_KEY_RE.match(line)
+        if not match or match.group("key") not in allowed:
+            continue
+        raw = line[match.end():].strip()
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in ("'", '"'):
+            raw = raw[1:-1]
+        values[match.group("key")] = raw
+    return values
+
+
+def database_environment() -> dict[str, str]:
+    allowed = {
+        "ATLAS_DB_CONNECTION_STRING",
+        "ATLAS_DB_HOST",
+        "ATLAS_DB_PORT",
+        "ATLAS_DB_DATABASE",
+        "ATLAS_DB_USER",
+        "ATLAS_DB_PASSWORD",
+        "ATLAS_DB_SOCKET_PATH",
+    }
+    config: dict[str, str] = {}
+    for path in env_files():
+        config.update(parse_env_values(path, allowed))
+    for key in allowed:
+        if key in os.environ:
+            config[key] = os.environ[key]
+
+    child_env = os.environ.copy()
+    dsn = config.get("ATLAS_DB_CONNECTION_STRING", "").strip()
+    if dsn:
+        parsed = urlsplit(dsn)
+        if parsed.scheme not in ("postgres", "postgresql"):
+            raise OpsError("ATLAS_DB_CONNECTION_STRING is not a PostgreSQL URL")
+        if parsed.hostname:
+            child_env["PGHOST"] = parsed.hostname
+        if parsed.port:
+            child_env["PGPORT"] = str(parsed.port)
+        if parsed.path.lstrip("/"):
+            child_env["PGDATABASE"] = unquote(parsed.path.lstrip("/"))
+        if parsed.username:
+            child_env["PGUSER"] = unquote(parsed.username)
+        if parsed.password:
+            child_env["PGPASSWORD"] = unquote(parsed.password)
+    else:
+        child_env["PGHOST"] = config.get(
+            "ATLAS_DB_SOCKET_PATH",
+            config.get("ATLAS_DB_HOST", "127.0.0.1"),
+        )
+        child_env["PGPORT"] = config.get("ATLAS_DB_PORT", "5433")
+        child_env["PGDATABASE"] = config.get("ATLAS_DB_DATABASE", "atlas")
+        child_env["PGUSER"] = config.get("ATLAS_DB_USER", "atlas")
+        if config.get("ATLAS_DB_PASSWORD"):
+            child_env["PGPASSWORD"] = config["ATLAS_DB_PASSWORD"]
+    child_env["PGCONNECT_TIMEOUT"] = "5"
+    child_env["PGOPTIONS"] = (
+        "-c default_transaction_read_only=on "
+        "-c statement_timeout=5000 -c lock_timeout=1000"
+    )
+    return child_env
+
+
+def sanitize_sql(sql: str) -> str:
+    """Blank SQL strings/comments while retaining statement punctuation."""
+    out: list[str] = []
+    index = 0
+    state = "normal"
+    dollar_tag = ""
+    block_depth = 0
+    while index < len(sql):
+        char = sql[index]
+        pair = sql[index:index + 2]
+        if state == "normal":
+            if pair == "--":
+                state = "line-comment"
+                out.extend("  ")
+                index += 2
+                continue
+            if pair == "/*":
+                state = "block-comment"
+                block_depth = 1
+                out.extend("  ")
+                index += 2
+                continue
+            if char == "'":
+                state = "single"
+                out.append(" ")
+                index += 1
+                continue
+            if char == '"':
+                state = "double"
+                out.append(" ")
+                index += 1
+                continue
+            if char == "$":
+                match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", sql[index:])
+                if match:
+                    dollar_tag = match.group(0)
+                    state = "dollar"
+                    out.extend(" " * len(dollar_tag))
+                    index += len(dollar_tag)
+                    continue
+            out.append(char)
+            index += 1
+            continue
+        if state == "line-comment":
+            out.append("\n" if char == "\n" else " ")
+            if char == "\n":
+                state = "normal"
+            index += 1
+            continue
+        if state == "block-comment":
+            if pair == "/*":
+                block_depth += 1
+                out.extend("  ")
+                index += 2
+            elif pair == "*/":
+                block_depth -= 1
+                out.extend("  ")
+                index += 2
+                if block_depth == 0:
+                    state = "normal"
+            else:
+                out.append("\n" if char == "\n" else " ")
+                index += 1
+            continue
+        if state == "single":
+            if pair == "''":
+                out.extend("  ")
+                index += 2
+            elif char == "'":
+                out.append(" ")
+                state = "normal"
+                index += 1
+            elif char == "\\" and index + 1 < len(sql):
+                out.extend("  ")
+                index += 2
+            else:
+                out.append("\n" if char == "\n" else " ")
+                index += 1
+            continue
+        if state == "double":
+            if pair == '""':
+                out.extend("  ")
+                index += 2
+            elif char == '"':
+                out.append(" ")
+                state = "normal"
+                index += 1
+            else:
+                out.append("\n" if char == "\n" else " ")
+                index += 1
+            continue
+        if state == "dollar":
+            if sql.startswith(dollar_tag, index):
+                out.extend(" " * len(dollar_tag))
+                index += len(dollar_tag)
+                state = "normal"
+            else:
+                out.append("\n" if char == "\n" else " ")
+                index += 1
+    if state not in ("normal", "line-comment"):
+        raise OpsError("SQL contains an unterminated string or comment")
+    return "".join(out)
+
+
+def validate_read_only_sql(sql: str) -> tuple[bool, str]:
+    if not sql.strip():
+        return False, "query is empty"
+    if "\x00" in sql:
+        return False, "query contains a NUL byte"
+    try:
+        code = sanitize_sql(sql)
+    except OpsError as exc:
+        return False, str(exc)
+    statements = [part.strip() for part in code.split(";") if part.strip()]
+    if len(statements) != 1:
+        return False, "exactly one SQL statement is required"
+    lead_match = re.match(r"[A-Za-z]+", statements[0])
+    lead = lead_match.group(0).lower() if lead_match else ""
+    if lead not in SAFE_SQL_LEADS:
+        return False, "only SELECT, SHOW, TABLE, or VALUES statements are admitted"
+    if re.search(r"\binto\b", statements[0], re.IGNORECASE):
+        return False, "SELECT INTO is not read-only"
+    if re.search(
+        r"\bfor\s+(?:no\s+key\s+update|key\s+share|update|share)\b",
+        statements[0],
+        re.IGNORECASE,
+    ):
+        return False, "row-locking SELECT statements are not admitted"
+    return True, "ok"
+
+
+def psql_readonly_command(sql: str) -> list[str]:
+    return [
+        "psql",
+        "-X",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-P",
+        "pager=off",
+        "-c",
+        "BEGIN TRANSACTION READ ONLY;",
+        "-c",
+        sql,
+        "-c",
+        "ROLLBACK;",
+    ]
+
+
+def database_probe() -> tuple[str, str]:
+    if shutil.which("pg_isready") is None or shutil.which("psql") is None:
+        return "UNAVAILABLE", "install psql/pg_isready or use CI"
+    env = database_environment()
+    ready = run(["pg_isready", "-t", "3"], env=env, timeout=5)
+    if ready.returncode != 0:
+        return "FAIL", "PostgreSQL is not accepting connections"
+    query = run(psql_readonly_command("SELECT 1"), env=env, timeout=8)
+    if query.returncode != 0:
+        return "FAIL", "server reachable but query authentication failed"
+    return "OK", "read-only SELECT succeeded"
+
+
+def systemd_state() -> tuple[str, dict[str, str]]:
+    if shutil.which("systemctl") is None:
+        return "UNAVAILABLE", {}
+    result = run(
+        [
+            "systemctl",
+            "--user",
+            "show",
+            SYSTEMD_UNIT,
+            "--property=LoadState,ActiveState,SubState,WorkingDirectory",
+            "--no-pager",
+        ],
+        timeout=5,
+    )
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if "=" in line:
+            key, value = line.split("=", 1)
+            values[key] = value
+    if result.returncode != 0 or values.get("LoadState") != "loaded":
+        return "UNAVAILABLE", values
+    state = "OK" if values.get("ActiveState") == "active" else "FAIL"
+    return state, values
+
+
+def auth_probe(command: list[str]) -> str:
+    if offline():
+        return "UNKNOWN"
+    if shutil.which(command[0]) is None:
+        return "UNAVAILABLE"
+    return "OK" if run(command, timeout=12).returncode == 0 else "FAIL"
+
+
+def docker_state() -> str:
+    if shutil.which("docker") is None:
+        return "UNAVAILABLE"
+    if offline():
+        return "UNKNOWN"
+    return "OK" if run(["docker", "info"], timeout=8).returncode == 0 else "FAIL"
+
+
+def brain_health() -> tuple[str, str]:
+    if offline():
+        return "UNKNOWN", "offline test mode"
+    configured = os.environ.get("ATLAS_OPS_BRAIN_URL")
+    urls = [configured] if configured else [
+        "http://127.0.0.1:8012/api/v1/ping",
+        "http://127.0.0.1:8000/api/v1/ping",
+        "http://127.0.0.1:8001/api/v1/ping",
+    ]
+    for url in urls:
+        if not url:
+            continue
+        try:
+            with urlopen(url, timeout=3) as response:  # noqa: S310 - fixed/local URL
+                if 200 <= response.status < 300:
+                    return "OK", url
+        except Exception:
+            continue
+    return "FAIL", "no configured/local ping endpoint responded"
+
+
+def print_git_snapshot() -> None:
+    root = worktree_root()
+    if root is None:
+        status_line("repository", str(shared_root()))
+        status_line("worktree", "UNAVAILABLE", "shared/bare root; use a dedicated worktree")
+        return
+    remote = run(["git", "-C", str(root), "remote", "get-url", "origin"], timeout=5)
+    branch = run(["git", "-C", str(root), "branch", "--show-current"], timeout=5)
+    state = run(["git", "-C", str(root), "status", "--porcelain"], timeout=5)
+    status_line("repository", remote.stdout.strip() if remote.returncode == 0 else str(root))
+    status_line("branch", branch.stdout.strip() or "detached")
+    status_line("working tree", "clean" if state.returncode == 0 and not state.stdout else "dirty")
+
+
+def doctor() -> int:
+    print("PROJECT")
+    status_line("name", PROJECT)
+    status_line("contract", ".agent/capabilities.yaml")
+    print("\nGIT")
+    print_git_snapshot()
+    print("\nRUNTIME")
+    status_line("shell Python", command_version("python") or "UNAVAILABLE")
+    project_python = python_command()
+    status_line("project Python", interpreter_version(project_python), str(project_python))
+    status_line("Node", command_version("node") or "UNAVAILABLE")
+    status_line("Docker daemon", docker_state())
+    service_state, service = systemd_state() if not offline() else ("UNKNOWN", {})
+    detail = service.get("WorkingDirectory", "")
+    status_line(f"{SYSTEMD_UNIT}.service", service_state, detail)
+    health_state, health_detail = brain_health()
+    status_line("Brain ping", health_state, health_detail)
+    print("\nTESTING")
+    status_line("Python unit", "available", "./ops test unit")
+    status_line("focused pytest", "available", "./ops test focused <target>")
+    status_line("integration", "guarded", "requires an explicit disposable DB URL")
+    print("\nDEPLOYMENT")
+    status_line("Brain", "local systemd", SYSTEMD_UNIT)
+    status_line("frontend provider", "Vercel", VERCEL_PROJECT)
+    status_line("Vercel authentication", auth_probe(["vercel", "whoami"]))
+    status_line("Render CLI", auth_probe(["render", "whoami", "--output", "json"]), "no Atlas service identified")
+    print("\nDATABASE")
+    db_state, db_detail = ("UNKNOWN", "offline test mode") if offline() else database_probe()
+    status_line("PostgreSQL", db_state, db_detail)
+    status_line("safe query", "available", './ops db query "SELECT 1"')
+    print("\nCI")
+    status_line("provider", "GitHub Actions")
+    status_line("GitHub authentication", auth_probe(["gh", "auth", "status"]))
+    status_line("status inspection", "available", "./ops ci status")
+    print("\nENVIRONMENT")
+    present = sum(1 for path in env_files() if path.is_file())
+    status_line("config sources", f"{present} readable", "./ops env keys never prints values")
+    print("\nUSEFUL COMMANDS")
+    for command in (
+        "./ops status",
+        "./ops test focused tests/<test_file>.py",
+        "./ops env keys",
+        './ops db query "SELECT 1"',
+        "./ops logs brain",
+        "./ops deploy status",
+        "./ops ci status",
+    ):
+        print(f"  {command}")
+    return 0
+
+
+def env_command(args: list[str]) -> int:
+    action = args[0] if args else "keys"
+    if action == "keys":
+        paths = env_files()
+        if len(args) == 3 and args[1] == "--file":
+            paths = [Path(args[2]).expanduser().resolve(strict=False)]
+        elif len(args) != 1:
+            raise OpsError("usage: ./ops env keys [--file PATH]")
+        found = False
+        for path in paths:
+            if not path.is_file():
+                continue
+            found = True
+            print(f"FILE {path}")
+            for key in parse_env_keys(path):
+                print(f"  {key}")
+        if not found:
+            print("No readable environment files found; exported variables may still be in use.")
+        return 0
+    if action == "systemd":
+        result = run(
+            ["systemctl", "--user", "show", SYSTEMD_UNIT, "--property=EnvironmentFiles", "--no-pager"],
+            timeout=5,
+        )
+        if result.returncode != 0:
+            raise OpsError("systemd environment-file inspection unavailable")
+        print(result.stdout.rstrip())
+        return 0
+    if action == "vercel":
+        link_root = shared_root()
+        if not (link_root / ".vercel/project.json").is_file():
+            raise OpsError("no linked Vercel project; use `vercel project inspect atlas-churn-ui`")
+        return exec_command(["vercel", "env", "ls"], cwd=link_root)
+    raise OpsError("usage: ./ops env {keys [--file PATH]|systemd|vercel}")
+
+
+def db_command(args: list[str]) -> int:
+    if not args:
+        raise OpsError("usage: ./ops db {status|query SQL|migrations}")
+    action = args[0]
+    if action == "status":
+        state, detail = database_probe()
+        status_line("database", state, detail)
+        return 0 if state == "OK" else 1
+    if action == "query":
+        if len(args) != 2:
+            raise OpsError('usage: ./ops db query "SELECT ..."')
+        allowed, reason = validate_read_only_sql(args[1])
+        if not allowed:
+            raise OpsError(f"query refused: {reason}")
+        return subprocess.call(psql_readonly_command(args[1]), env=database_environment())
+    if action == "migrations":
+        sql = (
+            "SELECT count(*) AS applied_count, max(version) AS latest_version "
+            "FROM schema_migrations"
+        )
+        return subprocess.call(psql_readonly_command(sql), env=database_environment())
+    if action in ("write", "migrate", "rollback", "drop"):
+        raise OpsError("mutating database operations are intentionally not exposed by ./ops")
+    raise OpsError("usage: ./ops db {status|query SQL|migrations}")
+
+
+def container_status() -> None:
+    if shutil.which("docker") is None:
+        status_line("containers", "UNAVAILABLE")
+        return
+    for name in KNOWN_CONTAINERS:
+        result = run(
+            ["docker", "inspect", "--format", "{{.State.Status}}", name],
+            timeout=5,
+        )
+        state = result.stdout.strip() if result.returncode == 0 else "absent"
+        status_line(name, state)
+
+
+def latest_vercel_deployment() -> dict[str, object] | None:
+    if shutil.which("vercel") is None or offline():
+        return None
+    listing = run(["vercel", "ls", VERCEL_PROJECT], cwd=shared_root(), timeout=20)
+    match = re.search(r"https://[^\s]+\.vercel\.app", listing.stdout)
+    if listing.returncode != 0 or match is None:
+        return None
+    inspected = run(
+        ["vercel", "inspect", match.group(0), "--format=json"],
+        cwd=shared_root(),
+        timeout=20,
+    )
+    if inspected.returncode != 0:
+        return None
+    try:
+        return json.loads(inspected.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def deploy_status() -> int:
+    print("BRAIN")
+    state, values = systemd_state()
+    status_line("provider", "local systemd")
+    status_line("service", state, f"{SYSTEMD_UNIT}.service")
+    health_state, health_detail = brain_health()
+    status_line("health", health_state, health_detail)
+    runtime = values.get("WorkingDirectory", "")
+    if runtime:
+        head = run(["git", "-C", runtime, "rev-parse", "HEAD"], timeout=5)
+        status_line("runtime worktree", runtime)
+        status_line("runtime head", head.stdout.strip() if head.returncode == 0 else "UNKNOWN")
+    status_line("staging service", "UNAVAILABLE", "none discovered")
+    print("\nFRONTEND")
+    status_line("provider", "Vercel", VERCEL_PROJECT)
+    deployment = latest_vercel_deployment()
+    if deployment is None:
+        status_line("latest deployment", "UNKNOWN", "check Vercel auth/link/network")
+    else:
+        status_line("latest deployment", str(deployment.get("readyState", "UNKNOWN")))
+        status_line("target", str(deployment.get("target", "UNKNOWN")))
+        status_line("url", str(deployment.get("url", "UNKNOWN")))
+    print("\nNo deploy mutation is exposed by ./ops; read .agent/runbooks/deployment.md.")
+    return 0
+
+
+def logs_command(args: list[str]) -> int:
+    if not args:
+        raise OpsError("usage: ./ops logs {brain|container NAME|frontend [options]}")
+    surface = args[0]
+    if surface == "brain":
+        follow = args[1:] == ["--follow"]
+        if args[1:] not in ([], ["--follow"]):
+            raise OpsError("usage: ./ops logs brain [--follow]")
+        command = ["journalctl", "--user", "-u", SYSTEMD_UNIT, "-n", "100", "--no-pager"]
+        if follow:
+            command.extend(("--follow",))
+        return exec_command(command)
+    if surface == "container":
+        if len(args) not in (2, 3) or (len(args) == 3 and args[2] != "--follow"):
+            raise OpsError("usage: ./ops logs container NAME [--follow]")
+        command = ["docker", "logs", "--tail", "100"]
+        if len(args) == 3:
+            command.append("--follow")
+        command.append(args[1])
+        return exec_command(command)
+    if surface == "frontend":
+        since = "1h"
+        limit = "100"
+        follow = False
+        index = 1
+        while index < len(args):
+            if args[index] == "--follow":
+                follow = True
+                index += 1
+            elif args[index] in ("--since", "--limit") and index + 1 < len(args):
+                if args[index] == "--since":
+                    since = args[index + 1]
+                else:
+                    limit = args[index + 1]
+                index += 2
+            else:
+                raise OpsError("usage: ./ops logs frontend [--since 1h] [--limit N] [--follow]")
+        if not re.fullmatch(r"[0-9]+[mhd]", since):
+            raise OpsError("--since must be a relative interval such as 30m, 1h, or 1d")
+        if not limit.isdigit() or not 1 <= int(limit) <= 1000:
+            raise OpsError("--limit must be between 1 and 1000")
+        command = [
+            "vercel", "logs", "--project", VERCEL_PROJECT,
+            "--environment", "production", "--since", since,
+            "--limit", limit, "--no-branch",
+        ]
+        if follow:
+            command.append("--follow")
+        return exec_command(command, cwd=shared_root())
+    raise OpsError("usage: ./ops logs {brain|container NAME|frontend [options]}")
+
+
+def ci_command(args: list[str]) -> int:
+    action = args[0] if args else "status"
+    if action == "status":
+        limit = args[1] if len(args) == 2 else "10"
+        if len(args) > 2 or not limit.isdigit() or not 1 <= int(limit) <= 100:
+            raise OpsError("usage: ./ops ci status [LIMIT]")
+        return exec_command(
+            [
+                "gh", "run", "list", "--repo", REPOSITORY,
+                "--limit", limit,
+                "--json", "databaseId,workflowName,event,status,conclusion,headBranch,headSha,createdAt,url",
+            ],
+        )
+    if action == "run":
+        if len(args) not in (2, 3) or not args[1].isdigit():
+            raise OpsError("usage: ./ops ci run RUN_ID [--log-failed]")
+        command = ["gh", "run", "view", args[1], "--repo", REPOSITORY]
+        if len(args) == 3:
+            if args[2] != "--log-failed":
+                raise OpsError("usage: ./ops ci run RUN_ID [--log-failed]")
+            command.append("--log-failed")
+        return exec_command(command)
+    raise OpsError("usage: ./ops ci {status [LIMIT]|run RUN_ID [--log-failed]}")
+
+
+def python_command() -> Path:
+    override = os.environ.get("ATLAS_PYTHON")
+    if override:
+        return Path(override).expanduser()
+    root = worktree_root() or repo_root()
+    candidates = (root / ".venv/bin/python", shared_root() / ".venv/bin/python")
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    return Path(sys.executable)
+
+
+def test_command(args: list[str]) -> int:
+    if not args:
+        raise OpsError("usage: ./ops test {unit|focused|integration|frontend|local-review}")
+    root = worktree_root()
+    if root is None:
+        raise OpsError("tests require a normal worktree, not the shared/bare root")
+    action = args[0]
+    python = str(python_command())
+    if action == "unit":
+        if len(args) != 1:
+            raise OpsError("usage: ./ops test unit")
+        return exec_command(
+            [
+                python, "-m", "pytest", "tests/", "-m", "not integration and not e2e",
+                "-q", "--continue-on-collection-errors",
+            ],
+            cwd=root,
+        )
+    if action == "focused":
+        if len(args) < 2:
+            raise OpsError("usage: ./ops test focused <pytest target/args...>")
+        return exec_command([python, "-m", "pytest", *args[1:]], cwd=root)
+    if action == "integration":
+        if len(args) < 2:
+            raise OpsError("name a focused integration test target")
+        if not (
+            os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
+            or os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
+        ):
+            raise OpsError(
+                "integration tests require an explicit disposable "
+                "ATLAS_MIGRATION_TEST_DATABASE_URL or ATLAS_RECEIVABLES_TEST_DATABASE_URL"
+            )
+        if os.environ.get("ATLAS_CONFIRM_DISPOSABLE_TEST_DB") != "1":
+            raise OpsError("set ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1 after verifying the DB is disposable")
+        return exec_command([python, "-m", "pytest", *args[1:]], cwd=root)
+    if action == "frontend":
+        if len(args) not in (2, 3):
+            raise OpsError("usage: ./ops test frontend PACKAGE [SCRIPT]")
+        package = args[1]
+        allowed = {
+            "atlas-ui", "atlas-intel-ui", "atlas-churn-ui",
+            "atlas-admin-ui", "atlas-mobile", "portfolio-ui",
+        }
+        if package not in allowed:
+            raise OpsError(f"unknown frontend package: {package}")
+        manifest = root / package / "package.json"
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        script = args[2] if len(args) == 3 else "test"
+        if script not in data.get("scripts", {}):
+            available = ", ".join(sorted(data.get("scripts", {})))
+            raise OpsError(f"{package} has no {script!r} script; available: {available}")
+        return exec_command(["npm", "run", script], cwd=manifest.parent)
+    if action == "local-review":
+        if len(args) != 1:
+            raise OpsError("usage: ./ops test local-review")
+        return exec_command(["bash", "scripts/local_pr_review.sh"], cwd=root)
+    raise OpsError("usage: ./ops test {unit|focused|integration|frontend|local-review}")
+
+
+def status_command() -> int:
+    deploy_status()
+    print("\nDATABASE")
+    state, detail = database_probe()
+    status_line("PostgreSQL", state, detail)
+    print("\nCONTAINERS")
+    container_status()
+    return 0
+
+
+def usage() -> None:
+    print(
+        """Usage: ./ops COMMAND [ARGS]
+
+Read-only discovery and inspection:
+  doctor
+  status
+  env {keys [--file PATH]|systemd|vercel}
+  db {status|query SQL|migrations}
+  deploy status
+  logs {brain|container NAME|frontend [--since 1h] [--limit N] [--follow]}
+  ci {status [LIMIT]|run RUN_ID [--log-failed]}
+
+Local/test execution:
+  test unit
+  test focused <pytest target/args...>
+  test integration <pytest target/args...>
+  test frontend PACKAGE [SCRIPT]
+  test local-review
+
+Production deploys, database writes, migrations, and restarts are intentionally
+not exposed. Read .agent/runbooks/ before performing them manually.
+"""
+    )
+
+
+def main(argv: list[str]) -> int:
+    if not argv or argv[0] in ("help", "--help", "-h"):
+        usage()
+        return 0
+    command, args = argv[0], argv[1:]
+    if command == "doctor":
+        if args:
+            raise OpsError("usage: ./ops doctor")
+        return doctor()
+    if command == "status":
+        if args:
+            raise OpsError("usage: ./ops status")
+        return status_command()
+    if command == "env":
+        return env_command(args)
+    if command == "db":
+        return db_command(args)
+    if command == "deploy" and args == ["status"]:
+        return deploy_status()
+    if command == "logs":
+        return logs_command(args)
+    if command == "ci":
+        return ci_command(args)
+    if command == "test":
+        return test_command(args)
+    raise OpsError(f"unknown command: {command}; run ./ops --help")
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main(sys.argv[1:]))
+    except OpsError as exc:
+        print(f"ops: {exc}", file=sys.stderr)
+        raise SystemExit(2)

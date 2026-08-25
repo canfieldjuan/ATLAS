@@ -19,6 +19,19 @@ narrow / run scoped tests during iteration) that keep a session from
 compacting mid-work. A session that has drifted post-compaction gets the
 redirect prompt in that file.
 
+## Agent operations contract
+
+Operational ground truth lives in `.agent/capabilities.yaml` and
+`.agent/runbooks/`. Start with `./ops doctor`, then use the documented stable
+operation before rediscovering a provider-specific command. Inspect environment
+configuration by name only; production deploys, restarts, migrations, database
+writes, and provider mutations remain explicit manual operations.
+
+If you spend meaningful time discovering a reusable operational procedure, do
+not leave that knowledge only in the session. Update the corresponding `./ops`
+operation, capability record, runbook, or discovery-ledger entry and verify it
+before finishing.
+
 ---
 
 ## Review guidelines
