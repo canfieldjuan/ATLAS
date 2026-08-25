@@ -450,7 +450,7 @@ def doctor() -> int:
     health_state, health_detail = brain_health()
     status_line("Brain ping", health_state, health_detail)
     print("\nTESTING")
-    status_line("Python unit", "available", "./ops test unit")
+    status_line("Python unit gate", "GitHub-only", ".github/workflows/unit_gate.yml")
     status_line("focused pytest", "available", "./ops test focused <target>")
     status_line("integration", "guarded", "requires an explicit disposable DB URL")
     print("\nDEPLOYMENT")
@@ -699,16 +699,6 @@ def python_command() -> Path:
     return Path(sys.executable)
 
 
-def unit_test_environment() -> dict[str, str]:
-    """Remove inherited database URLs before nominal unit tests start."""
-    child_env = os.environ.copy()
-    for key in tuple(child_env):
-        if key == "DATABASE_URL" or key.endswith("_DATABASE_URL"):
-            child_env.pop(key)
-    child_env.pop("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", None)
-    return child_env
-
-
 def integration_test_environment(confirmed_key: str) -> dict[str, str]:
     """Bind every supported DB interface to one confirmed disposable DSN."""
     if confirmed_key not in TEST_DATABASE_URL_KEYS:
@@ -768,13 +758,9 @@ def test_command(args: list[str]) -> int:
     if action == "unit":
         if len(args) != 1:
             raise OpsError("usage: ./ops test unit")
-        return exec_command(
-            [
-                python, "-m", "pytest", "tests/", "-m", "not integration and not e2e",
-                "-q", "--continue-on-collection-errors",
-            ],
-            cwd=root,
-            env=unit_test_environment(),
+        raise OpsError(
+            "the full unit gate is GitHub-only; inspect "
+            ".github/workflows/unit_gate.yml or use ./ops ci status"
         )
     if action == "focused":
         if len(args) < 2:
@@ -855,7 +841,7 @@ Read-only discovery and inspection:
   ci {status [LIMIT]|run RUN_ID [--log-failed]}
 
 Local/test execution:
-  test unit
+  test unit  # GitHub-only; prints the canonical hosted gate and exits
   test focused <pytest target/args...>
   test integration <pytest target/args...>
   test frontend PACKAGE [SCRIPT]

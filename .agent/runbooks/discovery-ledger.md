@@ -239,19 +239,20 @@ mode from database writes.
 
 Canonical method:
 Use `./ops db inspect ...` for application-equivalent dotenv decoding. Use
-`./ops test unit` for database-credential-free unit execution and
+focused local tests for database-credential-free proof and
 `./ops test integration ...` only with an explicitly confirmed disposable
-database.
+database. The full unit gate runs only in GitHub Actions.
 
 Verified:
 2026-08-24: focused boundary tests proved dotenv comments, escapes,
-interpolation, and process overrides, plus removal of current and novel
-database-URL-shaped variables from unit-mode children.
+interpolation, and process overrides. 2026-08-25: the local full-unit entrypoint
+was disabled in favor of the hosted unit gate.
 
 Failure notes:
 Do not replace dotenv parsing with shell sourcing, and do not assume
 `-m "not integration"` excludes every database-writing test. Keep database
-URLs out of unit-mode subprocesses by construction.
+URLs out of focused subprocesses and use the explicit integration boundary for
+database-backed proof.
 
 ## Fresh-agent wrapper boundaries
 
@@ -282,3 +283,31 @@ Do not make `doctor` import application dependencies merely to orient a new
 agent. Do not print `ATLAS_OPS_BRAIN_URL`, even after a successful request. Do
 not bypass the bounded-target guard with direct pytest when database credentials
 are present.
+
+## Hosted-only unit gate
+
+Problem:
+`scripts/local_pr_review.sh` contained a full local unit-gate mirror, so a push
+could leave a long-running pytest process even when the operator intended
+GitHub to own that expensive gate. `./ops test unit` exposed a second local
+full-suite path.
+
+Finding:
+An ambient `GITHUB_ACTIONS=true` convention was not a durable boundary. The
+local review entrypoint itself must be incapable of selecting, installing for,
+or executing unit-gate tests, and the stable operations command must fail
+closed instead of launching pytest.
+
+Canonical method:
+Use `./ops test focused <target> -q` for narrow local evidence. Push through
+`scripts/push_pr.sh`, then inspect `.github/workflows/unit_gate.yml` with
+`./ops ci status`; never run the full unit gate locally.
+
+Verified:
+2026-08-25: focused subprocess canaries proved local review does not invoke the
+selector/checker in selected, empty, full, failing, or missing-checker states,
+and `./ops test unit` rejects without invoking pytest.
+
+Failure notes:
+Do not restore a local mirror behind an environment flag. An agent needing a
+faster signal should narrow the focused target, not duplicate the hosted gate.

@@ -40,8 +40,10 @@ Repo-Wide Unit Backstop runs the full unit suite on schedule/on demand.
 
 The builder's local gate is `scripts/local_pr_review.sh`, normally invoked once
 by `scripts/push_pr.sh`/the managed pre-push hook. GitHub re-runs the trusted-base
-audit. Do not delete that duplication or run the same local bundle twice
-immediately before one push.
+audit. The local bundle runs mechanical checks only; it never launches the unit
+checker or pytest. `.github/workflows/unit_gate.yml` is the sole unit-gate
+runner. Do not delete the trusted audit duplication or run the same local bundle
+twice immediately before one push.
 
 ## Actions that mutate CI or PR state
 

@@ -27,6 +27,10 @@ operation before rediscovering a provider-specific command. Inspect environment
 configuration by name only; production deploys, restarts, migrations, database
 writes, and provider mutations remain explicit manual operations.
 
+The full Python unit gate is GitHub-only. Never run it, its mirror, or the full
+non-integration suite locally; use `./ops test focused ...` for the narrow proof
+needed by a change and let `.github/workflows/unit_gate.yml` settle the gate.
+
 If you spend meaningful time discovering a reusable operational procedure, do
 not leave that knowledge only in the session. Update the corresponding `./ops`
 operation, capability record, runbook, or discovery-ledger entry and verify it

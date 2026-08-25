@@ -441,39 +441,21 @@ def test_integration_guard_rejects_additional_positional_targets(
     assert calls == []
 
 
-def test_unit_mode_removes_database_urls_from_child_environment(
+def test_unit_mode_is_github_only_and_never_launches_pytest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    database_urls = (
-        *TEST_DATABASE_URL_KEYS,
-        "EXTRACTED_DATABASE_URL",
-        "DATABASE_URL",
-        "FUTURE_DATABASE_URL",
-    )
-    for key in database_urls:
-        monkeypatch.setenv(
-            key,
-            f"postgresql://disposable.invalid/{key.lower()}",
-        )
-    monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
-    monkeypatch.setenv("ATLAS_UNIT_CANARY", "preserved")
-    calls: list[tuple[list[str], dict[str, object]]] = []
-
-    def fake_exec(args: list[str], **kwargs: object) -> int:
-        calls.append((args, kwargs))
-        return 0
-
+    calls: list[list[str]] = []
     function_globals = OPS_MODULE["test_command"].__globals__
     monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
-    monkeypatch.setitem(function_globals, "exec_command", fake_exec)
+    monkeypatch.setitem(
+        function_globals,
+        "exec_command",
+        lambda args, **_kwargs: calls.append(args) or 0,
+    )
 
-    assert OPS_MODULE["test_command"](["unit"]) == 0
-    assert calls
-    child_env = calls[0][1]["env"]
-    assert isinstance(child_env, dict)
-    assert all(key not in child_env for key in database_urls)
-    assert "ATLAS_CONFIRM_DISPOSABLE_TEST_DB" not in child_env
-    assert child_env["ATLAS_UNIT_CANARY"] == "preserved"
+    with pytest.raises(OpsError, match="full unit gate is GitHub-only"):
+        OPS_MODULE["test_command"](["unit"])
+    assert calls == []
 
 
 def test_env_keys_never_emit_values_or_evaluate_file(tmp_path: Path) -> None:

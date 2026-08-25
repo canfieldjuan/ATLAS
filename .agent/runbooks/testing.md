@@ -20,26 +20,24 @@ Common commands:
 ./ops test focused tests/test_file.py -q
 ./ops test focused tests/test_file.py::test_name -q
 
-# Full non-integration/e2e suite
-./ops test unit
+# Full non-integration/e2e suite: GitHub-only
+./ops ci status
 
 # Mandatory mechanical PR bundle; run once through the push workflow
 ./ops test local-review
 ```
 
-The Unit Gate is branch-required and uses impacted-test selection plus the
+The Unit Gate is branch-required, GitHub-only, and uses impacted-test selection plus the
 committed baseline. The scheduled Repo-Wide Unit Backstop runs the full
 non-integration/e2e suite. See `.github/workflows/unit_gate.yml`,
 `.github/workflows/repo_wide_unit_backstop.yml`, and
 `scripts/check_unit_gate.py`; a local green subset is not a claim that all CI
 passed.
 
-`./ops test unit` removes `DATABASE_URL` and every inherited
-`*_DATABASE_URL` from the pytest child environment, along with the disposable
-database confirmation flag. This keeps unmarked PostgreSQL tests in their skip
-path when credentials remain exported from an earlier integration run. Use
-`./ops test integration ...` for explicit database-backed proof; unrelated
-environment configuration is preserved in unit mode.
+`./ops test unit` fails closed with the hosted workflow location; it never
+starts pytest. Local agents use `./ops test focused ...` only for the narrow
+behavior they changed. Use `./ops test integration ...` for explicitly
+authorized database-backed proof.
 
 ## Database and integration tests
 

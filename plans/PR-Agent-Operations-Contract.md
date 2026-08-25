@@ -285,11 +285,34 @@ would leave an incomplete and unverified operational path between PRs.
 - Unknown future URL-shaped keys and every non-selected canonical key take the
   safe default and remain absent. Unrelated environment keys remain inherited.
 
+### Contract revision 8
+
+- New operator direction: the unit gate is GitHub-only because its local mirror
+  is too slow. A local pytest process survived the prior push/review path even
+  though the session intended to leave the full gate to GitHub.
+- Revised root cause: `scripts/local_pr_review.sh` still owns an executable
+  local unit-gate mirror, and `./ops test unit` still exposes the full local
+  suite as a normal operations command. The earlier convention depended on an
+  ambient `GITHUB_ACTIONS=true` override instead of making the boundary
+  structural.
+- Revised required change surface: remove the local-review unit-gate execution
+  path, make `./ops test unit` fail closed with the canonical hosted workflow,
+  retain focused local tests and all cheap mechanical review checks, update the
+  agent/testing/capability contract, and add focused subprocess proof that
+  neither local entrypoint launches the unit checker or pytest.
+- Revised non-scope: do not change the hosted unit workflow, its selection or
+  baseline logic, focused-test execution, integration execution, unrelated CI,
+  or any application behavior; do not diagnose or optimize the unit suite.
+- Revised verification plan: exercise only focused wrapper/operations tests,
+  Python/shell syntax, capability parsing, plan synchronization, and diff
+  checks. Do not invoke the local unit gate or full unit suite; GitHub owns that
+  result.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
 Slice phase: workflow/process
-Max files: 14
+Max files: 16
 
 1. Establish one verified, versioned operational knowledge path for a fresh
    agent without replacing existing subsystem-specific runbooks.
@@ -331,12 +354,17 @@ Max files: 14
     canonical, generic, and Atlas application interfaces while every other
     database credential is absent; settled by child-environment and argv
     canary assertions without executing a database-backed test.
+  - Local PR review and `./ops test unit` cannot launch the unit gate; both
+    direct agents to `.github/workflows/unit_gate.yml`, while focused tests
+    remain locally available; settled by subprocess canaries that would fail if
+    the unit checker or pytest were invoked.
 - Reachability proof: run the real `./ops doctor`, `./ops env keys`,
   `./ops db status`, `./ops deploy status`, `./ops ci status`, and focused test
   entrypoints and observe their redacted terminal output/exit status.
 - Affected surfaces: root agent instructions, `.agent` operational metadata and
-  runbooks, the root `ops` command, and focused tests for those contracts.
-- Risk areas: secret disclosure, a nominally read-only database command
+  runbooks, the root `ops` command, the local PR-review wrapper, and focused
+  tests for those contracts.
+- Risk areas: secret disclosure, accidental local full-suite execution, a nominally read-only database command
   admitting writes, provider-specific assumptions, stale static claims, slow
   or network-dependent doctor behavior, and accidental application/CI changes.
 - Reviewer rules triggered: R1, R2, R3, R5, R6, R10, R12, R13, R14.
@@ -424,7 +452,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `README.md`
 - `ops`
 - `plans/PR-Agent-Operations-Contract.md`
+- `scripts/local_pr_review.sh`
 - `tests/test_agent_operations_contract.py`
+- `tests/test_local_pr_review.py`
 
 ## Mechanism
 
@@ -479,6 +509,13 @@ Parked hardening: none.
   across explicit/worktree/shared/systemd contexts, both shared-root path
   shapes, Docker CLI/offline/daemon/object states, and single-credential
   integration subprocess isolation across all 3 canonical URL keys.
+- Focused hosted-only unit boundary nodes across
+  `tests/test_agent_operations_contract.py` and `tests/test_local_pr_review.py`
+  - 9 passed; selected/empty/full/failing/missing checker states never invoke
+  the local unit checker, and `./ops test unit` never invokes pytest.
+- `python -m py_compile ops tests/test_agent_operations_contract.py
+  tests/test_local_pr_review.py`, `bash -n scripts/local_pr_review.sh`, hosted-only
+  capability parsing, and `git diff --check` - pass.
 - Direct live `ops` shared-root probe -
   `/home/juan-canfield/Desktop/Atlas` from the current linked worktree.
 - `./ops test focused tests/test_eom_render_profile.py::test_database_config_prefers_connection_string_for_asyncpg_kwargs -q` - 1 passed.
@@ -504,25 +541,28 @@ Parked hardening: none.
 - `python scripts/sync_pr_plan.py --check plans/PR-Agent-Operations-Contract.md`
   and `git diff --check` - pass after final sync.
 - The original head's guarded push/local review and secret scan passed. The
-  current review-fix head will rerun the same guarded push before publication;
-  per operator direction, GitHub Actions owns the full unit gate.
+  hosted-only boundary head will rerun the guarded push before publication;
+  the local bundle can no longer launch pytest, and GitHub Actions owns the
+  full unit gate.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.agent/capabilities.yaml` | 300 |
-| `.agent/runbooks/ci.md` | 65 |
+| `.agent/capabilities.yaml` | 299 |
+| `.agent/runbooks/ci.md` | 67 |
 | `.agent/runbooks/database.md` | 120 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 284 |
+| `.agent/runbooks/discovery-ledger.md` | 313 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
-| `.agent/runbooks/testing.md` | 101 |
-| `AGENTS.md` | 13 |
+| `.agent/runbooks/testing.md` | 99 |
+| `AGENTS.md` | 17 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 907 |
-| `plans/PR-Agent-Operations-Contract.md` | 528 |
-| `tests/test_agent_operations_contract.py` | 674 |
-| **Total** | **3326** |
+| `ops` | 893 |
+| `plans/PR-Agent-Operations-Contract.md` | 568 |
+| `scripts/local_pr_review.sh` | 132 |
+| `tests/test_agent_operations_contract.py` | 656 |
+| `tests/test_local_pr_review.py` | 131 |
+| **Total** | **3629** |
