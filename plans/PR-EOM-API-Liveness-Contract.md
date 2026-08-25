@@ -10,6 +10,11 @@ SIGTERM, and the Tailnet `/api` proxy consequently had no listener on port
 inactive unit for 84 consecutive runs, but its script only notified; it never
 restored the service. This is a production availability defect, so this is a
 small Production hardening slice justified by a real failed EOM provider path.
+The monitor program, its installed user-systemd units, the installer that
+activates those units, and the failure-path proof are indivisible: a program
+without deployment wiring cannot recover production, while wiring without the
+program and its regression coverage is unsafe. That is the reason this slice
+exceeds the normal diff target.
 
 ### Problem-derived contract
 
@@ -45,6 +50,9 @@ Slice phase: Production hardening
    automatically undone.
 3. Add executable regression coverage and source-managed unit templates that
    make the installation/configuration contract reviewable.
+4. Add an explicit post-merge installer/checker that activates the installed
+   user-systemd path and invokes it once without touching the live deployment
+   during PR review.
 
 ### Review Contract
 
@@ -63,19 +71,59 @@ Slice phase: Production hardening
      settled by
      `tests/test_atlas_api_healthcheck.py::test_active_unhealthy_service_alerts_without_restart`.
   5. The systemd template runs the installed copy outside the runtime worktree
-     and reads notification settings from a user-local environment file;
-     settled by `tests/test_atlas_api_healthcheck.py::test_service_template_uses_installed_script_and_private_environment`.
+   and reads notification settings from a user-local environment file;
+   settled by `tests/test_atlas_api_healthcheck.py::test_service_template_uses_installed_script_and_private_environment`.
+  6. The installer copies the reviewed monitor and both unit templates, enables
+   the timer, invokes the installed health service once, and can later verify
+   those deployed artifacts without writing; settled by
+   `tests/test_atlas_api_healthcheck.py::test_installer_deploys_source_and_invokes_enabled_timer_path`.
 - Reachability proof: On deployment, the timer invokes the installed monitor;
-  an unexpected inactive unit transitions to `systemctl --user start`, then an
-  OPTIONS request to the real `/api/v1/leads/intake` route returns 200/204.
-  Local tests exercise the same command/probe seam without stopping the live
-  provider.
-- Affected surfaces: source-managed standalone monitor, user-systemd
-  templates, notification/maintenance configuration, and their focused tests.
+  `python scripts/install_atlas_api_healthcheck.py --install` copies the source,
+  reloads user systemd, enables the timer, and invokes the installed health
+  service once. That service makes the real OPTIONS request to
+  `/api/v1/leads/intake`; `--check` subsequently verifies the installed copies,
+  private topic file, and enabled/active timer without writing. Local tests
+  exercise the same install command order and probe seam without stopping the
+  live provider.
+- Affected surfaces: source-managed standalone monitor, its explicit installer,
+  user-systemd templates, notification/maintenance configuration, and focused
+  tests.
 - Risk areas: unexpected clean stops, deliberate maintenance, failed start,
   failed re-probe, notification configuration absence, and keeping the monitor
   independent of the application worktree.
 - Reviewer rules triggered: R1, R2, R6, R11, R12, R14.
+
+### Contract revision: current-head review findings
+
+- New evidence: the enabled user timer still executes the legacy
+  `~/.local/bin/atlas-api-healthcheck.sh`; neither the new Python monitor nor
+  its notification environment file is installed. The current template only
+  names an `install` command, so the source change has no deployment path.
+  Separately, the monitor persists `next_state` after an undelivered transition
+  alert, which suppresses its retry, and it drops the details returned by a
+  failed `systemctl --user start` command.
+- Revised root cause: source-managed monitor files alone cannot change a
+  user-systemd deployment, and the alert state machine acknowledges a
+  notification before it knows that delivery succeeded.
+- Revised required change surface: add a narrowly scoped
+  `scripts/install_atlas_api_healthcheck.py` installer/checker that copies the
+  monitor and templates outside the runtime worktree, preserves or safely
+  migrates the private local notification topic without logging it, reloads and
+  enables the user timer, then invokes the installed health service once as the
+  deployment proof. Update the template invocation, make transition state
+  persist only when no alert is needed or delivery succeeds, carry bounded
+  sanitized start-failure detail into the observation, and add focused tests for
+  installation, timer/service activation, retry, and diagnostics.
+- Revised explicit non-scope: do not run the installer against the live user
+  systemd configuration in this PR; deployment remains a post-merge host
+  action. Do not change `atlas_brain`, funnel routes, CRM, migrations, tracker
+  APIs, Render/Tailnet topology, browser UI, active-but-unhealthy recovery, or
+  any notification destination.
+- Revised verification plan: unit-test source-to-installed-copy and expected
+  systemd command order in temporary paths, test the retry and failed-start
+  branches directly, run the focused monitor/installer tests and
+  `systemd-analyze verify`, and use the installer `--check` plus its initial
+  systemd service invocation as the post-merge deployment proof.
 
 ### Boundary-change enumeration
 
@@ -96,13 +144,15 @@ The recovery decision is a system state boundary, not an open-input guard.
 
 - Deployed/default config values: default service is `atlas-api.service`; default
   probe is local `OPTIONS /api/v1/leads/intake`; maintenance lock defaults under
-  the user Atlas config directory; notification topic comes only from the
-  user-local environment file.
+  the user Atlas config directory; the installer requires or safely migrates
+  the notification topic into the user-local environment file before enabling
+  the timer.
 - Explicit value probe: focused tests inject service, lock, and probe values.
 - Absent value probe: absent lock permits recovery; absent notification topic
   must not be committed or silently replaced with a public/default topic.
 - Default-session/default-context probe: the systemd template loads a missing
-  environment file optionally and the monitor uses its safe defaults.
+  environment file optionally for manual recovery, while the installer refuses
+  to enable an alerting timer until it can preserve a private topic.
 - Side-effect ordering: decide maintenance before any start; issue a start only
   after inactive evidence; record success only after the post-start probe.
 
@@ -112,6 +162,7 @@ The recovery decision is a system state boundary, not an open-input guard.
 - `config/atlas-api-healthcheck.timer`
 - `plans/PR-EOM-API-Liveness-Contract.md`
 - `scripts/atlas_api_healthcheck.py`
+- `scripts/install_atlas_api_healthcheck.py`
 - `tests/test_atlas_api_healthcheck.py`
 
 ## Mechanism
@@ -123,7 +174,10 @@ lock, it calls the existing user-systemd unit once and then runs the same
 lead-intake OPTIONS probe that the current monitor uses. It records and notifies
 only after the final outcome is known. The templates keep the timer independent
 of `atlas-api.service` and load the private notification topic from a local
-environment file rather than version control.
+environment file rather than version control. The companion installer copies
+the reviewed source and templates, migrates an existing private topic without
+printing it when necessary, reloads/enables user systemd, and invokes the
+installed service once; later `--check` is read-only.
 
 ## Intentional
 
@@ -134,6 +188,9 @@ environment file rather than version control.
   diagnosis and would widen this slice from the observed inactive-unit failure.
 - Do not commit the ntfy topic or read it from application configuration; it is
   a private notification credential and remains in a local environment file.
+- Do not consider an alert transition acknowledged until its ntfy push succeeds;
+  failed delivery records a pending transition so the next invocation retries
+  the same event.
 
 ## Deferred
 
@@ -143,9 +200,8 @@ environment file rather than version control.
 - A deployment-time authenticated, Render-origin funnel smoke is deferred until
   a supported provider hosting/network path is selected and can be tested.
 
-Parking predicate: network-topology changes, active-process recovery, and
-notification-delivery hardening are parked unless they block this inactive-unit
-recovery path.
+Parking predicate: network-topology changes and active-process recovery are
+parked unless they block this inactive-unit recovery path.
 
 Parked hardening: none.
 
@@ -161,9 +217,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `config/atlas-api-healthcheck.service` | 17 |
+| `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 169 |
-| `scripts/atlas_api_healthcheck.py` | 273 |
-| `tests/test_atlas_api_healthcheck.py` | 231 |
-| **Total** | **700** |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 226 |
+| `scripts/atlas_api_healthcheck.py` | 345 |
+| `scripts/install_atlas_api_healthcheck.py` | 264 |
+| `tests/test_atlas_api_healthcheck.py` | 430 |
+| **Total** | **1293** |

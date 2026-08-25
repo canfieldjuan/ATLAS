@@ -5,8 +5,9 @@ Description=Atlas API liveness recovery (lead intake and EOM provider)
 
 [Service]
 Type=oneshot
-# Install the source-managed, stdlib-only script outside the runtime worktree:
-#   install -m 755 scripts/atlas_api_healthcheck.py ~/.local/bin/atlas-api-healthcheck.py
+# Install, enable, and prove the source-managed monitor from the merged Atlas
+# checkout; the installer copies it outside the runtime worktree:
+#   python scripts/install_atlas_api_healthcheck.py --install
 ExecStart=/usr/bin/python3 %h/.local/bin/atlas-api-healthcheck.py
 # The private ntfy topic is deliberately supplied outside version control:
 #   ATLAS_API_HEALTHCHECK_NTFY_TOPIC=<private-topic>

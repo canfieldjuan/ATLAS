@@ -35,6 +35,8 @@ DEFAULT_RECOVERY_ATTEMPTS = 8
 DEFAULT_RECOVERY_INTERVAL_SECONDS = 1.0
 DEFAULT_STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "atlas-api-health"
 DEFAULT_MAINTENANCE_LOCK = Path.home() / ".config" / "atlas" / "atlas-api.maintenance"
+PENDING_ALERTS = frozenset({"down", "recovered", "auto-recovered"})
+MAX_COMMAND_DETAIL = 240
 
 
 @dataclass(frozen=True)
@@ -64,6 +66,16 @@ Notifier = Callable[[str, str, str, str, str, str], bool]
 
 def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+def command_failure_detail(result: subprocess.CompletedProcess[str]) -> str:
+    """Return bounded diagnostic context without carrying terminal controls."""
+    text = " ".join(part for part in (result.stderr, result.stdout) if part)
+    text = "".join(character if character.isprintable() else " " for character in text)
+    text = " ".join(text.split())
+    if len(text) > MAX_COMMAND_DETAIL:
+        text = text[: MAX_COMMAND_DETAIL - 3] + "..."
+    return f"exit {result.returncode}: {text or 'no diagnostic output'}"
 
 
 def service_is_active(service: str, runner: Runner) -> bool:
@@ -100,7 +112,10 @@ def observe(settings: Settings, runner: Runner, opener: Opener, sleeper: Callabl
 
     started = runner(("systemctl", "--user", "start", settings.service))
     if started.returncode != 0:
-        return Observation("down", f"failed to start inactive unit {settings.service}")
+        return Observation(
+            "down",
+            f"failed to start inactive unit {settings.service} ({command_failure_detail(started)})",
+        )
 
     last_detail = f"started inactive unit {settings.service}; waiting for lead-intake probe"
     for attempt in range(settings.recovery_attempts):
@@ -155,6 +170,44 @@ def decide_alert(previous: dict[str, object], observation: Observation, realert_
     return {"status": "down", "consecutive": consecutive}, alert, EXIT_DOWN
 
 
+def pending_notification(previous: dict[str, object]) -> tuple[str, str, dict[str, object], int] | None:
+    """Load an undelivered alert without treating its transition as acknowledged."""
+    value = previous.get("pending_notification")
+    if not isinstance(value, dict):
+        return None
+    alert = value.get("alert")
+    detail = value.get("detail")
+    next_state = value.get("next_state")
+    exit_code = value.get("exit_code")
+    if (
+        isinstance(alert, str)
+        and alert in PENDING_ALERTS
+        and isinstance(detail, str)
+        and isinstance(next_state, dict)
+        and exit_code in {EXIT_OK, EXIT_RECOVERED, EXIT_DOWN}
+    ):
+        return alert, detail, next_state, exit_code
+    return None
+
+
+def state_with_pending_notification(
+    previous: dict[str, object],
+    *,
+    alert: str,
+    detail: str,
+    next_state: dict[str, object],
+    exit_code: int,
+) -> dict[str, object]:
+    state = dict(previous)
+    state["pending_notification"] = {
+        "alert": alert,
+        "detail": detail,
+        "next_state": next_state,
+        "exit_code": exit_code,
+    }
+    return state
+
+
 def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tags: str) -> bool:
     """Deliver one alert without putting the private topic in a process argv."""
     delivered = False
@@ -184,17 +237,17 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
     return delivered
 
 
-def alert_message(alert: str, observation: Observation) -> tuple[str, str, str, str]:
+def alert_message(alert: str, detail: str) -> tuple[str, str, str, str]:
     if alert == "auto-recovered":
         return (
             "atlas-api auto-recovered",
-            observation.detail,
+            detail,
             "urgent",
             "white_check_mark,warning",
         )
     if alert == "recovered":
-        return ("atlas-api recovered", observation.detail, "default", "white_check_mark")
-    return ("atlas-api DOWN", observation.detail, "urgent", "rotating_light,warning")
+        return ("atlas-api recovered", detail, "default", "white_check_mark")
+    return ("atlas-api DOWN", detail, "urgent", "rotating_light,warning")
 
 
 def run_healthcheck(
@@ -213,20 +266,39 @@ def run_healthcheck(
         fcntl.flock(lock, fcntl.LOCK_EX)
         observation = observe(settings, runner, opener, sleeper)
         previous = read_state(state_path)
-        next_state, alert, exit_code = decide_alert(previous, observation, settings.realert_every)
+        pending = pending_notification(previous)
+        if pending is None:
+            next_state, alert, exit_code = decide_alert(previous, observation, settings.realert_every)
+            alert_detail = observation.detail
+        else:
+            alert, alert_detail, next_state, exit_code = pending
         append_log(settings.state_dir, f"{observation.status.upper()} {observation.detail}")
         print(f"{observation.status.upper()}: {observation.detail}")
 
-        delivered = True
-        if alert and not settings.no_alert:
-            title, body, priority, tags = alert_message(alert, observation)
-            delivered = notifier(settings.ntfy_url, settings.ntfy_topic, title, body, priority, tags)
-        elif alert:
-            print(f"WARNING --no-alert: {alert} notification not sent")
+        if alert is None:
+            write_state(state_path, next_state)
+            return exit_code
+        if settings.no_alert:
+            print(f"WARNING --no-alert: {alert} notification not sent and state left unchanged")
+            return EXIT_ALERT_UNDELIVERED
+
+        title, body, priority, tags = alert_message(alert, alert_detail)
+        if not notifier(settings.ntfy_url, settings.ntfy_topic, title, body, priority, tags):
+            if pending is None:
+                write_state(
+                    state_path,
+                    state_with_pending_notification(
+                        previous,
+                        alert=alert,
+                        detail=alert_detail,
+                        next_state=next_state,
+                        exit_code=exit_code,
+                    ),
+                )
+            print("WARNING alert undelivered; transition remains pending for retry")
+            return EXIT_ALERT_UNDELIVERED
 
         write_state(state_path, next_state)
-        if alert and not settings.no_alert and not delivered:
-            return EXIT_ALERT_UNDELIVERED
         return exit_code
 
 
