@@ -293,6 +293,25 @@ Notification delivery is at-least-once, not exactly-once.
   syntax, systemd verification, plan sync, diff audit, and the existing managed
   full Unit Gate before push.
 
+### Contract revision: user-manager bus ownership
+
+- New evidence: the user-systemd unit hard-codes
+  `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`, although the installer
+  is not restricted to UID 1000 and every recovery command targets the invoking
+  user's service manager.
+- Revised root cause: deployment configuration overrides the manager-provided
+  user bus identity with an operator-specific UID, so a valid installation for
+  another UID can address the wrong or nonexistent bus.
+- Revised required change surface: remove the hard-coded bus override and prove
+  the unit contains no UID-specific runtime-bus path; let `systemctl --user`
+  resolve the invoking user's manager through its native runtime environment.
+- Revised explicit non-scope: do not change timer cadence, service commands,
+  installation paths, remote ntfy delivery, the best-effort DISPLAY hint, or
+  live deployment.
+- Revised verification plan: focused template assertion, native
+  `systemd-analyze verify`, syntax/diff/plan checks, and the managed full Unit
+  Gate before push.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -410,10 +429,10 @@ notification exit diagnostics, as listed above.
 
 | File | LOC |
 |---|---:|
-| `config/atlas-api-healthcheck.service` | 19 |
+| `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 419 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 438 |
 | `scripts/atlas_api_healthcheck.py` | 675 |
 | `scripts/install_atlas_api_healthcheck.py` | 490 |
-| `tests/test_atlas_api_healthcheck.py` | 1510 |
-| **Total** | **3123** |
+| `tests/test_atlas_api_healthcheck.py` | 1511 |
+| **Total** | **3142** |

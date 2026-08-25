@@ -1045,7 +1045,8 @@ def test_service_template_uses_installed_script_and_private_environment():
     assert "ExecStart=/usr/bin/python3 %h/.local/bin/atlas-api-healthcheck.py" in service
     assert "EnvironmentFile=-%h/.config/atlas/atlas-api-healthcheck.env" in service
     assert "Environment=DISPLAY=:0" in service
-    assert "Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus" in service
+    assert "DBUS_SESSION_BUS_ADDRESS=" not in service
+    assert "/run/user/1000" not in service
     assert "ATLAS_API_HEALTHCHECK_NTFY_TOPIC=<private-topic>" in service
     assert "eom-atlas-api-health-" not in service
     assert "SuccessExitStatus=0 2 4" in service
