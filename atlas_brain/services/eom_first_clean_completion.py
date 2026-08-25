@@ -176,13 +176,27 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                    )
                    AND NOT EXISTS (
                        SELECT 1
-                         FROM pg_auth_members AS membership
-                         JOIN pg_roles AS member_role
-                           ON member_role.oid = membership.member
-                         JOIN pg_roles AS guard_role
-                           ON guard_role.oid = membership.roleid
-                        WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
-                          AND member_role.rolname IN ('atlas', 'atlas_nocodb')
+                         FROM pg_roles AS member_role
+                        WHERE member_role.rolname IN ('atlas', 'atlas_nocodb')
+                          AND EXISTS (
+                              WITH RECURSIVE role_chain(roleid) AS (
+                                  SELECT membership.roleid
+                                    FROM pg_auth_members AS membership
+                                   WHERE membership.member = member_role.oid
+                                  UNION
+                                  SELECT membership.roleid
+                                    FROM pg_auth_members AS membership
+                                    JOIN role_chain
+                                      ON membership.member = role_chain.roleid
+                              )
+                              SELECT 1
+                                FROM role_chain
+                               WHERE roleid = (
+                                   SELECT oid
+                                     FROM pg_roles
+                                    WHERE rolname = 'atlas_eom_handoff_owner'
+                               )
+                          )
                    )
                    AND (
                        SELECT COUNT(*) = 2
@@ -250,13 +264,8 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                               'eom_first_clean_completion_operation_receipts',
                               'eom_first_clean_completion_receipts'
                           )
-                          AND acl.grantee IN (
-                              0,
-                              (
-                                  SELECT oid
-                                    FROM pg_roles
-                                   WHERE rolname = 'atlas_nocodb'
-                              )
+                          AND acl.grantee <> (
+                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
                           )
                    )
                    AND has_table_privilege(
@@ -288,6 +297,7 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                        current_user,
                        'eom_first_clean_completion_receipts',
                        'UPDATE'
+                   )
                    AND (
                        SELECT COUNT(*) = 4
                          FROM pg_constraint

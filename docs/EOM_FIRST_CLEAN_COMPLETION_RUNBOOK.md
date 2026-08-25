@@ -44,11 +44,11 @@ python scripts/apply_eom_first_clean_completion_schema.py --apply --json
 ```
 
 The migration atomically records its ledger row, transfers the two receipt
-tables and their trigger functions to `atlas_eom_handoff_owner`, revokes any
-runtime/NocoDB guard membership, and grants the Atlas runtime only `SELECT`,
-`INSERT`, and `UPDATE` needed for row locking and receipt creation. It does not
-grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, ownership, or customer
-delivery authority.
+tables and their trigger functions to `atlas_eom_handoff_owner`, revokes direct
+runtime/NocoDB guard membership, rejects any inherited guard path, and grants
+the Atlas runtime only `SELECT`, `INSERT`, and `UPDATE` needed for row locking
+and receipt creation. It does not grant `DELETE`, `TRUNCATE`, `REFERENCES`,
+`TRIGGER`, ownership, or customer delivery authority.
 
 Remove the temporary DBA DSN injection after the result reports
 `"migration_recorded": true`.

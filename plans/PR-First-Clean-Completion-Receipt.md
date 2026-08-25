@@ -61,9 +61,10 @@ Slice phase: vertical slice
     original receipt remains unchanged.
   - Migration `394_eom_first_clean_completion_receipts` requires a PostgreSQL
     superuser, creates the foreign-keyed receipt tables as a trusted no-login
-    guard owner, revokes runtime/NocoDB guard membership, and grants the Atlas
-    runtime only `SELECT`, `INSERT`, and `UPDATE`; database tests prove that
-    owner/ACL state and that a non-superuser executor is rejected before DDL.
+    guard owner, revokes direct runtime/NocoDB guard membership, rejects an
+    inherited guard path, and grants the Atlas runtime only `SELECT`, `INSERT`,
+    and `UPDATE`; database tests prove that owner/ACL state and that a
+    non-superuser executor is rejected before DDL.
   - The service requires the guarded schema before serving; route tests prove a
     missing, owner-mismatched, disabled, or append-only trigger becomes a safe
     `503` with no write. The slim EOM profile never applies migration 394 from
@@ -150,13 +151,14 @@ conflicting key/source/contact/timestamp fails with `409`.
 
 Migration 394 is a controlled DBA-only operation because it creates foreign
 keys to the guarded handoff table and transfers its two receipt tables plus
-trigger functions to `atlas_eom_handoff_owner`. It revokes runtime/NocoDB guard
-membership and grants Atlas only `SELECT`, `INSERT`, and `UPDATE` for the row
-locks and writes the service needs. The route refuses to serve if ownership,
-ACLs, triggers, or tables are not exactly ready, so deploying code before the
-DBA apply is safe. The normal slim EOM profile does not run migration 394. The
-runbook uses one explicit named migration and a redacted protected-DSN
-preflight; rollback stops the route/consumer while preserving audit evidence.
+trigger functions to `atlas_eom_handoff_owner`. It revokes direct
+runtime/NocoDB guard membership, rejects inherited membership, and grants Atlas
+only `SELECT`, `INSERT`, and `UPDATE` for the row locks and writes the service
+needs. The route refuses to serve if ownership, ACLs, triggers, or tables are
+not exactly ready, so deploying code before the DBA apply is safe. The normal
+slim EOM profile does not run migration 394. The runbook uses one explicit
+named migration and a redacted protected-DSN preflight; rollback stops the
+route/consumer while preserving audit evidence.
 
 ## Intentional
 
@@ -200,7 +202,7 @@ an automatic completion source and is intentionally left outside this slice.
     `tests/test_eom_first_clean_completion_dba_runner.py`.
   - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/main_eom.py atlas_brain/services/eom_first_clean_completion.py scripts/apply_eom_first_clean_completion_schema.py`
   - `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_missed_call_recovery.py::test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled`
-    (`18 passed, 17 skipped`; the skipped cases require the deliberately absent
+    (`17 passed, 20 skipped`; the skipped cases require the deliberately absent
     `ATLAS_MIGRATION_TEST_DATABASE_URL`).
   - `git diff --check`
 - The standalone Ruff target for `atlas_brain/main_eom.py` reports existing

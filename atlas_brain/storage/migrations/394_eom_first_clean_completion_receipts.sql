@@ -92,6 +92,53 @@ BEGIN
             'atlas_nocodb'
         );
     END IF;
+    IF EXISTS (
+        WITH RECURSIVE role_chain(roleid) AS (
+            SELECT membership.roleid
+              FROM pg_auth_members AS membership
+             WHERE membership.member = (
+                 SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+             )
+            UNION
+            SELECT membership.roleid
+              FROM pg_auth_members AS membership
+              JOIN role_chain ON membership.member = role_chain.roleid
+        )
+        SELECT 1
+          FROM role_chain
+         WHERE roleid = (
+             SELECT oid
+               FROM pg_roles
+              WHERE rolname = 'atlas_eom_handoff_owner'
+         )
+    ) THEN
+        RAISE EXCEPTION
+            'atlas must not retain direct or inherited membership in atlas_eom_handoff_owner';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb')
+       AND EXISTS (
+           WITH RECURSIVE role_chain(roleid) AS (
+               SELECT membership.roleid
+                 FROM pg_auth_members AS membership
+                WHERE membership.member = (
+                    SELECT oid FROM pg_roles WHERE rolname = 'atlas_nocodb'
+                )
+               UNION
+               SELECT membership.roleid
+                 FROM pg_auth_members AS membership
+                 JOIN role_chain ON membership.member = role_chain.roleid
+           )
+           SELECT 1
+             FROM role_chain
+            WHERE roleid = (
+                SELECT oid
+                  FROM pg_roles
+                 WHERE rolname = 'atlas_eom_handoff_owner'
+            )
+       ) THEN
+        RAISE EXCEPTION
+            'atlas_nocodb must not retain direct or inherited membership in atlas_eom_handoff_owner';
+    END IF;
 END;
 $$;
 
@@ -282,6 +329,8 @@ CREATE TRIGGER trg_require_eom_first_clean_completion_receipt
 DO $$
 DECLARE
     schema_name TEXT := current_schema();
+    table_name TEXT;
+    grantee_name TEXT;
 BEGIN
     ALTER TABLE eom_first_clean_completion_operation_receipts
         OWNER TO atlas_eom_handoff_owner;
@@ -297,32 +346,37 @@ BEGIN
     -- Clear any inherited/default ACLs before granting only the row-locking
     -- DML the service actually uses. In particular, do not grant DELETE,
     -- TRUNCATE, REFERENCES, TRIGGER, or ownership to the runtime.
-    EXECUTE format(
-        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_operation_receipts FROM PUBLIC',
-        schema_name
-    );
-    EXECUTE format(
-        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_receipts FROM PUBLIC',
-        schema_name
-    );
-    EXECUTE format(
-        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_operation_receipts FROM atlas',
-        schema_name
-    );
-    EXECUTE format(
-        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_receipts FROM atlas',
-        schema_name
-    );
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb') THEN
+    FOR table_name IN
+        SELECT unnest(ARRAY[
+            'eom_first_clean_completion_operation_receipts',
+            'eom_first_clean_completion_receipts'
+        ])
+    LOOP
         EXECUTE format(
-            'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_operation_receipts FROM atlas_nocodb',
-            schema_name
+            'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM PUBLIC',
+            schema_name,
+            table_name
         );
-        EXECUTE format(
-            'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_receipts FROM atlas_nocodb',
-            schema_name
-        );
-    END IF;
+        FOR grantee_name IN
+            SELECT DISTINCT grantee_role.rolname
+              FROM pg_class AS relation
+              JOIN pg_namespace AS namespace
+                ON namespace.oid = relation.relnamespace
+              CROSS JOIN LATERAL aclexplode(
+                  COALESCE(relation.relacl, ARRAY[]::aclitem[])
+              ) AS acl
+              JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+             WHERE namespace.nspname = schema_name
+               AND relation.relname = table_name
+        LOOP
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM %I',
+                schema_name,
+                table_name,
+                grantee_name
+            );
+        END LOOP;
+    END LOOP;
     EXECUTE format(
         'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_first_clean_completion_operation_receipts TO atlas',
         schema_name

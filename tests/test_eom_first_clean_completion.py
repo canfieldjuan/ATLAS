@@ -114,6 +114,36 @@ def _quote_ident(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+async def _has_guard_membership(pool: _ConnectionPool, role_name: str) -> bool:
+    return bool(
+        await pool.fetchval(
+            """
+            WITH RECURSIVE role_chain(roleid) AS (
+                SELECT membership.roleid
+                FROM pg_auth_members AS membership
+                WHERE membership.member = (
+                    SELECT oid FROM pg_roles WHERE rolname = $1
+                )
+                UNION
+                SELECT membership.roleid
+                FROM pg_auth_members AS membership
+                JOIN role_chain ON membership.member = role_chain.roleid
+            )
+            SELECT EXISTS (
+                SELECT 1
+                FROM role_chain
+                WHERE roleid = (
+                    SELECT oid
+                    FROM pg_roles
+                    WHERE rolname = 'atlas_eom_handoff_owner'
+                )
+            )
+            """,
+            role_name,
+        )
+    )
+
+
 def _operation_key(prefix: str = "first-clean") -> str:
     return f"{prefix}-{uuid4().hex}"
 
@@ -261,7 +291,8 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             SELECT relation.relname, role.rolname AS owner
             FROM pg_class AS relation
             JOIN pg_roles AS role ON role.oid = relation.relowner
-            WHERE relation.relnamespace = current_schema()::regnamespace
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            WHERE namespace.nspname = current_schema()
               AND relation.relname = ANY($1::text[])
             ORDER BY relation.relname
             """,
@@ -305,9 +336,137 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
             },
             "eom_first_clean_completion_receipts": {"INSERT", "SELECT", "UPDATE"},
         }
-        assert not await pool.fetchval(
-            "SELECT pg_has_role('atlas', 'atlas_eom_handoff_owner', 'MEMBER')"
+        unexpected_acl_rows = await pool._connection.fetch(
+            """
+            SELECT relation.relname, acl.grantee, acl.privilege_type
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            CROSS JOIN LATERAL aclexplode(
+                COALESCE(relation.relacl, ARRAY[]::aclitem[])
+            ) AS acl
+            WHERE namespace.nspname = current_schema()
+              AND relation.relname = ANY($1::text[])
+              AND acl.grantee <> (SELECT oid FROM pg_roles WHERE rolname = 'atlas')
+            """,
+            [
+                "eom_first_clean_completion_operation_receipts",
+                "eom_first_clean_completion_receipts",
+            ],
         )
+        assert unexpected_acl_rows == []
+        assert not await _has_guard_membership(pool, "atlas")
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_indirect_runtime_guard_membership() -> None:
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        role_name = f"eom_completion_membership_{uuid4().hex[:16]}"
+        role_ident = _quote_ident(role_name)
+        role_created = False
+        try:
+            can_administer_roles = await pool.fetchval(
+                """
+                SELECT rolsuper OR rolcreaterole
+                FROM pg_roles
+                WHERE rolname = current_user
+                """
+            )
+            if not can_administer_roles:
+                pytest.skip(
+                    "guard-membership proof requires disposable role administration"
+                )
+            await pool._connection.execute(
+                f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT"
+            )
+            role_created = True
+            await pool._connection.execute(
+                f"GRANT atlas_eom_handoff_owner TO {role_ident}"
+            )
+            await pool._connection.execute(f"GRANT {role_ident} TO atlas")
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            if role_created:
+                await pool._connection.execute(f"REVOKE {role_ident} FROM atlas")
+                await pool._connection.execute(
+                    f"REVOKE atlas_eom_handoff_owner FROM {role_ident}"
+                )
+                await pool._connection.execute(f"DROP ROLE {role_ident}")
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_non_guard_table_ownership() -> None:
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        try:
+            await pool._connection.execute(
+                """
+                ALTER TABLE eom_first_clean_completion_receipts
+                OWNER TO atlas
+                """
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                """
+                ALTER TABLE eom_first_clean_completion_receipts
+                OWNER TO atlas_eom_handoff_owner
+                """
+            )
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> None:
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        role_name = f"eom_completion_acl_{uuid4().hex[:16]}"
+        role_ident = _quote_ident(role_name)
+        role_created = False
+        try:
+            can_administer_roles = await pool.fetchval(
+                """
+                SELECT rolsuper OR rolcreaterole
+                FROM pg_roles
+                WHERE rolname = current_user
+                """
+            )
+            if not can_administer_roles:
+                pytest.skip("ACL proof requires disposable role administration")
+            await pool._connection.execute(
+                f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT"
+            )
+            role_created = True
+            await pool._connection.execute(
+                """
+                GRANT DELETE ON TABLE eom_first_clean_completion_receipts TO atlas
+                """
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+            await pool._connection.execute(
+                """
+                REVOKE DELETE ON TABLE eom_first_clean_completion_receipts FROM atlas
+                """
+            )
+            await pool._connection.execute(
+                "GRANT SELECT ON TABLE eom_first_clean_completion_receipts "
+                f"TO {role_ident}"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            await pool._connection.execute(
+                """
+                REVOKE DELETE ON TABLE eom_first_clean_completion_receipts FROM atlas
+                """
+            )
+            if role_created:
+                await pool._connection.execute(
+                    "REVOKE ALL PRIVILEGES ON TABLE "
+                    f"eom_first_clean_completion_receipts FROM {role_ident}"
+                )
+                await pool._connection.execute(f"DROP ROLE {role_ident}")
+        assert await first_clean_completion_schema_ready(pool) is True
 
 
 @pytest.mark.asyncio
