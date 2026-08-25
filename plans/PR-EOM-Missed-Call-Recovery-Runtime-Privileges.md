@@ -306,6 +306,29 @@ Max files: 10
   contact-update path; the legitimate sequence still terminalizes as
   `recipient_changed` and the existing runtime/NocoDB proof remains green.
 
+### Current-head integration contract (current review round)
+
+- Root cause: this branch and current `origin/main` independently extend the
+  manually enumerated EOM lead-pipeline workflow. The missed-call slice adds
+  migration 393 and its controlled-runner test; the merged first-clean slice
+  adds its service, migration, database service, and tests. The independently
+  correct list edits overlap, so Git cannot select a complete workflow without
+  an explicit union.
+- Correct fix must touch/change: retain both slices' workflow paths and test
+  commands in each `pull_request` and `push` registration, while retaining the
+  first-clean PostgreSQL service/configuration. Preserve the missed-call
+  startup tuple that excludes historical/DBA-only migrations and the upstream
+  first-clean app-state pool hook; neither behavior is a conflict to rewrite.
+- Must not change: do not change recovery privilege policy, migration 393,
+  first-clean implementation, service routes, database credentials, tests,
+  Docker configuration, or any production data. The integration may edit only
+  the already-scoped workflow and plan; `atlas_brain/main_eom.py` must merge
+  its independent changes without a manual behavioral edit.
+- Acceptance criteria: Git can merge the branch with current `origin/main`;
+  the resulting workflow contains both the missed-call migration/runner paths
+  and first-clean paths/tests/services, while `main_eom` retains both the
+  historical/DBA-only recovery exclusion and the first-clean pool hook.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -539,12 +562,12 @@ Parked hardening: none.
 | `atlas_brain/services/eom_missed_call_recovery.py` | 310 |
 | `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 968 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 555 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 578 |
 | `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 445 |
 | `tests/test_eom_missed_call_privilege_runner.py` | 547 |
 | `tests/test_eom_missed_call_recovery.py` | 1459 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **4385** |
+| **Total** | **4408** |
 
 ## Diff size rationale
 

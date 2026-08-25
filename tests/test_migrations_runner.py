@@ -1357,6 +1357,45 @@ async def test_concurrent_runners_apply_each_migration_once(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_generic_run_skips_controlled_dba_migration_until_explicitly_selected(
+    tmp_path,
+    caplog,
+):
+    """Normal startup never attempts a DBA-only migration, but its runner can."""
+
+    from atlas_brain.storage.migrations import (
+        CONTROLLED_DBA_MIGRATION_NAMES,
+        run_migrations,
+    )
+
+    assert CONTROLLED_DBA_MIGRATION_NAMES == {
+        "394_eom_first_clean_completion_receipts"
+    }
+    controlled_name = next(iter(CONTROLLED_DBA_MIGRATION_NAMES))
+    controlled_source = "SELECT 'controlled DBA migration'"
+    ordinary_source = "SELECT 'ordinary migration'"
+    (tmp_path / f"{controlled_name}.sql").write_text(controlled_source)
+    (tmp_path / "395_ordinary_probe.sql").write_text(ordinary_source)
+    pool = _SerializingPool(honor_lock=True)
+    caplog.set_level(logging.INFO, logger="atlas.storage.migrations")
+
+    await run_migrations(pool, migrations_dir=tmp_path)
+
+    assert pool.applied_sql == [ordinary_source]
+    assert all(name != controlled_name for _version, name, _digest in pool.records)
+    assert "Skipping 1 controlled DBA migration" in caplog.text
+
+    await run_migrations(
+        pool,
+        migrations_dir=tmp_path,
+        only={controlled_name},
+    )
+
+    assert pool.applied_sql == [ordinary_source, controlled_source]
+    assert any(name == controlled_name for _version, name, _digest in pool.records)
+
+
+@pytest.mark.asyncio
 async def test_without_the_advisory_lock_both_runners_apply(tmp_path):
     """3i probe: with the lock a no-op the same fixture double-applies,
     proving the test above measures the lock."""

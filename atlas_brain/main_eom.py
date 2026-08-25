@@ -317,4 +317,5 @@ async def ping() -> dict[str, str]:
 app.include_router(receivables_router, prefix="/api/v1")
 app.state.eom_funnel_crm_provider = get_eom_funnel_crm_provider
 app.state.eom_funnel_missed_call_recovery_pool = get_eom_funnel_db_pool
+app.state.eom_funnel_first_clean_completion_pool = get_eom_funnel_db_pool
 app.include_router(funnel_router, prefix="/api/v1")
