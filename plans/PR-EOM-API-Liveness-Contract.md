@@ -92,9 +92,10 @@ Max files: 6
   user-systemd templates, notification/maintenance configuration, and focused
   tests.
 - Risk areas: unexpected clean stops, deliberate maintenance, failed start,
-  failed re-probe, notification configuration absence, and keeping the monitor
-  independent of the application worktree.
-- Reviewer rules triggered: R1, R2, R6, R11, R12, R14.
+  failed re-probe, notification configuration absence, transactional rollback,
+  concurrent maintenance/recovery actors, and keeping the monitor independent
+  of the application worktree.
+- Reviewer rules triggered: R1, R2, R6, R8, R11, R12, R14.
 
 ### Contract revision: current-head review findings
 
@@ -312,6 +313,29 @@ Notification delivery is at-least-once, not exactly-once.
   `systemd-analyze verify`, syntax/diff/plan checks, and the managed full Unit
   Gate before push.
 
+### Contract revision: complete decision inventory and symlink rollback
+
+- New evidence: the Review Contract omits R8 despite the hand-rolled lock,
+  crash-state, outbox, and rollback model; the closure declaration names only
+  two of the decision-driving memberships introduced by this slice; and file
+  snapshots follow live symlinks while treating broken symlinks as absent, so
+  rollback reconstructs a regular file or deletes the original link.
+- Revised root cause: the implementation and plan model values but not every
+  membership boundary or filesystem node type that those decisions consume.
+  The rollback snapshot therefore cannot reconstruct the pre-install namespace
+  entry, and the review contract cannot prove closure over all admitted states.
+- Revised required change surface: declare R8 and every decision-driving
+  membership with its closed/open status, source, and out-of-set direction;
+  snapshot symlink identity and its raw target before mutation; atomically
+  restore that link entry after a failed install; and prove existing and broken
+  relative symlinks survive a forced service-proof failure unchanged.
+- Revised explicit non-scope: do not change successful-install behavior,
+  source/destination paths, timer state semantics, provider recovery, CORS,
+  notification delivery, public CLI, schemas, dependencies, or live deployment.
+- Revised verification plan: focused out-of-set state tests and parameterized
+  live/broken symlink rollback proof, followed by syntax, systemd, plan, diff,
+  and the managed full Unit Gate before push.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -347,19 +371,49 @@ The recovery decision is a system state boundary, not an open-input guard.
 
 ### Guard-closure declaration
 
-- `TOPIC_RE` is a CLOSED, DERIVED topic grammar: membership is evaluated from
-  the bounded ASCII grammar at `scripts/install_atlas_api_healthcheck.py:27,83-87`,
-  rather than copied from an operator-maintained list. The installer accepts only
-  a normalized string in that grammar; a missing or nonmatching value fails
-  before it writes copies or enables systemd, which is safer than directing an
-  alert to an unknown destination. The focused grammar-product test exercises
-  leading-token, body-family, length, and whitespace-wrapper boundaries against
-  an independent oracle.
+- `TOPIC_RE` and `LEGACY_TOPIC_RE` are CLOSED, DERIVED topic grammars:
+  membership is computed from the bounded ASCII grammar authored in
+  `scripts/install_atlas_api_healthcheck.py`; the legacy grammar additionally
+  derives the topic from the one supported shell assignment shape. Missing or
+  nonmatching input fails before copies or systemd enrollment, the safer side
+  because an unknown notification destination must not be used. The focused
+  grammar-product test exercises token, body, length, and wrapper boundaries
+  against an independent oracle.
 - `PENDING_ALERTS` is CLOSED and ENUMERATED by the three alert events that this
   monitor can emit (`down`, `recovered`, and `auto-recovered`). An unrecognized
-  persisted notification/state record resets safely; recognized pending events
-  remain queued while each run still derives state from the current observation,
-  so arbitrary stored values cannot choose or suppress a notification path.
+  persisted notification invalidates the stored document and resets to the safe
+  initial state; recognized events remain queued while each run still derives
+  state from the current observation, so arbitrary stored values cannot choose
+  or suppress a notification path.
+- The systemd response-key set (`LoadState`, `ActiveState`) is CLOSED and
+  ENUMERATED from the exact properties requested by `query_unit_state()`.
+  Unrequested keys are ignored and either missing required key returns a query
+  failure that becomes provider-down; incomplete systemd output cannot authorize
+  recovery.
+- The browser-ready probe memberships are CLOSED and ENUMERATED from the actual
+  public intake contract: HTTP 200/204, the canonical origin, POST, and
+  Content-Type. Any status or required CORS member outside those sets reports
+  the provider down, the safe side because an unusable browser route must not
+  prove deployment health.
+- `STATE_STATUSES` and the observation outcome vocabulary are CLOSED and
+  ENUMERATED by this monitor's persisted/runtime state machine. Unknown persisted
+  status invalidates the document and resets to the initial state; an unknown
+  runtime observation falls into the existing down outcome, so incompleteness
+  cannot manufacture health.
+- The legacy pending-record exit-code set is CLOSED and ENUMERATED from the
+  monitor's original durable outcomes (`EXIT_OK`, `EXIT_RECOVERED`, `EXIT_DOWN`).
+  Any other value invalidates the legacy document instead of being migrated.
+- The systemd `SuccessExitStatus` set is CLOSED and DERIVED from the current
+  monitor outcomes that mean the provider observation is durable and non-down:
+  ordinary health, successful recovery, and queued remote alert. Provider-down
+  remains outside the success set and therefore fails deployment proof.
+- Timer `ActiveState` membership is CLOSED and ENUMERATED by the three states
+  whose rollback meaning this installer defines (`active`, `inactive`, `failed`).
+  Timer `UnitFileState` membership is CLOSED and ENUMERATED by the four states it
+  can restore exactly (`disabled`, `enabled`, `enabled-runtime`, `static`); the
+  enabled subset is DERIVED from those accepted values at `TimerState.enabled`.
+  Any state outside either admitted set raises before installer mutation, while
+  a value outside the enabled subset remains not-enabled during read-only proof.
 
 ### Files touched
 
@@ -431,8 +485,8 @@ notification exit diagnostics, as listed above.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 438 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 492 |
 | `scripts/atlas_api_healthcheck.py` | 675 |
-| `scripts/install_atlas_api_healthcheck.py` | 490 |
-| `tests/test_atlas_api_healthcheck.py` | 1511 |
-| **Total** | **3142** |
+| `scripts/install_atlas_api_healthcheck.py` | 524 |
+| `tests/test_atlas_api_healthcheck.py` | 1568 |
+| **Total** | **3287** |

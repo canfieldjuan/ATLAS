@@ -55,6 +55,7 @@ class FileSnapshot:
     path: Path
     payload: bytes | None
     mode: int | None
+    symlink_target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,16 @@ def _write_copy(source: Path, destination: Path, *, executable: bool) -> None:
 
 
 def _snapshot_file(path: Path) -> FileSnapshot:
+    if path.is_symlink():
+        try:
+            return FileSnapshot(
+                path=path,
+                payload=None,
+                mode=None,
+                symlink_target=os.readlink(path),
+            )
+        except OSError as exc:
+            raise RuntimeError(f"cannot snapshot install destination {path}") from exc
     if not path.exists():
         return FileSnapshot(path=path, payload=None, mode=None)
     if not path.is_file():
@@ -222,6 +233,29 @@ def _snapshot_file(path: Path) -> FileSnapshot:
 
 
 def _restore_file(snapshot: FileSnapshot) -> None:
+    if snapshot.symlink_target is not None:
+        temporary_dir: tempfile.TemporaryDirectory[str] | None = None
+        try:
+            snapshot.path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_dir = tempfile.TemporaryDirectory(
+                dir=snapshot.path.parent,
+                prefix=f".{snapshot.path.name}.link.",
+            )
+            temporary_link = Path(temporary_dir.name) / snapshot.path.name
+            os.symlink(snapshot.symlink_target, temporary_link)
+            os.replace(temporary_link, snapshot.path)
+        except OSError as exc:
+            raise RuntimeError(f"cannot restore install symlink {snapshot.path}") from exc
+        finally:
+            if temporary_dir is not None:
+                try:
+                    temporary_dir.cleanup()
+                except OSError as exc:
+                    print(
+                        f"WARNING cannot remove installer symlink staging directory: {type(exc).__name__}",
+                        file=sys.stderr,
+                    )
+        return
     if snapshot.payload is None:
         try:
             snapshot.path.unlink(missing_ok=True)

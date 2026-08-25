@@ -875,6 +875,7 @@ def test_invalid_json_state_is_not_reset_or_replaced(tmp_path):
     "value",
     [
         {"status": [], "consecutive": 0},
+        {"status": "unknown", "consecutive": 0},
         {"status": "down", "consecutive": "1"},
         {
             "status": "healthy",
@@ -1290,6 +1291,30 @@ def test_installer_fails_closed_when_existing_timer_state_cannot_be_queried(tmp_
     assert not paths.installed_monitor.exists()
 
 
+@pytest.mark.parametrize(
+    ("active_state", "unit_file_state", "expected"),
+    [
+        ("activating", "disabled", "unsupported ActiveState=activating"),
+        ("inactive", "masked", "unsupported UnitFileState=masked"),
+    ],
+)
+def test_installer_rejects_timer_states_outside_the_restorable_sets(
+    active_state, unit_file_state, expected
+):
+    def runner(command):
+        if "--property=LoadState" in command:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                f"LoadState=loaded\nActiveState={active_state}\n",
+                "",
+            )
+        return subprocess.CompletedProcess(command, 0, unit_file_state + "\n", "")
+
+    with pytest.raises(RuntimeError, match=expected):
+        installer._timer_state(runner)
+
+
 def test_install_check_rejects_stale_loaded_unit_definitions(tmp_path):
     paths = _install_paths(tmp_path)
     installer.install(
@@ -1431,6 +1456,38 @@ def test_installer_restores_files_and_timer_when_service_proof_fails(
         restore_enable_command,
         ("systemctl", "--user", "start", installer.TIMER_NAME),
     ]
+
+
+@pytest.mark.parametrize("target_exists", [True, False])
+def test_installer_failure_restores_live_and_broken_relative_symlinks(
+    tmp_path, target_exists
+):
+    paths = _install_paths(tmp_path)
+    paths.legacy_monitor.parent.mkdir(parents=True, exist_ok=True)
+    paths.legacy_monitor.write_text(
+        'NTFY_TOPIC="${ATLAS_HC_NTFY_TOPIC:-test-private-topic}"\n', encoding="utf-8"
+    )
+    paths.systemd_dir.mkdir(parents=True, exist_ok=True)
+    target = paths.systemd_dir / "managed-healthcheck.service"
+    original_target_payload = b"managed-service"
+    if target_exists:
+        target.write_bytes(original_target_payload)
+    destination = paths.systemd_dir / installer.SERVICE_NAME
+    destination.symlink_to(target.name)
+    original_link_target = os.readlink(destination)
+    runner = _InstallerRunner(
+        failing_command=("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME)
+    )
+
+    with pytest.raises(RuntimeError, match="initial installed-monitor invocation failed"):
+        installer.install(paths, runner=runner, environment={})
+
+    assert destination.is_symlink()
+    assert os.readlink(destination) == original_link_target
+    if target_exists:
+        assert target.read_bytes() == original_target_payload
+    else:
+        assert not destination.exists()
 
 
 def test_installer_rolls_back_before_reraising_operator_cancellation(tmp_path):
