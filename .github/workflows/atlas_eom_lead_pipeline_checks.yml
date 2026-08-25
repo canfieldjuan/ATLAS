@@ -33,6 +33,7 @@ on:
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
       - "atlas_brain/services/eom_missed_call_recovery.py"
+      - "atlas_brain/services/eom_first_clean_completion.py"
       - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -75,7 +76,9 @@ on:
       - "atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql"
       - "atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql"
       - "atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql"
+      - "atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql"
       - "atlas_brain/storage/migrations/reconciliation.py"
+      - "scripts/apply_eom_first_clean_completion_schema.py"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_ack_commercial_templates.py"
@@ -90,6 +93,8 @@ on:
       - "tests/test_eom_contact_archive.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_missed_call_recovery.py"
+      - "tests/test_eom_first_clean_completion.py"
+      - "tests/test_eom_first_clean_completion_dba_runner.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_render_profile.py"
       - "tests/test_eom_public_onboarding.py"
@@ -140,6 +145,7 @@ on:
       - "atlas_brain/services/eom_lead_ingress.py"
       - "atlas_brain/services/eom_onboarding_drafts.py"
       - "atlas_brain/services/eom_missed_call_recovery.py"
+      - "atlas_brain/services/eom_first_clean_completion.py"
       - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -182,7 +188,9 @@ on:
       - "atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql"
       - "atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql"
       - "atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql"
+      - "atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql"
       - "atlas_brain/storage/migrations/reconciliation.py"
+      - "scripts/apply_eom_first_clean_completion_schema.py"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_ack_commercial_templates.py"
@@ -197,6 +205,8 @@ on:
       - "tests/test_eom_contact_archive.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_missed_call_recovery.py"
+      - "tests/test_eom_first_clean_completion.py"
+      - "tests/test_eom_first_clean_completion_dba_runner.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_render_profile.py"
       - "tests/test_eom_public_onboarding.py"
@@ -272,6 +282,8 @@ jobs:
             tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_missed_call_recovery.py \
+            tests/test_eom_first_clean_completion.py \
+            tests/test_eom_first_clean_completion_dba_runner.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_render_profile.py \
             tests/test_eom_funnel_capability_manifest.py \

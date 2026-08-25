@@ -13,7 +13,6 @@ from datetime import datetime, timedelta, timezone
 from itertools import count
 from pathlib import Path
 from typing import Any
-from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import httpx
@@ -37,6 +36,15 @@ DATABASE_URL_ENV = "ATLAS_MIGRATION_TEST_DATABASE_URL"
 _NOW = datetime(2026, 8, 24, 20, 0, tzinfo=timezone.utc)
 _EOM_CONTEXT = "effingham_maids"
 _TRACKER_IDS = count(10_000)
+_COMPLETION_SCHEMA_MIGRATIONS = (
+    "035_contacts",
+    "256_contact_interaction_dedupe",
+    "346_contact_lead_pipeline",
+    "351_eom_lead_lifecycle_events",
+    "353_eom_customer_handoffs",
+    "366_contacts_customer_type",
+    "394_eom_first_clean_completion_receipts",
+)
 
 
 class _ConnectionPool:
@@ -69,13 +77,10 @@ async def _apply_schema(connection: Any, schema: str) -> None:
     # Migration 035 remains additive to the production appointments relation;
     # the focused empty schema supplies that dependency explicitly.
     await connection.execute("CREATE TABLE appointments (id UUID PRIMARY KEY)")
-    # The integration proof deliberately follows the slim EOM startup's
-    # curated completion set. A fresh canonical funnel schema must not depend
-    # on unrelated profile migrations merely because a developer's database
-    # already happens to have them.
-    from atlas_brain import main_eom
-
-    for migration in main_eom.EOM_FIRST_CLEAN_COMPLETION_READINESS_MIGRATIONS:
+    # The completion schema is DBA-only because it references and protects the
+    # guard-owned handoff table. Keep this disposable proof limited to its
+    # actual canonical prerequisites rather than a developer's broader schema.
+    for migration in _COMPLETION_SCHEMA_MIGRATIONS:
         await connection.execute((MIGRATIONS / f"{migration}.sql").read_text())
 
 
@@ -103,6 +108,10 @@ async def _schema_connection(database_url: str, schema: str) -> _ConnectionPool:
 
 async def _close_schema_connection(pool: _ConnectionPool) -> None:
     await pool._connection.close()
+
+
+def _quote_ident(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
 
 
 def _operation_key(prefix: str = "first-clean") -> str:
@@ -237,32 +246,105 @@ def test_slim_eom_profile_binds_completion_to_canonical_funnel_pool() -> None:
     )
 
 
-def test_slim_eom_completion_migration_helper_uses_curated_set() -> None:
+def test_slim_eom_profile_does_not_run_dba_completion_migrations() -> None:
     from atlas_brain import main_eom
 
-    pool = SimpleNamespace(is_initialized=True)
-    calls: list[tuple[object, tuple[str, ...]]] = []
+    assert not hasattr(main_eom, "_run_eom_first_clean_completion_startup_migrations")
 
-    async def run_migrations(observed_pool: object, *, only: Any = None) -> None:
-        calls.append((observed_pool, tuple(only or ())))
 
-    asyncio.run(
-        main_eom._apply_eom_first_clean_completion_migrations(
-            pool,
-            run_migrations_fn=run_migrations,
+@pytest.mark.asyncio
+async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> None:
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        ownership = await pool._connection.fetch(
+            """
+            SELECT relation.relname, role.rolname AS owner
+            FROM pg_class AS relation
+            JOIN pg_roles AS role ON role.oid = relation.relowner
+            WHERE relation.relnamespace = current_schema()::regnamespace
+              AND relation.relname = ANY($1::text[])
+            ORDER BY relation.relname
+            """,
+            [
+                "eom_first_clean_completion_operation_receipts",
+                "eom_first_clean_completion_receipts",
+            ],
         )
-    )
+        assert {row["relname"]: row["owner"] for row in ownership} == {
+            "eom_first_clean_completion_operation_receipts": (
+                "atlas_eom_handoff_owner"
+            ),
+            "eom_first_clean_completion_receipts": "atlas_eom_handoff_owner",
+        }
+        runtime_acl_rows = await pool._connection.fetch(
+            """
+            SELECT relation.relname, acl.privilege_type
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            CROSS JOIN LATERAL aclexplode(
+                COALESCE(relation.relacl, ARRAY[]::aclitem[])
+            ) AS acl
+            WHERE namespace.nspname = current_schema()
+              AND relation.relname = ANY($1::text[])
+              AND acl.grantee = (SELECT oid FROM pg_roles WHERE rolname = 'atlas')
+            ORDER BY relation.relname, acl.privilege_type
+            """,
+            [
+                "eom_first_clean_completion_operation_receipts",
+                "eom_first_clean_completion_receipts",
+            ],
+        )
+        runtime_acl: dict[str, set[str]] = {}
+        for row in runtime_acl_rows:
+            runtime_acl.setdefault(row["relname"], set()).add(row["privilege_type"])
+        assert runtime_acl == {
+            "eom_first_clean_completion_operation_receipts": {
+                "INSERT",
+                "SELECT",
+                "UPDATE",
+            },
+            "eom_first_clean_completion_receipts": {"INSERT", "SELECT", "UPDATE"},
+        }
+        assert not await pool.fetchval(
+            "SELECT pg_has_role('atlas', 'atlas_eom_handoff_owner', 'MEMBER')"
+        )
 
-    assert calls == [(pool, main_eom.EOM_FIRST_CLEAN_COMPLETION_READINESS_MIGRATIONS)]
-    assert main_eom.EOM_FIRST_CLEAN_COMPLETION_READINESS_MIGRATIONS == (
-        "035_contacts",
-        "256_contact_interaction_dedupe",
-        "346_contact_lead_pipeline",
-        "351_eom_lead_lifecycle_events",
-        "353_eom_customer_handoffs",
-        "366_contacts_customer_type",
-        "394_eom_first_clean_completion_receipts",
-    )
+
+@pytest.mark.asyncio
+async def test_completion_schema_rejects_a_non_superuser_executor() -> None:
+    database_url = _database_url_or_skip()
+    role_name = f"eom_completion_runtime_{uuid4().hex[:16]}"
+    role_ident = _quote_ident(role_name)
+    role_created = False
+    connection = await asyncpg.connect(database_url)
+    try:
+        can_administer_roles = await connection.fetchval(
+            """
+            SELECT rolsuper OR rolcreaterole
+            FROM pg_roles
+            WHERE rolname = current_user
+            """
+        )
+        if not can_administer_roles:
+            pytest.skip("DBA migration proof requires disposable role administration")
+        await connection.execute(f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT")
+        role_created = True
+        await connection.execute(f"GRANT {role_ident} TO atlas")
+        await connection.execute(f"SET ROLE {role_ident}")
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="database administrator must run 394_eom_first_clean_completion_receipts",
+        ):
+            await connection.execute(
+                (MIGRATIONS / "394_eom_first_clean_completion_receipts.sql").read_text()
+            )
+        await connection.execute("RESET ROLE")
+    finally:
+        await connection.execute("RESET ROLE")
+        if role_created:
+            await connection.execute(f"REVOKE {role_ident} FROM atlas")
+            await connection.execute(f"DROP ROLE {role_ident}")
+        await connection.close()
 
 
 @pytest.fixture(autouse=True)

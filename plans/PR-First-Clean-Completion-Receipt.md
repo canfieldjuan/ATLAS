@@ -21,10 +21,10 @@ cannot be safely exercised or a route without the durable invariants it claims.
 - Correct fix must touch/change: add an immutable, tenant-scoped completion
   receipt and globally bound idempotency receipt; expose one authenticated EOM
   funnel route that validates the canonical customer/handoff and persists that
-  fact atomically; bind that route to the slim profile's canonical funnel pool
-  and curated readiness migrations; advertise it only when registered; prove
-  retry, conflict, migration, concurrent-delivery, and slim-startup behavior
-  with isolated tests.
+  fact atomically; bind that route to the slim profile's canonical funnel pool;
+  apply its guard-owned schema only through a controlled DBA path; advertise it
+  only when registered; and prove retry, conflict, migration, concurrent
+  delivery, and normal-runtime non-escalation with isolated tests.
 - Must not change: existing first-clean booking, onboarding welcome drafts,
   public onboarding tokens, customer-handoff semantics, calendar behavior,
   email delivery, Stripe/card collection, or any tracker/Website UI. This slice
@@ -59,21 +59,31 @@ Slice phase: vertical slice
   - A different source service or completion timestamp for an already completed
     customer fails closed instead of rewriting the receipt; tests prove the
     original receipt remains unchanged.
-  - The service requires the additive schema before serving; route tests prove
-    a missing, disabled, or append-only trigger becomes a safe `503` with no
-    write.
+  - Migration `394_eom_first_clean_completion_receipts` requires a PostgreSQL
+    superuser, creates the foreign-keyed receipt tables as a trusted no-login
+    guard owner, revokes runtime/NocoDB guard membership, and grants the Atlas
+    runtime only `SELECT`, `INSERT`, and `UPDATE`; database tests prove that
+    owner/ACL state and that a non-superuser executor is rejected before DDL.
+  - The service requires the guarded schema before serving; route tests prove a
+    missing, owner-mismatched, disabled, or append-only trigger becomes a safe
+    `503` with no write. The slim EOM profile never applies migration 394 from
+    its normal runtime connection.
   - The capability name is mechanically derived from the registered route;
     capability-manifest tests prove Atlas never advertises an absent route.
+  - The existing PostgreSQL-backed EOM lead-pipeline workflow explicitly runs
+    the persistence and DBA-runner tests, rather than treating local skipped
+    database cases as proof.
 - Reachability proof: the next tracker slice will call the authenticated funnel
   route after a manager explicitly confirms a completed first service. This PR
   proves the route reaches the receipt table, lifecycle ledger, and JSON
   response using an ASGI app and isolated PostgreSQL schema.
-- Affected surfaces: `atlas_brain/eom_api/funnel.py`, a new completion service,
-  one additive migration, the capability manifest, and focused tests only.
+- Affected surfaces: `atlas_brain/eom_api/funnel.py`, the slim EOM pool binding,
+  a new completion service, a DBA-only migration/runner/runbook, the existing
+  EOM PostgreSQL workflow, the capability manifest, and focused tests only.
 - Risk areas: source identity collision, cross-customer handoff mismatch,
-  stale/reused idempotency keys, migration-before-code deployment ordering,
-  concurrent reporting, future timestamps, and accidental email/Stripe side
-  effects.
+  stale/reused idempotency keys, runtime ownership/ACL escalation,
+  migration-before-code deployment ordering, concurrent reporting, future
+  timestamps, and accidental email/Stripe side effects.
 - Reviewer rules triggered: R1, R2, R3, R4, R7, R8, R10, R11, R12, R13, R14.
 
 ### Boundary-change enumeration
@@ -92,11 +102,14 @@ Slice phase: vertical slice
 ### Deployed-config probing
 
 - Deployed/default config values: existing EOM Funnel service authentication is
-  required; this slice adds no deployment, email, or Stripe configuration.
+  required. The DBA-only apply command reads its protected DSN only from
+  `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL`; it is not runtime or
+  browser configuration.
 - Explicit value probe: authenticated ASGI tests use a generated service token
   and actor headers.
 - Absent value probe: disabled/missing service authentication retains existing
-  fail-closed route behavior; a missing receipt schema returns `503`.
+  fail-closed route behavior; a missing receipt schema returns `503`; a missing
+  DBA DSN makes the controlled runner fail before a connection or migration.
 - Default-session/default-context probe: no default customer or tenant is
   accepted; the contact and immutable handoff must resolve to
   `effingham_maids` in the transaction.
@@ -110,9 +123,12 @@ Slice phase: vertical slice
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_first_clean_completion.py`
 - `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql`
+- `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md`
 - `plans/PR-First-Clean-Completion-Receipt.md`
+- `scripts/apply_eom_first_clean_completion_schema.py`
 - `tests/test_eom_first_clean_completion.py`
-- `tests/test_eom_missed_call_recovery.py`
+- `tests/test_eom_first_clean_completion_dba_runner.py`
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 
 ## Mechanism
 
@@ -132,13 +148,15 @@ handoff. It writes the append-only lifecycle event and receipt in the same
 transaction. A repeat with identical facts returns the original receipt; any
 conflicting key/source/contact/timestamp fails with `409`.
 
-The migration provides unique database backstops for contact/handoff and
-tracker service identity, plus append-only and matching-handoff triggers. The
-route refuses to serve if those objects are unavailable, making
-ATLAS-code-before-migration deployment safe. The slim EOM profile binds this
-route to its already-admitted canonical funnel pool and applies the receipt's
-curated prerequisite set when startup migrations are enabled. The migration is
-additive; rollback stops the new route/consumer while preserving audit evidence.
+Migration 394 is a controlled DBA-only operation because it creates foreign
+keys to the guarded handoff table and transfers its two receipt tables plus
+trigger functions to `atlas_eom_handoff_owner`. It revokes runtime/NocoDB guard
+membership and grants Atlas only `SELECT`, `INSERT`, and `UPDATE` for the row
+locks and writes the service needs. The route refuses to serve if ownership,
+ACLs, triggers, or tables are not exactly ready, so deploying code before the
+DBA apply is safe. The normal slim EOM profile does not run migration 394. The
+runbook uses one explicit named migration and a redacted protected-DSN
+preflight; rollback stops the route/consumer while preserving audit evidence.
 
 ## Intentional
 
@@ -151,6 +169,9 @@ additive; rollback stops the new route/consumer while preserving audit evidence.
   actor-attributed completion action anchored to a durable service identity.
 - Do not create a post-clean email draft, public onboarding token, Stripe
   SetupIntent, or payment authorization in this PR.
+- Do not grant the normal runtime `REFERENCES`, guard-role membership, table
+  ownership, delete/truncate authority, or a startup path to apply migration
+  394.
 
 ## Deferred
 
@@ -174,11 +195,12 @@ an automatic completion source and is intentionally left outside this slice.
 - Local fast checks passed:
   - Ruff passed for `atlas_brain/eom_api/funnel.py`,
     `atlas_brain/services/eom_first_clean_completion.py`,
+    `scripts/apply_eom_first_clean_completion_schema.py`,
     `tests/test_eom_first_clean_completion.py`, and
-    `tests/test_eom_missed_call_recovery.py`.
-  - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/main_eom.py atlas_brain/services/eom_first_clean_completion.py`
-  - `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_missed_call_recovery.py::test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled`
-    (`15 passed, 15 skipped`; the skipped cases require the deliberately absent
+    `tests/test_eom_first_clean_completion_dba_runner.py`.
+  - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/main_eom.py atlas_brain/services/eom_first_clean_completion.py scripts/apply_eom_first_clean_completion_schema.py`
+  - `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_missed_call_recovery.py::test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled`
+    (`18 passed, 17 skipped`; the skipped cases require the deliberately absent
     `ATLAS_MIGRATION_TEST_DATABASE_URL`).
   - `git diff --check`
 - The standalone Ruff target for `atlas_brain/main_eom.py` reports existing

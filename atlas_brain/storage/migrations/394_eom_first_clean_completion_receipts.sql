@@ -6,9 +6,94 @@
 -- canonicalized active residential customer. They deliberately create no
 -- customer email, token, payment, or Stripe side effect.
 --
+-- This is a controlled DBA-only migration. The normal Atlas runtime no longer
+-- owns eom_customer_handoffs after migration 354, so it cannot safely create
+-- a foreign key to that guard-owned table. More importantly, the new immutable
+-- evidence must itself be guard-owned; a runtime-owned table could disable its
+-- own append-only triggers. Use the dedicated 394 preflight/apply command,
+-- never the slim EOM profile's ordinary migration startup.
+--
 -- Rollback: stop the completion route and its tracker consumer first, then
 -- retain these append-only receipts as audit evidence. Do not delete a receipt
 -- merely because an application deployment is rolled back.
+
+DO $$
+DECLARE
+    schema_name TEXT := current_schema();
+    executor_is_superuser BOOLEAN;
+    guard_is_trusted BOOLEAN;
+    runtime_role_ready BOOLEAN;
+BEGIN
+    SELECT COALESCE(role.rolsuper, FALSE)
+      INTO executor_is_superuser
+      FROM pg_roles AS role
+     WHERE role.rolname = current_user;
+    IF NOT executor_is_superuser THEN
+        RAISE EXCEPTION
+            'database administrator must run 394_eom_first_clean_completion_receipts';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_roles WHERE rolname = 'atlas_eom_handoff_owner'
+    ) THEN
+        CREATE ROLE atlas_eom_handoff_owner NOLOGIN NOINHERIT;
+    END IF;
+    ALTER ROLE atlas_eom_handoff_owner
+        NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+        NOREPLICATION NOBYPASSRLS;
+
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_roles AS guard_role
+         WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+           AND NOT guard_role.rolcanlogin
+           AND NOT guard_role.rolinherit
+           AND NOT guard_role.rolsuper
+           AND NOT guard_role.rolcreaterole
+    )
+      INTO guard_is_trusted;
+    IF NOT guard_is_trusted THEN
+        RAISE EXCEPTION
+            'atlas_eom_handoff_owner must be a no-login, membership-isolated guard role before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_roles AS runtime_role
+         WHERE runtime_role.rolname = 'atlas'
+           AND runtime_role.rolcanlogin
+    )
+      INTO runtime_role_ready;
+    IF NOT runtime_role_ready THEN
+        RAISE EXCEPTION
+            'atlas must be a login runtime role before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
+    IF to_regclass(format('%I.contacts', schema_name)) IS NULL
+       OR to_regclass(format('%I.eom_lead_lifecycle_events', schema_name)) IS NULL
+       OR to_regclass(format('%I.eom_customer_handoffs', schema_name)) IS NULL THEN
+        RAISE EXCEPTION
+            'contacts, eom_lead_lifecycle_events, and eom_customer_handoffs must exist before running 394_eom_first_clean_completion_receipts';
+    END IF;
+
+    -- A no-login guard role can own protected objects only when it can create
+    -- them in this schema. Runtime and NocoDB must never retain a path to set
+    -- that role after the migration commits.
+    EXECUTE format(
+        'GRANT USAGE, CREATE ON SCHEMA %I TO atlas_eom_handoff_owner',
+        schema_name
+    );
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO atlas', schema_name);
+    EXECUTE format('REVOKE %I FROM %I', 'atlas_eom_handoff_owner', 'atlas');
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb') THEN
+        EXECUTE format(
+            'REVOKE %I FROM %I',
+            'atlas_eom_handoff_owner',
+            'atlas_nocodb'
+        );
+    END IF;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS eom_first_clean_completion_operation_receipts (
     operation_key VARCHAR(128) PRIMARY KEY,
@@ -193,6 +278,61 @@ CREATE TRIGGER trg_require_eom_first_clean_completion_receipt
     BEFORE INSERT OR UPDATE ON eom_first_clean_completion_receipts
     FOR EACH ROW
     EXECUTE FUNCTION require_eom_first_clean_completion_receipt();
+
+DO $$
+DECLARE
+    schema_name TEXT := current_schema();
+BEGIN
+    ALTER TABLE eom_first_clean_completion_operation_receipts
+        OWNER TO atlas_eom_handoff_owner;
+    ALTER TABLE eom_first_clean_completion_receipts
+        OWNER TO atlas_eom_handoff_owner;
+    ALTER FUNCTION prevent_eom_first_clean_completion_mutation()
+        OWNER TO atlas_eom_handoff_owner;
+    ALTER FUNCTION require_eom_first_clean_completion_operation_scope()
+        OWNER TO atlas_eom_handoff_owner;
+    ALTER FUNCTION require_eom_first_clean_completion_receipt()
+        OWNER TO atlas_eom_handoff_owner;
+
+    -- Clear any inherited/default ACLs before granting only the row-locking
+    -- DML the service actually uses. In particular, do not grant DELETE,
+    -- TRUNCATE, REFERENCES, TRIGGER, or ownership to the runtime.
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_operation_receipts FROM PUBLIC',
+        schema_name
+    );
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_receipts FROM PUBLIC',
+        schema_name
+    );
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_operation_receipts FROM atlas',
+        schema_name
+    );
+    EXECUTE format(
+        'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_receipts FROM atlas',
+        schema_name
+    );
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_nocodb') THEN
+        EXECUTE format(
+            'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_operation_receipts FROM atlas_nocodb',
+            schema_name
+        );
+        EXECUTE format(
+            'REVOKE ALL PRIVILEGES ON TABLE %I.eom_first_clean_completion_receipts FROM atlas_nocodb',
+            schema_name
+        );
+    END IF;
+    EXECUTE format(
+        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_first_clean_completion_operation_receipts TO atlas',
+        schema_name
+    );
+    EXECUTE format(
+        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_first_clean_completion_receipts TO atlas',
+        schema_name
+    );
+END;
+$$;
 
 COMMENT ON TABLE eom_first_clean_completion_operation_receipts IS
     'Globally unique operation-key ownership for EOM first-clean completion reports; retries cannot move a completion to another customer or service.';

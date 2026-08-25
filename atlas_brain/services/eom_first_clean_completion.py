@@ -165,6 +165,129 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                    AND to_regclass('eom_first_clean_completion_operation_receipts')
                        IS NOT NULL
                    AND to_regclass('eom_first_clean_completion_receipts') IS NOT NULL
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_roles AS guard_role
+                        WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+                          AND NOT guard_role.rolcanlogin
+                          AND NOT guard_role.rolinherit
+                          AND NOT guard_role.rolsuper
+                          AND NOT guard_role.rolcreaterole
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_auth_members AS membership
+                         JOIN pg_roles AS member_role
+                           ON member_role.oid = membership.member
+                         JOIN pg_roles AS guard_role
+                           ON guard_role.oid = membership.roleid
+                        WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+                          AND member_role.rolname IN ('atlas', 'atlas_nocodb')
+                   )
+                   AND (
+                       SELECT COUNT(*) = 2
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relkind = 'r'
+                          AND relation.relname IN (
+                              'eom_first_clean_completion_operation_receipts',
+                              'eom_first_clean_completion_receipts'
+                          )
+                          AND relation.relowner = (
+                              SELECT oid
+                                FROM pg_roles
+                               WHERE rolname = 'atlas_eom_handoff_owner'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 6
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname IN (
+                              'eom_first_clean_completion_operation_receipts',
+                              'eom_first_clean_completion_receipts'
+                          )
+                          AND acl.grantee = (
+                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+                          )
+                          AND acl.privilege_type IN ('SELECT', 'INSERT', 'UPDATE')
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname IN (
+                              'eom_first_clean_completion_operation_receipts',
+                              'eom_first_clean_completion_receipts'
+                          )
+                          AND acl.grantee = (
+                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+                          )
+                          AND acl.privilege_type NOT IN ('SELECT', 'INSERT', 'UPDATE')
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                         CROSS JOIN LATERAL aclexplode(
+                             COALESCE(relation.relacl, ARRAY[]::aclitem[])
+                         ) AS acl
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname IN (
+                              'eom_first_clean_completion_operation_receipts',
+                              'eom_first_clean_completion_receipts'
+                          )
+                          AND acl.grantee IN (
+                              0,
+                              (
+                                  SELECT oid
+                                    FROM pg_roles
+                                   WHERE rolname = 'atlas_nocodb'
+                              )
+                          )
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_first_clean_completion_operation_receipts',
+                       'SELECT'
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_first_clean_completion_operation_receipts',
+                       'INSERT'
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_first_clean_completion_operation_receipts',
+                       'UPDATE'
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_first_clean_completion_receipts',
+                       'SELECT'
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_first_clean_completion_receipts',
+                       'INSERT'
+                   )
+                   AND has_table_privilege(
+                       current_user,
+                       'eom_first_clean_completion_receipts',
+                       'UPDATE'
                    AND (
                        SELECT COUNT(*) = 4
                          FROM pg_constraint

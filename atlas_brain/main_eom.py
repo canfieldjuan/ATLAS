@@ -127,21 +127,6 @@ EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS: tuple[str, ...] = (
     "392_eom_commercial_billing_run_fence_schema_binding",
 )
 
-# This receipt route uses the same canonical funnel database as missed-call
-# recovery, but it has a different durable prerequisite chain: it needs the
-# immutable customer handoff in addition to lifecycle and classification state.
-# Keep this separately enumerated so the EOM profile never assumes that the
-# global receivables pool owns customer-completion evidence.
-EOM_FIRST_CLEAN_COMPLETION_READINESS_MIGRATIONS: tuple[str, ...] = (
-    "035_contacts",
-    "256_contact_interaction_dedupe",
-    "346_contact_lead_pipeline",
-    "351_eom_lead_lifecycle_events",
-    "353_eom_customer_handoffs",
-    "366_contacts_customer_type",
-    "394_eom_first_clean_completion_receipts",
-)
-
 
 async def _apply_eom_receivables_migrations(
     pool: Any,
@@ -189,31 +174,6 @@ async def _run_eom_missed_call_recovery_startup_migrations() -> None:
         logger.info(
             "EOM missed-call recovery readiness migrations checked: %s",
             ", ".join(EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS),
-        )
-
-
-async def _apply_eom_first_clean_completion_migrations(
-    pool: Any,
-    run_migrations_fn: MigrationRunner | None = None,
-) -> None:
-    """Apply only the completion receipt's canonical-funnel prerequisites."""
-
-    if run_migrations_fn is None:
-        from .storage.migrations import run_migrations
-
-        runner = run_migrations
-    else:
-        runner = run_migrations_fn
-    await runner(pool, only=EOM_FIRST_CLEAN_COMPLETION_READINESS_MIGRATIONS)
-
-
-async def _run_eom_first_clean_completion_startup_migrations() -> None:
-    pool = get_eom_funnel_db_pool()
-    if pool.is_initialized:
-        await _apply_eom_first_clean_completion_migrations(pool)
-        logger.info(
-            "EOM first-clean completion readiness migrations checked: %s",
-            ", ".join(EOM_FIRST_CLEAN_COMPLETION_READINESS_MIGRATIONS),
         )
 
 
@@ -290,13 +250,12 @@ async def lifespan(app: FastAPI):
         await _validate_eom_funnel_startup()
         if db_settings.enabled and eom_profile_settings.run_migrations:
             await _run_startup_migrations()
-        # Migrations 389 and 393 are additive state and route readiness, not
-        # permission to send customer email or begin a card-on-file flow. A safe
-        # first deployment can therefore establish both durable boundaries while
-        # delivery remains disabled.
+        # Migration 389 is additive state and route readiness, not permission
+        # to send email. A safe first deployment deliberately runs it while
+        # delivery remains disabled so a qualifying operator action records an
+        # inspectable blocked sequence instead of a schema 503.
         if eom_profile_settings.run_migrations:
             await _run_eom_missed_call_recovery_startup_migrations()
-            await _run_eom_first_clean_completion_startup_migrations()
         from .services.eom_missed_call_recovery import (
             prepare_eom_missed_call_recovery_worker,
         )
