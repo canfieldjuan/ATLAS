@@ -19,7 +19,7 @@ can report a structurally present but unusable schema as ready.
   predicate has no privilege check.
 - Correct fix must touch/change: add one forward-only, DBA-only migration after
   389 that assigns recovery-object ownership to `atlas_eom_handoff_owner`,
-  provides the precise `atlas` privileges needed by the recovery service
+  provides the precise configured EOM funnel runtime privileges needed by the recovery service
   (including the `UPDATE` capability required for its `FOR UPDATE` row locks),
   preserves NocoDB's direct denial across table, column, and function ACLs,
   and verifies each CRM-trigger bridge body against migration 389 before making
@@ -84,7 +84,18 @@ Max files: 10
   Finally, migration 393 clears direct definer execution for `atlas_nocodb`
   but not `atlas`; an explicit pre-existing or later `atlas` `EXECUTE` grant
   can bypass the intended CRM-trigger-only path and terminalize arbitrary
-  active sequences.
+  active sequences. The resulting repair still treats the literal role `atlas`
+  as the runtime authority even though missed-call recovery actually runs from
+  the configured EOM funnel connection, whose login can differ. It also leaves
+  the two append-only fence functions and the helper called inside the definer
+  chain owned by migration 389's runtime executor after attesting them; that
+  executor can replace a fence body after the repair and before using the
+  existing mutable-row grants. The two scope-validation trigger functions also
+  remain `SECURITY INVOKER` after their ownership transfer: the restricted
+  runtime must invoke them for recovery writes, but is intentionally not
+  granted direct `SELECT` on `contacts`, which those validators read. Finally,
+  391 and 392 require `pgcrypto`, but the controlled runner selects those
+  historical preludes before migration 393 creates the extension.
 - Required change surface: update only the controlled DBA runner, migration
   393, their existing focused tests, the EOM workflow enrollment, the rollout
   runbook, and this plan. On
@@ -114,12 +125,29 @@ Max files: 10
   revoke direct `EXECUTE` from `atlas` on all six definer helpers, and readiness
   must reject an admitted runtime role that regains direct execution on any of
   them; tests must prove the migration clears all six and the probe rejects then
-  re-admits one runtime-role grant/revoke boundary.
+  re-admits one runtime-role grant/revoke boundary. The controlled runner must
+  derive the EOM runtime login from the configured EOM funnel DSN without
+  exposing its credentials, install `pgcrypto` through the already-admitted DBA
+  connection before an authorized 390-392 prelude can run, and bind that exact
+  login into the migration session. Migration 393 must validate the configured
+  login as an unprivileged, guard-isolated runtime role, revoke stale recovery
+  table ACLs from it (and from a present legacy `atlas` role), remove every
+  non-guard direct `EXECUTE` grant from the definer helpers, and grant only that
+  configured login. It must attest and transfer every guard-critical recovery
+  function--the CRM bridge, all append-only fences, scope validators, and the
+  nested inbound-SMS helper--to the no-login guard before granting runtime
+  access. The two scope validators must run as guard-owned `SECURITY DEFINER`
+  functions with the fixed schema search path, so the restricted runtime can
+  invoke its existing recovery-table triggers without a direct `contacts`
+  grant. Readiness must reject a missing/incorrect owner or validator definer
+  configuration on that exact guard-function set. Tests must prove a non-default
+  configured runtime receives the allowed surface, owner/validator-authority
+  drift rejects readiness, and `pgcrypto` setup precedes every selected prelude.
 - Explicit non-scope: do not alter migration 389, the generic migration runner,
-  the slim startup tuple, database schema, role memberships, service routes,
-  delivery behavior, PostgreSQL CI image, or production state. Do not reapply
-  389 from the DBA runner and do not let the normal `atlas` runtime execute
-  390-393.
+  the slim startup tuple, application connection-pool configuration, database
+  schema, role memberships, service routes, delivery behavior, PostgreSQL CI
+  image, or production state. Do not reapply 389 from the DBA runner and do not
+  let the normal runtime execute 390-393.
 - Assumption/blocker: migration 393 remains unrecorded until this source repair
   is merged and a DBA follows the runbook. The existing migration ledger and
   reconciliation selector remain authoritative for whether an exact historical
@@ -137,28 +165,38 @@ Max files: 10
 - Acceptance criteria:
   1. The new migration is forward-only and DBA-gated; it keeps the existing
      no-login, membership-isolated guard model, transfers all six recovery
-     tables plus the privileged CRM-trigger functions to that guard, clears
-     stale table/column/function ACLs, and refuses to grant mutable evidence
-     access unless the exact append-only trigger bindings and trusted migration-
-     389 function bodies are intact. It also leaves neither NocoDB nor the
-     runtime role with direct `EXECUTE` on the six definer helpers.
-  2. After applying the migration in a disposable schema, the runtime role has
+     tables plus every guard-critical bridge, fence, validator, and nested
+     definer-chain helper to that guard, makes the two CRM-reading scope
+     validators guard-owned `SECURITY DEFINER` functions with a fixed search
+     path, clears stale table/column/function
+     ACLs, and refuses to grant mutable evidence access unless the exact
+     append-only trigger bindings and trusted migration-389 function bodies are
+     intact. It also leaves neither NocoDB nor the configured runtime role with
+     direct `EXECUTE` on the six definer helpers.
+  2. The controlled DBA runner derives the EOM runtime login from the configured
+     funnel DSN without logging its credentials, installs `pgcrypto` before an
+     allowed historical prelude, and binds that login to migration 393. The
+     migration fails closed if that role is absent, elevated, or has guard
+     membership; it does not assume a literal `atlas` login exists.
+  3. After applying the migration in a disposable schema, the configured runtime
+     role has
      the exact required table privileges: read/insert/lock for receipts and
      attempts, read/insert for suppressions/events, and read/insert/update for
      sequences/steps. `tests/test_eom_missed_call_recovery.py` proves the real
      role can perform the service's locked read and mutations.
-  3. `atlas_nocodb` cannot directly select, insert, update, or delete recovery
+  4. `atlas_nocodb` cannot directly select, insert, update, or delete recovery
      tables, but an allowed CRM-table mutation still reaches the guarded trigger
      and terminalizes affected recovery work. The same disposable-Postgres test
      proves both sides.
-  4. `missed_call_recovery_schema_ready` returns false for a structurally
+  5. `missed_call_recovery_schema_ready` returns false for a structurally
      complete schema with missing or extra runtime ACLs, runtime guard
      membership, a disabled/rebound immutable-evidence trigger, or an untrusted
      NocoDB direct path; it returns true only after the migration establishes
-     the expected privilege/guard properties and rejects either replaced
-     receipt/attempt fence body. The integration test settles the effect through
-     the real query.
-  5. `EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS` excludes DBA-only and
+     the expected privilege/guard properties, rejects any guard-function owner
+     or scope-validator authority drift, and rejects either replaced
+     receipt/attempt fence body. The
+     integration test settles the effect through the real query.
+  6. `EOM_MISSED_CALL_RECOVERY_READINESS_MIGRATIONS` excludes DBA-only and
      historical recovery SQL. The dedicated DBA runner defaults to a redacted,
      read-only preflight that reports the three historical-prelude receipts plus
      migration 389/393. With `--apply`, it first gives the existing selector
@@ -170,7 +208,7 @@ Max files: 10
      runtime `UPDATE`, retries only a ledger-advancing historical-progress stop,
      and is enrolled with the controlled-runner proof in the EOM workflow. The
      corresponding source and disposable-Postgres tests settle both boundaries.
-  6. No route, provider, delivery configuration, email copy, booking state, or
+  7. No route, provider, delivery configuration, email copy, booking state, or
      recorded recovery evidence changes. Settled by the focused existing
      recovery test suite and a cold diff audit.
 - Reachability proof: the service calls `missed_call_recovery_schema_ready`
@@ -195,10 +233,12 @@ Required when this diff changes a guard, validator, normalizer, resolver,
 router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
-- Boundary path/seam: `atlas` service role -> recovery tables; `atlas`/NocoDB
-  direct function execution -> guarded CRM-trigger functions; startup probe ->
-  worker admission; protected DBA DSN -> exact 390-392 historical prelude ->
-  recorded migration 389 -> recorded migration 393 -> normal runtime startup.
+- Boundary path/seam: configured EOM funnel service role -> recovery tables;
+  configured-runtime/NocoDB direct function execution -> guarded CRM-trigger
+  functions; runtime-owned guard function -> immutable/scope/definer chain;
+  startup probe -> worker admission; protected DBA DSN -> `pgcrypto` -> exact
+  390-392 historical prelude -> recorded migration 389 -> recorded migration
+  393 -> normal runtime startup.
 - Replaced-path behaviors: previously a table's mere existence admitted the
   worker; after this change only structural presence plus usable runtime ACLs
   and guarded trigger properties admit it. Previously the DBA runner could not
@@ -207,17 +247,20 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   set to the existing selector, requires the 389 receipt before 393, and
   rejects bridge and mutable-evidence fence bodies outside the migration-389
   allowlist before elevation or runtime `UPDATE`, and removes/rejects direct
-  runtime execution of the definer helpers. A committed historical prelude's
-  expected integrity stop now continues only when the ledger proves that exact
-  prelude advanced.
+  runtime execution of the definer helpers. The configured EOM funnel role now
+  receives the exact ACL, every guard-critical function is guard-owned, and the
+  DBA runner establishes `pgcrypto` before it can select a historical prelude.
+  A committed historical prelude's expected integrity stop now continues only
+  when the ledger proves that exact prelude advanced.
 - Guard-relevant fields: table/column/function ACL, table owner, function owner,
-  `prosecdef`, function `search_path`, trusted bridge/fence function-body
-  SHA-256 or source body, trigger identity/enabled state, role
-  login/inheritance/membership properties, the six recovery table names,
-  installed `pgcrypto` extension, and the 390-393 ledger receipts.
-- Caller x input shape: `atlas` executes its existing service SQL; NocoDB only
-  performs its documented contacts/contact-interactions mutations. Neither
-  caller receives a new public route or payload shape.
+  `prosecdef`, function `search_path`, trusted bridge/fence/validator/helper
+  function-body SHA-256 or source body, trigger identity/enabled state, role
+  login/inheritance/membership properties, the configured EOM funnel DSN user,
+  the six recovery table names, installed `pgcrypto` extension, and the 390-393
+  ledger receipts.
+- Caller x input shape: the configured EOM funnel runtime executes its existing
+  service SQL; NocoDB only performs its documented contacts/contact-interactions
+  mutations. Neither caller receives a new public route or payload shape.
 
 ### Deployed-config probing
 
@@ -260,21 +303,21 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 ## Mechanism
 
-The migration validates that a DBA is applying it and that
-`atlas_eom_handoff_owner` remains a no-login, membership-isolated guard. Before
-it changes any bridge function's authority or grants runtime `UPDATE`, it
-compares the six bridge and two mutable-evidence fence bodies against trusted
-migration-389 source. After the DBA-only role checks but before this digest
-check, it installs
-the stock PostgreSQL `pgcrypto` extension when absent and reads its actual
-installed schema; the focused integration test deliberately begins without
-that extension and observes the migration establish it. It then moves recovery
-tables and the CRM-trigger execution chain under that guard, sets trusted
-trigger functions to `SECURITY DEFINER` with a fixed schema search path, clears
-public/NocoDB/runtime table and column ACLs plus explicit NocoDB function
-execution, and then grants the runtime only its proven SQL surface. It refuses
-to proceed unless the receipt/attempt append-only triggers are still enabled,
-bound to their rejecting functions, and retain their trusted bodies.
+The controlled runner reads the configured EOM funnel DSN only to derive its
+username, never logs that DSN, and binds the role into each selected migration
+connection. After the DBA admission and before any selected historical prelude,
+it establishes `pgcrypto`. Migration 393 validates that the configured login is
+an unprivileged, guard-isolated runtime and that `atlas_eom_handoff_owner`
+remains a no-login, membership-isolated guard. Before it changes any bridge
+function's authority or grants runtime `UPDATE`, it compares every guard-critical
+bridge, fence, validator, and nested helper body against trusted migration-389
+source. It then moves recovery tables and every such function under that guard,
+  sets the six CRM-trigger bridge functions and two CRM-reading scope validators
+  to `SECURITY DEFINER` with a fixed schema search path, clears public/NocoDB/runtime table and column ACLs plus
+explicit NocoDB/runtime definer execution, and grants only the configured runtime
+its proven SQL surface. It refuses to proceed unless the receipt/attempt
+append-only triggers are still enabled, bound to their rejecting functions, and
+retain their trusted bodies.
 
 The service's existing structural probe becomes an admission predicate for that
 same privilege/guard contract, so a partial, over-privileged, trigger-drifted,
@@ -347,15 +390,15 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 11 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 218 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 568 |
-| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 66 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 366 |
-| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 293 |
-| `tests/test_eom_missed_call_privilege_runner.py` | 403 |
-| `tests/test_eom_missed_call_recovery.py` | 953 |
-| `tests/test_eom_render_profile.py` | 3 |
-| **Total** | **2888** |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 253 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 753 |
+| `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 409 |
+| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 356 |
+| `tests/test_eom_missed_call_privilege_runner.py` | 492 |
+| `tests/test_eom_missed_call_recovery.py` | 1187 |
+| `tests/test_eom_render_profile.py` | 7 |
+| **Total** | **3551** |
 
 ## Diff size rationale
 

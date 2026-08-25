@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 import sys
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +32,8 @@ from atlas_brain.storage.migrations import (  # noqa: E402
 
 
 DEFAULT_DSN_ENV = "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL"
+DEFAULT_RUNTIME_DATABASE_URL_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
+RUNTIME_ROLE_SETTING = "atlas.eom_missed_call_recovery_runtime_role"
 PREREQUISITE_MIGRATION_NAME = "389_eom_missed_call_recovery"
 MIGRATION_NAME = "393_eom_missed_call_recovery_runtime_privileges"
 HISTORICAL_PRELUDE_MIGRATION_NAMES: tuple[str, ...] = (
@@ -44,8 +46,7 @@ HISTORICAL_PRELUDE_MIGRATION_NAMES: tuple[str, ...] = (
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Preflight or apply the DBA-only EOM missed-call recovery "
-            "privilege repair."
+            "Preflight or apply the DBA-only EOM missed-call recovery privilege repair."
         )
     )
     parser.add_argument(
@@ -62,6 +63,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Apply an exact historical EOM recovery prelude if required, then "
             "run migration 393 after the read-only DBA preflight."
+        ),
+    )
+    parser.add_argument(
+        "--runtime-database-url-env",
+        default=DEFAULT_RUNTIME_DATABASE_URL_ENV,
+        help=(
+            "Environment variable holding the configured EOM funnel PostgreSQL "
+            "DSN; its username selects the runtime role granted by migration 393 "
+            f"(default: {DEFAULT_RUNTIME_DATABASE_URL_ENV})."
         ),
     )
     parser.add_argument(
@@ -85,6 +95,18 @@ def _safe_target_label(database_url: str) -> str:
         return "dsn=<configured>"
 
 
+def _runtime_role_from_database_url(database_url: str) -> str:
+    """Extract the configured EOM runtime login without retaining its DSN."""
+
+    try:
+        runtime_role = unquote(urlsplit(database_url).username or "").strip()
+    except ValueError as exc:
+        raise RuntimeError("Configured EOM runtime DSN is invalid") from exc
+    if not runtime_role:
+        raise RuntimeError("Configured EOM runtime DSN must include a username")
+    return runtime_role
+
+
 async def _create_pool(database_url: str) -> Any:
     try:
         import asyncpg
@@ -93,6 +115,37 @@ async def _create_pool(database_url: str) -> Any:
             "asyncpg is required to run the DBA migration preflight"
         ) from exc
     return await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
+
+
+class _RuntimeRoleMigrationPool:
+    """Bind the configured runtime role to every controlled migration session."""
+
+    def __init__(self, pool: Any, runtime_role: str) -> None:
+        self._pool = pool
+        self._runtime_role = runtime_role
+
+    async def acquire(self) -> Any:
+        connection = await self._pool.acquire()
+        try:
+            await connection.execute(
+                "SELECT pg_catalog.set_config($1, $2, FALSE)",
+                RUNTIME_ROLE_SETTING,
+                self._runtime_role,
+            )
+        except Exception:
+            await self._pool.release(connection)
+            raise
+        return connection
+
+    async def release(self, connection: Any) -> None:
+        await self._pool.release(connection)
+
+
+async def _ensure_pgcrypto(pool: Any) -> None:
+    """Establish the historical-prelude SHA-256 dependency under the DBA DSN."""
+
+    async with pool.acquire() as connection:
+        await connection.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
 
 async def _migration_state(
@@ -154,6 +207,7 @@ async def _migration_state(
 async def _apply_required_historical_prelude(
     pool: Any,
     *,
+    migration_pool: Any,
     run_migrations_fn: Callable[..., Awaitable[None]],
 ) -> None:
     """Apply at most the three explicitly authorized historical EOM preludes.
@@ -169,7 +223,7 @@ async def _apply_required_historical_prelude(
         _, _, _, _, before = await _migration_state(pool)
         try:
             await run_migrations_fn(
-                pool,
+                migration_pool,
                 only=HISTORICAL_PRELUDE_MIGRATION_NAMES,
             )
         except PendingMigrationContentIntegrityError:
@@ -186,8 +240,7 @@ async def _apply_required_historical_prelude(
             continue
         _, _, _, _, after = await _migration_state(pool)
         if all(
-            after[name] == before[name]
-            for name in HISTORICAL_PRELUDE_MIGRATION_NAMES
+            after[name] == before[name] for name in HISTORICAL_PRELUDE_MIGRATION_NAMES
         ):
             return
 
@@ -201,11 +254,18 @@ async def _run(
     database_url = os.environ.get(args.database_url_env, "").strip()
     if not database_url:
         raise RuntimeError(
-            "Missing protected DBA DSN environment variable "
-            f"{args.database_url_env}"
+            f"Missing protected DBA DSN environment variable {args.database_url_env}"
         )
+    runtime_database_url = os.environ.get(args.runtime_database_url_env, "").strip()
+    if not runtime_database_url:
+        raise RuntimeError(
+            "Missing configured EOM runtime DSN environment variable "
+            f"{args.runtime_database_url_env}"
+        )
+    runtime_role = _runtime_role_from_database_url(runtime_database_url)
 
     pool = await create_pool(database_url)
+    migration_pool = _RuntimeRoleMigrationPool(pool, runtime_role)
     try:
         (
             executor_is_superuser,
@@ -217,6 +277,7 @@ async def _run(
         result: dict[str, object] = {
             "target": _safe_target_label(database_url),
             "executor_is_superuser": executor_is_superuser,
+            "runtime_role": runtime_role,
             "historical_prelude_migrations": historical_prelude_migration_records,
             "prerequisite_migration": PREREQUISITE_MIGRATION_NAME,
             "prerequisite_migration_recorded": prerequisite_migration_recorded,
@@ -230,8 +291,10 @@ async def _run(
                 "refusing to run the privilege repair"
             )
         if args.apply and migrations_table_exists and not migration_recorded:
+            await _ensure_pgcrypto(pool)
             await _apply_required_historical_prelude(
                 pool,
+                migration_pool=migration_pool,
                 run_migrations_fn=run_migrations_fn,
             )
             (
@@ -250,7 +313,7 @@ async def _run(
                 "run the slim EOM bootstrap before the privilege repair"
             )
         if args.apply and not migration_recorded:
-            await run_migrations_fn(pool, only=(MIGRATION_NAME,))
+            await run_migrations_fn(migration_pool, only=(MIGRATION_NAME,))
             (
                 _,
                 _,

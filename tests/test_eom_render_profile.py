@@ -1823,7 +1823,7 @@ def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatc
     class _Pool:
         is_initialized = True
 
-        async def fetchval(self, query: str) -> bool:
+        async def fetchval(self, query: str, *_args: object) -> bool:
             events.append("datastore-check")
             return True
 
@@ -2224,7 +2224,7 @@ class _ReadyPool:
         self.queries = []
         self.closed = 0
 
-    async def fetchval(self, query):
+    async def fetchval(self, query, *_args):
         self.queries.append(query)
         return True
 

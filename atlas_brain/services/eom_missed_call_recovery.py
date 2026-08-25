@@ -65,6 +65,31 @@ _TRACKED_RESPONSE_INTERACTIONS = frozenset(
 # with one globally unique operation key, so a retry can never move to another
 # lead or mutation kind after an interrupted browser request.
 _OPERATION_KINDS = frozenset({"no_answer", "resume", "cancel"})
+_MISSED_CALL_RECOVERY_GUARD_FUNCTION_SIGNATURES = (
+    "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)",
+    "lock_eom_missed_call_interaction_contact()",
+    "eom_missed_call_effective_recipient(UUID, TEXT)",
+    "cancel_eom_missed_call_on_recipient_change(UUID)",
+    "cancel_eom_missed_call_on_contact_change()",
+    "cancel_eom_missed_call_on_interaction()",
+    "prevent_eom_missed_call_operation_receipt_mutation()",
+    "prevent_eom_missed_call_attempt_mutation()",
+    "prevent_eom_missed_call_sequence_event_mutation()",
+    "prevent_eom_missed_call_suppression_mutation()",
+    "validate_eom_missed_call_contact_scope()",
+    "validate_eom_missed_call_sequence_scope()",
+    "eom_missed_call_has_proven_inbound_sms(JSONB)",
+)
+_MISSED_CALL_RECOVERY_DEFINER_FUNCTION_SIGNATURES = (
+    "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)",
+    "lock_eom_missed_call_interaction_contact()",
+    "eom_missed_call_effective_recipient(UUID, TEXT)",
+    "cancel_eom_missed_call_on_recipient_change(UUID)",
+    "cancel_eom_missed_call_on_contact_change()",
+    "cancel_eom_missed_call_on_interaction()",
+    "validate_eom_missed_call_contact_scope()",
+    "validate_eom_missed_call_sequence_scope()",
+)
 
 
 class EOMMissedCallRecoveryError(Exception):
@@ -588,6 +613,19 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                        JOIN pg_language AS language_state
                          ON language_state.oid = procedure.prolang
                    )
+                   AND (
+                       SELECT COUNT(*) = cardinality($1::text[])
+                          AND BOOL_AND(
+                              function_owner.rolname = 'atlas_eom_handoff_owner'
+                          )
+                       FROM unnest($1::text[]) AS expected_function(signature)
+                       JOIN pg_proc AS procedure
+                         ON procedure.oid = to_regprocedure(
+                             format('%I.%s', current_schema(), expected_function.signature)
+                         )
+                       JOIN pg_roles AS function_owner
+                         ON function_owner.oid = procedure.proowner
+                   )
                    AND EXISTS (
                        SELECT 1 FROM pg_trigger AS trigger
                        WHERE trigger.tgrelid = 'contacts'::regclass
@@ -622,7 +660,7 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                          AND NOT trigger.tgisinternal
                    )
                    AND (
-                       SELECT COUNT(*) = 6
+                       SELECT COUNT(*) = cardinality($2::text[])
                           AND BOOL_AND(
                               procedure.prosecdef
                               AND function_owner.rolname = 'atlas_eom_handoff_owner'
@@ -642,25 +680,20 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                                   current_user, procedure.oid, 'EXECUTE'
                               )
                           )
-                       FROM pg_proc AS procedure
-                       JOIN pg_namespace AS function_namespace
-                         ON function_namespace.oid = procedure.pronamespace
+                       FROM unnest($2::text[]) AS expected_function(signature)
+                       JOIN pg_proc AS procedure
+                         ON procedure.oid = to_regprocedure(
+                             format('%I.%s', current_schema(), expected_function.signature)
+                         )
                        JOIN pg_roles AS function_owner
                          ON function_owner.oid = procedure.proowner
-                      WHERE function_namespace.nspname = current_schema()
-                        AND procedure.proname = ANY (ARRAY[
-                            'cancel_eom_missed_call_sequences_for_contact',
-                            'lock_eom_missed_call_interaction_contact',
-                            'eom_missed_call_effective_recipient',
-                            'cancel_eom_missed_call_on_recipient_change',
-                            'cancel_eom_missed_call_on_contact_change',
-                            'cancel_eom_missed_call_on_interaction'
-                        ])
                    )
                    AND to_regprocedure(
                        'eom_missed_call_has_proven_inbound_sms(jsonb)'
                    ) IS NOT NULL
-                """
+                """,
+                _MISSED_CALL_RECOVERY_GUARD_FUNCTION_SIGNATURES,
+                _MISSED_CALL_RECOVERY_DEFINER_FUNCTION_SIGNATURES,
             )
         )
     except Exception:

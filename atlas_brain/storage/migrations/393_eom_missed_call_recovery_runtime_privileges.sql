@@ -14,6 +14,15 @@
 DO $$
 DECLARE
     schema_name TEXT := current_schema();
+    runtime_role TEXT := NULLIF(
+        btrim(
+            pg_catalog.current_setting(
+                'atlas.eom_missed_call_recovery_runtime_role',
+                TRUE
+            )
+        ),
+        ''
+    );
     executor_is_superuser BOOLEAN;
     trusted_guard_role_ready BOOLEAN;
     runtime_role_ready BOOLEAN;
@@ -21,6 +30,7 @@ DECLARE
     relation_name TEXT;
     column_name TEXT;
     function_signature TEXT;
+    acl_role TEXT;
     expected_function_language TEXT;
     expected_function_body_sha256 TEXT;
     observed_function_language TEXT;
@@ -67,17 +77,37 @@ BEGIN
             'atlas_eom_handoff_owner must be a no-login, membership-isolated guard role before running 393_eom_missed_call_recovery_runtime_privileges';
     END IF;
 
+    IF runtime_role IS NULL THEN
+        RAISE EXCEPTION
+            'configured EOM runtime role is required before running 393_eom_missed_call_recovery_runtime_privileges';
+    END IF;
+
     SELECT EXISTS (
         SELECT 1
-          FROM pg_catalog.pg_roles AS runtime_role
-         WHERE runtime_role.rolname = 'atlas'
-           AND runtime_role.rolcanlogin
+          FROM pg_catalog.pg_roles AS runtime_role_state
+         WHERE runtime_role_state.rolname = runtime_role
+           AND runtime_role_state.rolcanlogin
+           AND runtime_role_state.rolname <> 'atlas_nocodb'
+           AND NOT runtime_role_state.rolsuper
+           AND NOT runtime_role_state.rolcreaterole
+           AND NOT runtime_role_state.rolcreatedb
+           AND NOT runtime_role_state.rolreplication
+           AND NOT runtime_role_state.rolbypassrls
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM pg_catalog.pg_auth_members AS membership
+                 JOIN pg_catalog.pg_roles AS guard_role
+                   ON guard_role.oid = membership.roleid
+                WHERE membership.member = runtime_role_state.oid
+                  AND guard_role.rolname = 'atlas_eom_handoff_owner'
+           )
     )
       INTO runtime_role_ready;
 
     IF NOT runtime_role_ready THEN
         RAISE EXCEPTION
-            'atlas must be a login runtime role before running 393_eom_missed_call_recovery_runtime_privileges';
+            'configured EOM runtime role % must be an unprivileged, guard-isolated login before running 393_eom_missed_call_recovery_runtime_privileges',
+            runtime_role;
     END IF;
 
     SELECT EXISTS (
@@ -194,10 +224,9 @@ BEGIN
         END IF;
     END LOOP;
 
-    -- The runtime receives UPDATE on these two append-only tables only to take
-    -- existing FOR UPDATE locks. PostgreSQL preserves a trigger function's OID
-    -- across CREATE OR REPLACE FUNCTION, so the trigger binding below cannot
-    -- prove that its body still rejects mutations by itself.
+    -- PostgreSQL preserves a trigger function's OID across CREATE OR REPLACE
+    -- FUNCTION, so trigger bindings cannot prove that their bodies still
+    -- enforce the recovery append-only boundary by themselves.
     FOR function_signature, expected_function_language, expected_function_body_sha256 IN
         SELECT expected_function.signature,
                expected_function.language_name,
@@ -213,6 +242,16 @@ BEGIN
                       'prevent_eom_missed_call_attempt_mutation()',
                       'plpgsql',
                       '7647fbfe7a9642e0434e0a0e3930aa221f6d93323205cd0633ba809cf31c579d'
+                  ),
+                  (
+                      'prevent_eom_missed_call_sequence_event_mutation()',
+                      'plpgsql',
+                      '3f88a357faf419060b4c01046a49e06be87302e573fe831f8ab1f5c9dfe072a4'
+                  ),
+                  (
+                      'prevent_eom_missed_call_suppression_mutation()',
+                      'plpgsql',
+                      'eb3762cb1c676d7527d3637c8850920c2f486dd30b34a6ca541f77072c618528'
                   )
           ) AS expected_function(signature, language_name, body_sha256)
     LOOP
@@ -242,6 +281,62 @@ BEGIN
         IF observed_function_body_sha256 IS DISTINCT FROM expected_function_body_sha256 THEN
             RAISE EXCEPTION
                 'required EOM missed-call append-only fence function % does not match its trusted migration-389 body',
+                function_signature;
+        END IF;
+    END LOOP;
+
+    -- Scope validators run on every recovery write, and the inbound-SMS helper
+    -- runs inside a SECURITY DEFINER CRM trigger. They therefore share the
+    -- guard boundary even though they are not independently security-definer.
+    FOR function_signature, expected_function_language, expected_function_body_sha256 IN
+        SELECT expected_function.signature,
+               expected_function.language_name,
+               expected_function.body_sha256
+          FROM (
+              VALUES
+                  (
+                      'validate_eom_missed_call_contact_scope()',
+                      'plpgsql',
+                      '685cbc52f37986f0603795132bd1f71962f40912e3e294194f08ade00174fad9'
+                  ),
+                  (
+                      'validate_eom_missed_call_sequence_scope()',
+                      'plpgsql',
+                      '7d6e532059f3a7862eb8fe339c0166766d7188c71e71526c49f65fd25395152d'
+                  ),
+                  (
+                      'eom_missed_call_has_proven_inbound_sms(JSONB)',
+                      'sql',
+                      '8e988b596b85d2e62de3cfb2f49ec6463b8a38116855809db78801c735890567'
+                  )
+          ) AS expected_function(signature, language_name, body_sha256)
+    LOOP
+        SELECT procedure.prosrc, language_state.lanname
+          INTO observed_function_body, observed_function_language
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_language AS language_state
+            ON language_state.oid = procedure.prolang
+         WHERE procedure.oid = pg_catalog.to_regprocedure(
+                   format('%I.%s', schema_name, function_signature)
+               );
+
+        IF observed_function_body IS NULL
+           OR observed_function_language IS DISTINCT FROM expected_function_language THEN
+            RAISE EXCEPTION
+                'required EOM missed-call guard function % is not the trusted migration-389 function',
+                function_signature;
+        END IF;
+
+        EXECUTE format(
+            'SELECT encode(%1$I.digest($1::text, ''sha256''), ''hex'')',
+            pgcrypto_schema
+        )
+          INTO observed_function_body_sha256
+          USING observed_function_body;
+
+        IF observed_function_body_sha256 IS DISTINCT FROM expected_function_body_sha256 THEN
+            RAISE EXCEPTION
+                'required EOM missed-call guard function % does not match its trusted migration-389 body',
                 function_signature;
         END IF;
     END LOOP;
@@ -342,13 +437,22 @@ BEGIN
             schema_name,
             relation_name
         );
-        -- Rebuild the runtime allowlist below rather than preserving a stale
-        -- DBA-era direct grant such as DELETE after ownership changes.
-        EXECUTE format(
-            'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM atlas',
-            schema_name,
-            relation_name
-        );
+        -- Rebuild the configured-runtime allowlist below rather than preserving
+        -- a stale DBA-era direct grant such as DELETE after ownership changes.
+        -- Clear the legacy default only when it exists so a deployment whose
+        -- configured runtime has another name does not require an `atlas` role.
+        FOR acl_role IN
+            SELECT role_state.rolname
+              FROM pg_catalog.pg_roles AS role_state
+             WHERE role_state.rolname IN ('atlas', runtime_role)
+        LOOP
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM %I',
+                schema_name,
+                relation_name,
+                acl_role
+            );
+        END LOOP;
         -- Table and column ACLs are separate PostgreSQL catalogs. Rebuild the
         -- entire direct access surface so an old column grant cannot survive
         -- the table-level revoke and expose recovery evidence to NocoDB.
@@ -373,17 +477,46 @@ BEGIN
                 schema_name,
                 relation_name
             );
-            EXECUTE format(
-                'REVOKE ALL PRIVILEGES (%I) ON TABLE %I.%I FROM atlas',
-                column_name,
-                schema_name,
-                relation_name
-            );
+            FOR acl_role IN
+                SELECT role_state.rolname
+                  FROM pg_catalog.pg_roles AS role_state
+                 WHERE role_state.rolname IN ('atlas', runtime_role)
+            LOOP
+                EXECUTE format(
+                    'REVOKE ALL PRIVILEGES (%I) ON TABLE %I.%I FROM %I',
+                    column_name,
+                    schema_name,
+                    relation_name,
+                    acl_role
+                );
+            END LOOP;
         END LOOP;
         EXECUTE format(
             'ALTER TABLE %I.%I OWNER TO atlas_eom_handoff_owner',
             schema_name,
             relation_name
+        );
+    END LOOP;
+
+    -- The remaining recovery functions either enforce immutable/scope fences
+    -- or execute inside the definer chain. A normal runtime owner could replace
+    -- one after this migration, so transfer every attested function before any
+    -- runtime grant is rebuilt.
+    FOR function_signature IN
+        SELECT unnest(ARRAY[
+            'prevent_eom_missed_call_operation_receipt_mutation()',
+            'prevent_eom_missed_call_attempt_mutation()',
+            'prevent_eom_missed_call_sequence_event_mutation()',
+            'prevent_eom_missed_call_suppression_mutation()',
+            'validate_eom_missed_call_contact_scope()',
+            'validate_eom_missed_call_sequence_scope()',
+            'eom_missed_call_has_proven_inbound_sms(JSONB)'
+        ])
+    LOOP
+        EXECUTE format(
+            'ALTER FUNCTION %I.%s OWNER TO atlas_eom_handoff_owner',
+            schema_name,
+            function_signature
         );
     END LOOP;
 
@@ -397,6 +530,33 @@ BEGIN
         'GRANT SELECT ON TABLE %I.contact_interactions TO atlas_eom_handoff_owner',
         schema_name
     );
+
+    -- These table-trigger validators must read contacts while the configured
+    -- runtime writes recovery rows. Keep that CRM read under the no-login guard
+    -- rather than widening the runtime's direct CRM-table access.
+    FOR function_signature IN
+        SELECT unnest(ARRAY[
+            'validate_eom_missed_call_contact_scope()',
+            'validate_eom_missed_call_sequence_scope()'
+        ])
+    LOOP
+        EXECUTE format(
+            'ALTER FUNCTION %I.%s SECURITY DEFINER',
+            schema_name,
+            function_signature
+        );
+        EXECUTE format(
+            'ALTER FUNCTION %I.%s SET search_path = pg_catalog, %I, pg_temp',
+            schema_name,
+            function_signature,
+            schema_name
+        );
+        EXECUTE format(
+            'REVOKE ALL ON FUNCTION %I.%s FROM PUBLIC',
+            schema_name,
+            function_signature
+        );
+    END LOOP;
 
     -- These six functions are the only recovery helpers reached from CRM table
     -- triggers. Run them as the isolated owner with a deterministic search path
@@ -510,9 +670,9 @@ BEGIN
         schema_name
     );
 
-    -- REVOKE FROM PUBLIC does not remove an explicit old NocoDB or runtime
-    -- EXECUTE grant. Clear both direct paths on all SECURITY DEFINER bridge
-    -- helpers; CRM table triggers remain the only supported invocation path.
+    -- REVOKE FROM PUBLIC does not remove an explicit role grant. Rebuild the
+    -- complete direct-execution deny surface on every SECURITY DEFINER helper;
+    -- CRM table triggers remain the only supported invocation path.
     FOR function_signature IN
         SELECT unnest(ARRAY[
             'cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)',
@@ -520,49 +680,74 @@ BEGIN
             'eom_missed_call_effective_recipient(UUID, TEXT)',
             'cancel_eom_missed_call_on_recipient_change(UUID)',
             'cancel_eom_missed_call_on_contact_change()',
-            'cancel_eom_missed_call_on_interaction()'
+            'cancel_eom_missed_call_on_interaction()',
+            'validate_eom_missed_call_contact_scope()',
+            'validate_eom_missed_call_sequence_scope()'
         ])
     LOOP
-        EXECUTE format(
-            'REVOKE ALL ON FUNCTION %I.%s FROM atlas_nocodb',
-            schema_name,
-            function_signature
-        );
-        EXECUTE format(
-            'REVOKE ALL ON FUNCTION %I.%s FROM atlas',
-            schema_name,
-            function_signature
-        );
+        FOR acl_role IN
+            SELECT grantee_role.rolname
+              FROM pg_catalog.pg_proc AS procedure
+              JOIN pg_catalog.pg_namespace AS function_namespace
+                ON function_namespace.oid = procedure.pronamespace
+              CROSS JOIN LATERAL pg_catalog.aclexplode(
+                  COALESCE(
+                      procedure.proacl,
+                      pg_catalog.acldefault('f', procedure.proowner)
+                  )
+              ) AS function_acl
+              JOIN pg_catalog.pg_roles AS grantee_role
+                ON grantee_role.oid = function_acl.grantee
+             WHERE function_namespace.nspname = schema_name
+               AND procedure.oid = pg_catalog.to_regprocedure(
+                   format('%I.%s', schema_name, function_signature)
+               )
+               AND function_acl.privilege_type = 'EXECUTE'
+               AND grantee_role.rolname <> 'atlas_eom_handoff_owner'
+        LOOP
+            EXECUTE format(
+                'REVOKE ALL ON FUNCTION %I.%s FROM %I',
+                schema_name,
+                function_signature,
+                acl_role
+            );
+        END LOOP;
     END LOOP;
 
     -- Direct runtime access intentionally remains narrower than object owner
     -- access. UPDATE on immutable receipt/attempt rows is required for the
     -- existing SELECT ... FOR UPDATE locks; their append-only triggers reject
     -- any attempted data mutation.
-    EXECUTE format('GRANT USAGE ON SCHEMA %I TO atlas', schema_name);
+    EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', schema_name, runtime_role);
     EXECUTE format(
-        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_operation_receipts TO atlas',
-        schema_name
+        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_operation_receipts TO %I',
+        schema_name,
+        runtime_role
     );
     EXECUTE format(
-        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_attempts TO atlas',
-        schema_name
+        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_attempts TO %I',
+        schema_name,
+        runtime_role
     );
     EXECUTE format(
-        'GRANT SELECT, INSERT ON TABLE %I.eom_missed_call_contact_suppressions TO atlas',
-        schema_name
+        'GRANT SELECT, INSERT ON TABLE %I.eom_missed_call_contact_suppressions TO %I',
+        schema_name,
+        runtime_role
     );
     EXECUTE format(
-        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_sequences TO atlas',
-        schema_name
+        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_sequences TO %I',
+        schema_name,
+        runtime_role
     );
     EXECUTE format(
-        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_sequence_steps TO atlas',
-        schema_name
+        'GRANT SELECT, INSERT, UPDATE ON TABLE %I.eom_missed_call_sequence_steps TO %I',
+        schema_name,
+        runtime_role
     );
     EXECUTE format(
-        'GRANT SELECT, INSERT ON TABLE %I.eom_missed_call_sequence_events TO atlas',
-        schema_name
+        'GRANT SELECT, INSERT ON TABLE %I.eom_missed_call_sequence_events TO %I',
+        schema_name,
+        runtime_role
     );
 END;
 $$;

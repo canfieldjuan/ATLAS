@@ -35,6 +35,7 @@ appointment.
 | `ATLAS_EOM_FUNNEL_MISSED_CALL_POLL_INTERVAL_SECONDS` | Optional bounded worker interval; default `60`. |
 | `ATLAS_EOM_FUNNEL_MISSED_CALL_MAX_DELIVERY_ATTEMPTS` | Optional bounded definite-rejection retry limit; default `3`. |
 | `ATLAS_EOM_FUNNEL_MISSED_CALL_DELIVERY_TIMEOUT_SECONDS` | Optional bounded provider request timeout; default `10`. |
+| `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING` | Existing authoritative EOM funnel DSN. The controlled DBA command reads only its username to bind the migration's exact runtime ACL; never print or pass the DSN on a command line. |
 
 The existing Atlas email configuration remains authoritative for sender and
 transport. Do not add a second EOM Resend key or browser-visible sender
@@ -50,7 +51,7 @@ claim or send a step.
    controlled DBA command first gives Atlas's existing attested selector only
    the historical EOM recovery names 390-392. That is the only allowed way to
    clear an exact legacy 379/386 recovery state before the slim bootstrap; the
-   normal `atlas` runtime never receives this authority. When 389 is still
+   configured EOM runtime never receives this authority. When 389 is still
    absent, `--apply` intentionally stops before 393 with a missing-389 error;
    re-run the read-only preflight, then continue to the slim bootstrap. A fresh
    target has no selected historical prelude, so this leaves no migration change
@@ -62,30 +63,39 @@ claim or send a step.
 3. After migration 389 is recorded, and before any full generic Atlas startup
    or enabling recovery, apply the DBA-only privilege repair from the release
    worktree in a protected DBA shell where
-   `ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL` is already injected, run:
+   `ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL` and the existing
+   `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING` are already injected, run:
 
    ```bash
    python scripts/apply_eom_missed_call_recovery_runtime_privileges.py --json
    python scripts/apply_eom_missed_call_recovery_runtime_privileges.py --apply --json
    ```
 
-   The first command is read-only and reports the 390-392 historical-prelude
-   receipts plus the migration-389 prerequisite and migration-393 repair
-   receipts. The second requires a PostgreSQL superuser. If 393 is absent, it
-   first gives the existing selector only 390-392, then refuses to run 393 until
+   The first command is read-only and reports the configured runtime role, the
+   390-392 historical-prelude receipts, plus the migration-389 prerequisite and
+   migration-393 repair receipts. The second requires a PostgreSQL superuser.
+   It derives only the username from the EOM funnel DSN--it never prints that
+   DSN--and fails closed if the resulting role is absent, elevated, or a guard
+   member. If 393 is absent, it first establishes the stock PostgreSQL
+   `pgcrypto` extension through the protected DBA connection, then gives the
+   existing selector only 390-392 and refuses to run 393 until
    `389_eom_missed_call_recovery` is recorded. It never applies 389. Once 389
    is recorded, it applies only 393 through Atlas's normal migration ledger.
    The generic runner can stop after committing one selected historical prelude
    while another exact receipt remains unresolved; the controlled command
    re-reads the ledger and continues only when that selected receipt advanced.
    An unchanged integrity stop still aborts the command. After it verifies the
-   DBA executor, migration 393 provisions the stock PostgreSQL `pgcrypto`
-   extension if needed, then refuses to elevate any CRM bridge function or grant
-   runtime `UPDATE` when either bridge or append-only fence body is not the
-   trusted migration-389 body.
+   DBA executor, migration 393 repeats the `pgcrypto` prerequisite if needed,
+   then refuses to elevate any CRM bridge function or grant runtime `UPDATE`
+   when any bridge, fence, validator, or nested helper body is not the trusted
+   migration-389 body. It grants that surface only to the configured EOM role,
+   runs the two CRM-reading scope validators as fixed-search-path definer
+   functions under the no-login guard rather than granting the runtime direct
+   `contacts` access, removes every non-guard direct execution grant from the
+   definer helpers, and moves every guard-critical function under that guard.
    Do not pre-seed that extension through the normal runtime, pass a DBA DSN on
    the command line, add it to the normal Atlas service environment, or give
-   the `atlas` runtime role guard membership. Confirm the result reports
+   the configured EOM runtime role guard membership. Confirm the result reports
    `prerequisite_migration_recorded: true` and `migration_recorded: true`, then
    remove the temporary DBA secret injection.
 4. Start the Atlas entrypoint with recovery still disabled. Verify the full
