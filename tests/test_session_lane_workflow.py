@@ -17,12 +17,17 @@ def test_session_lane_workflow_runs_as_trusted_base_pr_target() -> None:
     assert "pull-requests: read" in text
 
 
-def test_session_lane_workflow_materializes_pr_head_as_data() -> None:
+def test_session_lane_workflow_pins_comparison_ref_to_event_base_sha() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
+    pin_comparison_ref = 'git update-ref "refs/remotes/origin/${BASE_REF}" "${BASE_SHA}"'
+    materialize_pr_tree = 'git worktree add "$RUNNER_TEMP/pr-tree" "refs/remotes/origin/pr-${PR_NUMBER}"'
 
-    assert '"+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"' in text
+    assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in text
     assert '"pull/${PR_NUMBER}/head:refs/remotes/origin/pr-${PR_NUMBER}"' in text
-    assert 'git worktree add "$RUNNER_TEMP/pr-tree" "refs/remotes/origin/pr-${PR_NUMBER}"' in text
+    assert pin_comparison_ref in text
+    assert '"+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"' not in text
+    assert materialize_pr_tree in text
+    assert text.index(pin_comparison_ref) < text.index(materialize_pr_tree)
     assert 'cd "$RUNNER_TEMP/pr-tree"' in text
 
 
