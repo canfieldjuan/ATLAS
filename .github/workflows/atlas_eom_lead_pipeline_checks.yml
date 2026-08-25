@@ -75,6 +75,7 @@ on:
       - "atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql"
       - "atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql"
       - "atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql"
+      - "atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql"
       - "atlas_brain/storage/migrations/reconciliation.py"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
@@ -90,6 +91,7 @@ on:
       - "tests/test_eom_contact_archive.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_missed_call_recovery.py"
+      - "tests/test_eom_missed_call_privilege_runner.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_render_profile.py"
       - "tests/test_eom_public_onboarding.py"
@@ -109,6 +111,7 @@ on:
       - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
       - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
       - "scripts/backfill_eom_customer_type.py"
+      - "scripts/apply_eom_missed_call_recovery_runtime_privileges.py"
   push:
     branches:
       - main
@@ -182,6 +185,7 @@ on:
       - "atlas_brain/storage/migrations/390_eom_won_loss_direct_sql_fence_recovery.sql"
       - "atlas_brain/storage/migrations/391_eom_commercial_billing_run_fence_recovery.sql"
       - "atlas_brain/storage/migrations/392_eom_commercial_billing_run_fence_schema_binding.sql"
+      - "atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql"
       - "atlas_brain/storage/migrations/reconciliation.py"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
@@ -197,6 +201,7 @@ on:
       - "tests/test_eom_contact_archive.py"
       - "tests/test_eom_lead_conversion.py"
       - "tests/test_eom_missed_call_recovery.py"
+      - "tests/test_eom_missed_call_privilege_runner.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_render_profile.py"
       - "tests/test_eom_public_onboarding.py"
@@ -216,6 +221,7 @@ on:
       - "atlas_brain/storage/migrations/366_contacts_customer_type.sql"
       - "atlas_brain/storage/migrations/367_contacts_customer_type_revision.sql"
       - "scripts/backfill_eom_customer_type.py"
+      - "scripts/apply_eom_missed_call_recovery_runtime_privileges.py"
 
 jobs:
   eom-lead-pipeline:
@@ -272,6 +278,7 @@ jobs:
             tests/test_eom_billing_recipients.py \
             tests/test_eom_lead_conversion.py \
             tests/test_eom_missed_call_recovery.py \
+            tests/test_eom_missed_call_privilege_runner.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_render_profile.py \
             tests/test_eom_funnel_capability_manifest.py \

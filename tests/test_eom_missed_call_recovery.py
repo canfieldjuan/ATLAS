@@ -198,6 +198,17 @@ def test_privilege_repair_trusted_bridge_hashes_match_migration_389_source() -> 
 
     source = (MIGRATIONS / "389_eom_missed_call_recovery.sql").read_text()
     repair = _PRIVILEGE_REPAIR_MIGRATION.read_text()
+    extension_install = "EXECUTE 'CREATE EXTENSION IF NOT EXISTS pgcrypto';"
+    assert extension_install in repair
+    assert repair.index(extension_install) > repair.index(
+        "IF NOT executor_is_superuser THEN"
+    )
+    assert repair.index(extension_install) > repair.index(
+        "IF NOT nocodb_role_ready THEN"
+    )
+    assert repair.index(extension_install) < repair.index(
+        "SELECT namespace_state.nspname"
+    )
     for signature, function_name, language_name in _TRUSTED_BRIDGE_FUNCTIONS:
         function_match = re.search(
             rf"CREATE OR REPLACE FUNCTION {re.escape(function_name)}\b(.*?)"
@@ -553,6 +564,10 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
     async with _test_store() as (admin_pool, schema):
         connection = admin_pool._connection
         try:
+            assert not await connection.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_extension "
+                "WHERE extname = 'pgcrypto')"
+            )
             await _provision_privilege_repair_roles(connection)
             runtime_contact_id = await _insert_estimate_lead(
                 admin_pool,
@@ -601,6 +616,10 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 "trg_prevent_eom_missed_call_operation_receipt_mutation"
             )
             await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+            assert await connection.fetchval(
+                "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_extension "
+                "WHERE extname = 'pgcrypto')"
+            )
 
             table_rows = await connection.fetch(
                 """

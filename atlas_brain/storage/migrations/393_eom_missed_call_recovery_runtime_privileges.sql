@@ -104,6 +104,11 @@ BEGIN
             'atlas_nocodb must be an unprivileged LOGIN NOINHERIT role before running 393_eom_missed_call_recovery_runtime_privileges';
     END IF;
 
+    -- The protected DBA is the only actor allowed to establish this
+    -- database-level prerequisite. Do it only after every role boundary is
+    -- valid, rather than relying on an undocumented deployment or test fixture.
+    EXECUTE 'CREATE EXTENSION IF NOT EXISTS pgcrypto';
+
     -- 393 is the first migration to give the CRM bridge functions definer
     -- authority. Never elevate an object merely because its signature still
     -- exists: its stored body and language must be the exact trusted migration-
