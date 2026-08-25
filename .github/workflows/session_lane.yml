@@ -62,9 +62,30 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           GITHUB_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          set -euo pipefail
+          current_pr_state="$(gh pr view "${PR_NUMBER}" --json state --jq '.state')"
+          case "${current_pr_state}" in
+            OPEN)
+              ;;
+            CLOSED|MERGED)
+              echo "Session Lane skipped: PR #${PR_NUMBER} is ${current_pr_state}."
+              exit 0
+              ;;
+            *)
+              echo "::error::unexpected PR state: ${current_pr_state:-<empty>}"
+              exit 1
+              ;;
+          esac
           cd "$RUNNER_TEMP/pr-tree"
+          audited_base_sha="$(git rev-parse "origin/${BASE_REF}")"
           python "$GITHUB_WORKSPACE/scripts/audit_pr_session_drift.py" \
             "origin/${BASE_REF}" \
             --current-pr-body-file "$RUNNER_TEMP/current-pr-body.md" \
             --require-current-pr-body
+          current_base_sha="$(git ls-remote --heads origin "refs/heads/${BASE_REF}" | awk 'NR == 1 {print $1}')"
+          if [[ -z "${current_base_sha}" || "${current_base_sha}" != "${audited_base_sha}" ]]; then
+            echo "::error::base moved during Session Lane audit: audited ${audited_base_sha}, current ${current_base_sha:-<missing>}"
+            exit 1
+          fi
