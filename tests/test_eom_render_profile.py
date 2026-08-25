@@ -689,9 +689,6 @@ def test_eom_missed_call_recovery_migration_helper_uses_funnel_curated_set():
         "351_eom_lead_lifecycle_events",
         "366_contacts_customer_type",
         "389_eom_missed_call_recovery",
-        "390_eom_won_loss_direct_sql_fence_recovery",
-        "391_eom_commercial_billing_run_fence_recovery",
-        "392_eom_commercial_billing_run_fence_schema_binding",
     )
 
 
@@ -1826,7 +1823,7 @@ def test_eom_lifespan_closes_generic_database_when_funnel_close_fails(monkeypatc
     class _Pool:
         is_initialized = True
 
-        async def fetchval(self, query: str) -> bool:
+        async def fetchval(self, query: str, *_args: object) -> bool:
             events.append("datastore-check")
             return True
 
@@ -2227,7 +2224,7 @@ class _ReadyPool:
         self.queries = []
         self.closed = 0
 
-    async def fetchval(self, query):
+    async def fetchval(self, query, *_args):
         self.queries.append(query)
         return True
 

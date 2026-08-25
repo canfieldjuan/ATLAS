@@ -33,6 +33,9 @@ EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV = (
 EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV = (
     "ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA"
 )
+EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL_ENV = (
+    "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL"
+)
 _IMAP_PORT_ADAPTER = TypeAdapter(Annotated[int, Field(ge=1, le=65535)])
 _IMAP_SSL_ADAPTER = TypeAdapter(bool)
 
@@ -2579,6 +2582,26 @@ class EOMFirstCleanCompletionDBAConfig(BaseSettings):
                 "PostgreSQL identifier"
             )
         return normalized
+
+
+class EOMMissedCallRecoveryDBAConfig(BaseSettings):
+    """Protected DBA-only configuration for the missed-call recovery runner.
+
+    The ordinary Atlas runtime does not instantiate this settings boundary, so
+    it never needs the privileged connection used by the one controlled repair.
+    """
+
+    model_config = SettingsConfigDict(env_file=ENV_FILES, extra="ignore")
+
+    database_url: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL_ENV),
+        repr=False,
+        description=(
+            "Protected PostgreSQL superuser DSN used only by the controlled "
+            "EOM missed-call recovery privilege runner."
+        ),
+    )
 
 
 class ExternalDataConfig(BaseSettings):
