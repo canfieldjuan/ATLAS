@@ -961,7 +961,9 @@ async def test_cross_contact_key_and_handoff_scope_conflicts_leave_no_receipt() 
     [
         ("commercial", "active", True),
         ("unknown", "active", True),
-        ("residential", "inactive", True),
+        # Migration 353 admits canonical handoffs only after an active customer
+        # transition; eligibility rejects this contact before handoff lookup.
+        ("residential", "inactive", False),
         ("residential", "active", False),
     ],
 )

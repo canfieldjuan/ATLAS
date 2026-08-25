@@ -230,6 +230,6 @@ an automatic completion source and is intentionally left outside this slice.
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 85 |
 | `plans/PR-First-Clean-Completion-Receipt.md` | 235 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
-| `tests/test_eom_first_clean_completion.py` | 1441 |
+| `tests/test_eom_first_clean_completion.py` | 1443 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **3421** |
+| **Total** | **3423** |
