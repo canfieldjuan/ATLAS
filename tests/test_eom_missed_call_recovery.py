@@ -345,7 +345,7 @@ async def _tamper_bridge_function(
     definitions = {
         "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)": f"""
             CREATE OR REPLACE FUNCTION {schema_ident}.cancel_eom_missed_call_sequences_for_contact(
-                UUID, VARCHAR, VARCHAR
+                target_contact_id UUID, target_reason VARCHAR, target_source VARCHAR
             ) RETURNS VOID LANGUAGE plpgsql AS $$
             BEGIN
                 RETURN;
@@ -362,14 +362,14 @@ async def _tamper_bridge_function(
         """,
         "eom_missed_call_effective_recipient(UUID, TEXT)": f"""
             CREATE OR REPLACE FUNCTION {schema_ident}.eom_missed_call_effective_recipient(
-                UUID, TEXT
+                target_contact_id UUID, fallback_contact_email TEXT
             ) RETURNS TEXT LANGUAGE sql AS $$
             SELECT 'tampered'::TEXT;
             $$;
         """,
         "cancel_eom_missed_call_on_recipient_change(UUID)": f"""
             CREATE OR REPLACE FUNCTION {schema_ident}.cancel_eom_missed_call_on_recipient_change(
-                UUID
+                target_contact_id UUID
             ) RETURNS VOID LANGUAGE plpgsql AS $$
             BEGIN
                 RETURN;
@@ -485,7 +485,7 @@ async def _tamper_guard_function(
         """,
         "eom_missed_call_has_proven_inbound_sms(JSONB)": f"""
             CREATE OR REPLACE FUNCTION {schema_ident}.eom_missed_call_has_proven_inbound_sms(
-                JSONB
+                candidate_metadata JSONB
             ) RETURNS BOOLEAN LANGUAGE sql IMMUTABLE AS $$
             SELECT TRUE;
             $$;
@@ -930,6 +930,15 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 ],
             )
             assert {row["owner"] for row in table_rows} == {"atlas_eom_handoff_owner"}
+            assert await connection.fetchval(
+                """
+                SELECT has_table_privilege(
+                    'atlas_eom_handoff_owner',
+                    to_regclass(format('%I.%I', current_schema(), 'eom_missed_call_attempts')),
+                    'SELECT'
+                )
+                """
+            )
             for function_signature in _TRUSTED_GUARD_FUNCTION_SIGNATURES:
                 qualified_signature = f"{_quote_ident(schema)}.{function_signature}"
                 assert await connection.fetchval(
@@ -1273,7 +1282,7 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO atlas_nocodb"
             )
             await connection.execute(
-                f"GRANT SELECT, UPDATE (email) ON TABLE {_quote_ident(schema)}.contacts "
+                f"GRANT SELECT, UPDATE (lead_stage) ON TABLE {_quote_ident(schema)}.contacts "
                 "TO atlas_nocodb"
             )
             await connection.execute(
@@ -1316,12 +1325,12 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 contact_id=contact_change_id,
             )
             await nocodb_connection.execute(
-                "UPDATE contacts SET email = $2 WHERE id = $1",
+                "UPDATE contacts SET lead_stage = $2 WHERE id = $1",
                 contact_change_id,
-                "after-change@example.test",
+                "qualified",
             )
             assert await connection.fetchval(
-                "SELECT state = 'cancelled' AND cancellation_reason = 'recipient_changed' "
+                "SELECT state = 'cancelled' AND cancellation_reason = 'lead_advanced' "
                 "FROM eom_missed_call_sequences WHERE id = $1",
                 changed_sequence_id,
             )

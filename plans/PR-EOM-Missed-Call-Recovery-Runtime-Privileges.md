@@ -187,6 +187,64 @@ Max files: 10
   every bridge/fence tamper case fails for its trusted-body message rather than
   for a superuser-runtime admission failure.
 
+### Hosted-PostgreSQL repair contract (current review round)
+
+- Root cause: migration 393 revokes table and column privileges from the
+  legacy `atlas` login before it transfers a recovery relation to the
+  no-login guard. On a fresh disposable database, `atlas` owns migration-389
+  objects. PostgreSQL represents that owner-targeted revoke as an explicit
+  empty ACL item; `ALTER TABLE ... OWNER TO atlas_eom_handoff_owner` carries
+  it to the new owner. The runtime still receives its cataloged direct ACL,
+  but the guard-owned `SECURITY DEFINER`
+  `validate_eom_missed_call_sequence_scope()` cannot read
+  `eom_missed_call_attempts`, so an otherwise allowed sequence insert fails.
+  Separately, the tamper helpers use `CREATE OR REPLACE FUNCTION` definitions
+  that omit existing argument names. PostgreSQL treats that as an attempted
+  parameter rename and rejects before migration 393 can prove its trusted-body
+  boundary.
+- Correct fix must touch/change: in migration 393, transfer each recovery
+  table to the guard before revoking direct table or column ACLs from `PUBLIC`,
+  NocoDB, legacy `atlas`, or the configured runtime. Keep those revokes and
+  the exact runtime allowlist in the same transaction, after ownership has
+  changed. Update the disposable PostgreSQL proof to assert that the guard has
+  effective access to the recovery relation it reads and to exercise the real
+  runtime insert path. Update only the tamper replacement definitions so every
+  existing named input parameter is preserved while its body is changed.
+- Must not change: do not alter migration 389, role admissions, guard-role
+  flags or memberships, the configured-runtime allowlist, the normal startup
+  tuple, generic migration runner, service/readiness implementation, routes,
+  providers, billing, production state, or the PostgreSQL CI identity. Do not
+  add broad runtime CRM or guard membership grants.
+- Acceptance criteria: applying 393 where `atlas` owns the migration-389
+  relations leaves the guard able to execute its trusted validator and the
+  configured unprivileged runtime able to create an allowed sequence; the
+  runtime and NocoDB direct-denial checks remain intact. Each bridge/support
+  tamper fixture reaches migration 393's trusted-body failure rather than a
+  PostgreSQL argument-name error.
+
+### Hosted-PostgreSQL test-fixture correction contract (current review round)
+
+- Root cause: the NocoDB integration proof creates an estimate-request
+  interaction whose `submitted_email` is intentionally the effective recovery
+  recipient. It then changes only `contacts.email` and expects a
+  `recipient_changed` cancellation. Migration 389 deliberately preserves that
+  submitted recipient across an ordinary canonical-email edit, so the update
+  correctly leaves the sequence active and the test asserts behavior the
+  product does not implement.
+- Correct fix must touch/change: change only that disposable NocoDB fixture to
+  grant and update `lead_stage`, then assert its existing `lead_advanced`
+  cancellation branch. This still proves that an allowed NocoDB CRM mutation
+  reaches the guard-owned trigger while NocoDB retains no direct recovery-table
+  access.
+- Must not change: do not change migration 389's effective-recipient
+  precedence, recipient-change behavior, CRM trigger definitions, runtime or
+  NocoDB production privileges, service logic, routes, provider behavior, or
+  data.
+- Acceptance criteria: the disposable real-role test proves a permitted NocoDB
+  contact update terminalizes an active sequence with `lead_advanced`; its
+  direct recovery-table reads remain denied, and the separate interaction path
+  remains covered.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -418,14 +476,14 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 11 |
 | `atlas_brain/services/eom_missed_call_recovery.py` | 253 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 753 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 758 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 436 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 494 |
 | `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 445 |
 | `tests/test_eom_missed_call_privilege_runner.py` | 547 |
-| `tests/test_eom_missed_call_recovery.py` | 1216 |
+| `tests/test_eom_missed_call_recovery.py` | 1225 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **3751** |
+| **Total** | **3823** |
 
 ## Diff size rationale
 

@@ -427,6 +427,16 @@ BEGIN
             'eom_missed_call_sequence_events'
         ])
     LOOP
+        -- Transfer ownership before revoking legacy role ACLs. Revoking an
+        -- old owner first creates an explicit empty ACL entry, and PostgreSQL
+        -- carries that entry to the isolated guard on ownership transfer. That
+        -- would prevent the guard's SECURITY DEFINER validators from reading
+        -- their own protected relations.
+        EXECUTE format(
+            'ALTER TABLE %I.%I OWNER TO atlas_eom_handoff_owner',
+            schema_name,
+            relation_name
+        );
         EXECUTE format(
             'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM PUBLIC',
             schema_name,
@@ -491,11 +501,6 @@ BEGIN
                 );
             END LOOP;
         END LOOP;
-        EXECUTE format(
-            'ALTER TABLE %I.%I OWNER TO atlas_eom_handoff_owner',
-            schema_name,
-            relation_name
-        );
     END LOOP;
 
     -- The remaining recovery functions either enforce immutable/scope fences
