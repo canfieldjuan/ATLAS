@@ -45,8 +45,9 @@ Slice phase: vertical slice
 - Acceptance criteria:
   - `POST /eom-funnel/customer-handoffs/{contact_id}/first-clean-completions`
     accepts only an authenticated, actor-attributed, RFC-3339 completion
-    payload with a closed tracker service identity; API tests prove malformed,
-    naive, extra-field, and future-time inputs do not create receipts.
+    payload with a closed tracker service identity and a serialized lifecycle
+    actor that fits the authoritative column; API tests prove malformed, naive,
+    extra-field, future-time, and actor-overflow inputs do not create receipts.
   - `EOMFirstCleanCompletionService.record_completion` takes transaction-scoped
     locks, binds `Idempotency-Key` to a complete request fingerprint before the
     receipt write, and returns the original receipt for an unchanged retry;
@@ -65,7 +66,8 @@ Slice phase: vertical slice
     inherited guard path, and grants the Atlas runtime only `SELECT`, `INSERT`,
     and `UPDATE`; database tests prove that owner/ACL state and that a
     non-superuser executor is rejected before DDL.
-  - The service requires the guarded schema before serving; route tests prove a
+  - The service requires the guarded receipt schema and prerequisite
+    handoff/lifecycle integrity triggers before serving; route tests prove a
     missing, owner-mismatched, disabled, or append-only trigger becomes a safe
     `503` with no write. The slim EOM profile never applies migration 394 from
     its normal runtime connection.
@@ -154,11 +156,14 @@ keys to the guarded handoff table and transfers its two receipt tables plus
 trigger functions to `atlas_eom_handoff_owner`. It revokes direct
 runtime/NocoDB guard membership, rejects inherited membership, and grants Atlas
 only `SELECT`, `INSERT`, and `UPDATE` for the row locks and writes the service
-needs. The route refuses to serve if ownership, ACLs, triggers, or tables are
-not exactly ready, so deploying code before the DBA apply is safe. The normal
-slim EOM profile does not run migration 394. The runbook uses one explicit
-named migration and a redacted protected-DSN preflight; rollback stops the
-route/consumer while preserving audit evidence.
+needs. The route refuses to serve if ownership, ACLs, receipt triggers, or the
+prerequisite handoff/lifecycle integrity triggers are not exactly ready, so
+deploying code before the DBA apply is safe. Actor validation derives the
+serialized lifecycle value before the transaction and rejects every value that
+would overflow the lifecycle ledger column. The normal slim EOM profile does
+not run migration 394. The runbook uses one explicit named migration and a
+redacted protected-DSN preflight; rollback stops the route/consumer while
+preserving audit evidence.
 
 ## Intentional
 
@@ -195,14 +200,12 @@ an automatic completion source and is intentionally left outside this slice.
 ## Verification
 
 - Local fast checks passed:
-  - Ruff passed for `atlas_brain/eom_api/funnel.py`,
-    `atlas_brain/services/eom_first_clean_completion.py`,
-    `scripts/apply_eom_first_clean_completion_schema.py`,
-    `tests/test_eom_first_clean_completion.py`, and
-    `tests/test_eom_first_clean_completion_dba_runner.py`.
-  - `python -m py_compile atlas_brain/eom_api/funnel.py atlas_brain/main_eom.py atlas_brain/services/eom_first_clean_completion.py scripts/apply_eom_first_clean_completion_schema.py`
-  - `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py tests/test_eom_funnel_capability_manifest.py tests/test_eom_missed_call_recovery.py::test_slim_eom_lifespan_applies_recovery_schema_while_delivery_disabled`
-    (`17 passed, 20 skipped`; the skipped cases require the deliberately absent
+  - `ruff format` and `ruff check` passed for
+    `atlas_brain/services/eom_first_clean_completion.py` and
+    `tests/test_eom_first_clean_completion.py`.
+  - `python -m py_compile atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py`
+  - `pytest -q tests/test_eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py tests/test_eom_funnel_capability_manifest.py`
+    (`24 passed, 22 skipped`; the skipped cases require the deliberately absent
     `ATLAS_MIGRATION_TEST_DATABASE_URL`).
   - `git diff --check`
 - The standalone Ruff target for `atlas_brain/main_eom.py` reports existing
@@ -218,11 +221,11 @@ an automatic completion source and is intentionally left outside this slice.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 12 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 706 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 732 |
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 394 |
-| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 76 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 228 |
+| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 79 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 231 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
-| `tests/test_eom_first_clean_completion.py` | 1172 |
+| `tests/test_eom_first_clean_completion.py` | 1286 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **3039** |
+| **Total** | **3185** |

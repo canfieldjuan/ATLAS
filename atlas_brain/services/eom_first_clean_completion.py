@@ -22,6 +22,7 @@ import asyncpg
 _EOM_CONTEXT = "effingham_maids"
 _MAX_SIGNED_BIGINT = 2**63 - 1
 _MAX_ACTOR_NAME_LENGTH = 128
+_MAX_LIFECYCLE_ACTOR_LENGTH = 128
 _OPERATION_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{15,127}$")
 _SERVICE_KINDS = frozenset({"job", "planned_visit"})
 
@@ -93,6 +94,12 @@ def _operation_key(value: object) -> str:
     return value
 
 
+def _lifecycle_actor(actor_id: int, actor_name: str) -> str:
+    """Serialize the actor exactly as the lifecycle ledger stores it."""
+
+    return f"employee:{actor_id}:{actor_name}"
+
+
 def _actor(actor_id: object, actor_name: object) -> tuple[int, str]:
     parsed_id = _positive_int(actor_id, "Authenticated actor")
     if not isinstance(actor_name, str):
@@ -102,6 +109,7 @@ def _actor(actor_id: object, actor_name: object) -> tuple[int, str]:
         not parsed_name
         or len(parsed_name) > _MAX_ACTOR_NAME_LENGTH
         or "\x00" in parsed_name
+        or len(_lifecycle_actor(parsed_id, parsed_name)) > _MAX_LIFECYCLE_ACTOR_LENGTH
     ):
         raise EOMFirstCleanCompletionValidationError("Authenticated actor is invalid")
     return parsed_id, parsed_name
@@ -310,31 +318,48 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                               'uq_eom_first_clean_completion_tracker_service'
                           )
                    )
-                   AND (
-                       SELECT COUNT(*) = 6
-                         FROM pg_trigger
-                        WHERE NOT tgisinternal
-                          AND tgenabled IN ('O', 'A')
-                          AND (
-                              (
-                                  tgrelid =
-                                      'eom_first_clean_completion_operation_receipts'::regclass
-                                  AND tgname IN (
-                                      'trg_require_eom_first_clean_completion_operation_scope',
-                                      'trg_prevent_eom_first_clean_completion_operation_mutation',
-                                      'trg_prevent_eom_first_clean_completion_operation_truncate'
-                                  )
-                              )
-                              OR (
-                                  tgrelid =
-                                      'eom_first_clean_completion_receipts'::regclass
-                                  AND tgname IN (
-                                      'trg_require_eom_first_clean_completion_receipt',
-                                      'trg_prevent_eom_first_clean_completion_receipt_mutation',
-                                      'trg_prevent_eom_first_clean_completion_receipt_truncate'
-                                  )
-                              )
-                          )
+                   AND NOT EXISTS (
+                       WITH expected_trigger(relation_name, trigger_name) AS (
+                           VALUES
+                               ('eom_customer_handoffs',
+                                'trg_require_eom_customer_handoff_finalization'),
+                               ('eom_customer_handoffs',
+                                'trg_prevent_eom_customer_handoff_mutation'),
+                               ('eom_customer_handoffs',
+                                'trg_prevent_eom_customer_handoff_truncate'),
+                               ('eom_lead_lifecycle_events',
+                                'trg_prevent_eom_lead_lifecycle_event_mutation'),
+                               ('eom_lead_lifecycle_events',
+                                'trg_prevent_eom_lead_lifecycle_event_truncate'),
+                               ('eom_first_clean_completion_operation_receipts',
+                                'trg_require_eom_first_clean_completion_operation_scope'),
+                               ('eom_first_clean_completion_operation_receipts',
+                                'trg_prevent_eom_first_clean_completion_operation_mutation'),
+                               ('eom_first_clean_completion_operation_receipts',
+                                'trg_prevent_eom_first_clean_completion_operation_truncate'),
+                               ('eom_first_clean_completion_receipts',
+                                'trg_require_eom_first_clean_completion_receipt'),
+                               ('eom_first_clean_completion_receipts',
+                                'trg_prevent_eom_first_clean_completion_receipt_mutation'),
+                               ('eom_first_clean_completion_receipts',
+                                'trg_prevent_eom_first_clean_completion_receipt_truncate')
+                       )
+                       SELECT 1
+                         FROM expected_trigger
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                              FROM pg_trigger AS trigger
+                             WHERE trigger.tgrelid = to_regclass(
+                                       format(
+                                           '%I.%I',
+                                           current_schema(),
+                                           expected_trigger.relation_name
+                                       )
+                                   )
+                               AND trigger.tgname = expected_trigger.trigger_name
+                               AND NOT trigger.tgisinternal
+                               AND trigger.tgenabled IN ('O', 'A')
+                        )
                    )
                 """
             )
@@ -572,6 +597,7 @@ class EOMFirstCleanCompletionService:
         tracker_service_id = _positive_int(tracker_service_id, "Tracker service id")
         operation_key = _operation_key(operation_key)
         actor_id, actor_name = _actor(actor_id, actor_name)
+        lifecycle_actor = _lifecycle_actor(actor_id, actor_name)
         now = self._now()
         if not isinstance(now, datetime) or now.tzinfo is None:
             raise EOMFirstCleanCompletionUnavailableError(
@@ -655,7 +681,7 @@ class EOMFirstCleanCompletionService:
                     )
                     """,
                     contact_id,
-                    f"employee:{actor_id}:{actor_name}",
+                    lifecycle_actor,
                     operation_key,
                     receipt_id,
                     handoff["id"],

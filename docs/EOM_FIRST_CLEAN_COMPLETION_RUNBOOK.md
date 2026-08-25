@@ -60,6 +60,9 @@ Remove the temporary DBA DSN injection after the result reports
 2. Confirm the service-authenticated completion capability is available only
    when the schema readiness check succeeds. Do not post a test completion for
    a real customer or use a production customer/service identity as a probe.
+   The readiness fence also requires the existing canonical-handoff
+   finalization/append-only triggers and lifecycle append-only triggers; a
+   missing or disabled prerequisite leaves the route unavailable.
 3. Use the isolated PostgreSQL CI evidence for role ownership, minimal runtime
    ACLs, immutability, idempotency, and concurrency. No test sends customer
    communication or creates an appointment.

@@ -26,6 +26,7 @@ from atlas_brain.eom_api import funnel_auth as funnel_auth_mod  # noqa: E402
 from atlas_brain.services.eom_first_clean_completion import (  # noqa: E402
     EOMFirstCleanCompletionConflictError,
     EOMFirstCleanCompletionService,
+    EOMFirstCleanCompletionValidationError,
     first_clean_completion_schema_ready,
 )
 
@@ -44,6 +45,22 @@ _COMPLETION_SCHEMA_MIGRATIONS = (
     "353_eom_customer_handoffs",
     "366_contacts_customer_type",
     "394_eom_first_clean_completion_receipts",
+)
+_PREREQUISITE_INTEGRITY_TRIGGERS = (
+    ("eom_customer_handoffs", "trg_require_eom_customer_handoff_finalization"),
+    ("eom_customer_handoffs", "trg_prevent_eom_customer_handoff_mutation"),
+    ("eom_customer_handoffs", "trg_prevent_eom_customer_handoff_truncate"),
+    ("eom_lead_lifecycle_events", "trg_prevent_eom_lead_lifecycle_event_mutation"),
+    ("eom_lead_lifecycle_events", "trg_prevent_eom_lead_lifecycle_event_truncate"),
+)
+_ACTOR_ID_LENGTH_BOUNDARIES = (
+    1,
+    10,
+    100,
+    10_000,
+    1_000_000,
+    2_147_483_647,
+    9_223_372_036_854_775_807,
 )
 
 
@@ -267,6 +284,63 @@ def _payload(
     }
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("actor_id", _ACTOR_ID_LENGTH_BOUNDARIES)
+async def test_completion_rejects_serialized_lifecycle_actor_overflow_before_db_access(
+    actor_id: int,
+) -> None:
+    """The stored lifecycle actor, not only the raw name, fits VARCHAR(128)."""
+
+    actor_name = "a" * (129 - len(f"employee:{actor_id}:"))
+    service = EOMFirstCleanCompletionService(pool=object(), now=lambda: _NOW)
+
+    with pytest.raises(EOMFirstCleanCompletionValidationError):
+        await service.record_completion(
+            contact_id=uuid4(),
+            tracker_customer_id=1,
+            tracker_site_id=2,
+            tracker_service_kind="job",
+            tracker_service_id=3,
+            completed_at=_NOW - timedelta(hours=1),
+            operation_key=_operation_key("actor-overflow"),
+            actor_id=actor_id,
+            actor_name=actor_name,
+        )
+
+
+@pytest.mark.asyncio
+async def test_completion_persists_lifecycle_actor_at_serialized_column_limit() -> None:
+    async with _test_store() as (pool, _schema):
+        for index, actor_id in enumerate(_ACTOR_ID_LENGTH_BOUNDARIES):
+            contact_id, tracker_customer_id, tracker_site_id = await _insert_customer(
+                pool
+            )
+            assert tracker_customer_id is not None and tracker_site_id is not None
+            actor_name = "a" * (128 - len(f"employee:{actor_id}:"))
+
+            completion = _completion_kwargs(
+                contact_id=contact_id,
+                tracker_customer_id=tracker_customer_id,
+                tracker_site_id=tracker_site_id,
+                operation_key=_operation_key("actor-boundary"),
+                tracker_service_id=6_001 + index,
+            )
+            completion["actor_id"] = actor_id
+            completion["actor_name"] = actor_name
+            await _service(pool).record_completion(**completion)
+
+            lifecycle_actor = await pool.fetchval(
+                """
+                SELECT actor
+                FROM eom_lead_lifecycle_events
+                WHERE contact_id = $1 AND event_type = 'first_clean_completed'
+                """,
+                contact_id,
+            )
+            assert lifecycle_actor == f"employee:{actor_id}:{actor_name}"
+            assert len(lifecycle_actor) == 128
+
+
 def test_slim_eom_profile_binds_completion_to_canonical_funnel_pool() -> None:
     from atlas_brain import main_eom
 
@@ -467,6 +541,46 @@ async def test_schema_readiness_rejects_broadened_runtime_or_external_acl() -> N
                 )
                 await pool._connection.execute(f"DROP ROLE {role_ident}")
         assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_missing_or_disabled_prerequisite_guards() -> (
+    None
+):
+    """Receipt source evidence is valid only while its existing guards are live."""
+
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        for relation_name, trigger_name in _PREREQUISITE_INTEGRITY_TRIGGERS:
+            relation_ident = _quote_ident(relation_name)
+            trigger_ident = _quote_ident(trigger_name)
+            trigger_definition = await pool._connection.fetchval(
+                """
+                SELECT pg_get_triggerdef(trigger.oid)
+                FROM pg_trigger AS trigger
+                WHERE trigger.tgrelid = $1::regclass
+                  AND trigger.tgname = $2
+                """,
+                relation_name,
+                trigger_name,
+            )
+            assert isinstance(trigger_definition, str)
+
+            await pool._connection.execute(
+                f"ALTER TABLE {relation_ident} DISABLE TRIGGER {trigger_ident}"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+            await pool._connection.execute(
+                f"ALTER TABLE {relation_ident} ENABLE TRIGGER {trigger_ident}"
+            )
+            assert await first_clean_completion_schema_ready(pool) is True
+
+            await pool._connection.execute(
+                f"DROP TRIGGER {trigger_ident} ON {relation_ident}"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+            await pool._connection.execute(trigger_definition)
+            assert await first_clean_completion_schema_ready(pool) is True
 
 
 @pytest.mark.asyncio
