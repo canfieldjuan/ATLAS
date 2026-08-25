@@ -83,15 +83,18 @@ service, suggesting the database is container-owned.
 
 Finding:
 Root Compose defines no PostgreSQL service. Atlas uses native PostgreSQL 16 on
-port `5433`; the current session can run a read-only query and inspect the
-`schema_migrations` ledger.
+port `5433`; the current session can run fixed read-only connectivity and
+migration-ledger inspections through Atlas's application configuration path.
 
 Canonical method:
-Use `./ops db status`, `./ops db query`, and `./ops db migrations`.
+Use `./ops db status`, `./ops db inspect connectivity`, and
+`./ops db migrations`. Arbitrary SQL is intentionally unavailable until Atlas
+has a privilege-restricted inspection role; transaction read-only mode alone
+does not prevent side effects from invoked PostgreSQL functions.
 
 Verified:
-2026-08-24: `pg_isready` accepted the connection and a transaction marked
-`READ ONLY` returned database/role/recovery and migration-ledger metadata.
+2026-08-24: `./ops db inspect connectivity` and `./ops db migrations` succeeded
+through `DatabaseConfig`/asyncpg with fixed SQL inside `READ ONLY` transactions.
 
 Failure notes:
 Do not substitute a random `5432` instance, use live `atlas` for integration

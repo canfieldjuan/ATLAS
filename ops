@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -10,7 +11,6 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
 from urllib.request import urlopen
 
 
@@ -27,7 +27,29 @@ KNOWN_CONTAINERS = (
 ENV_KEY_RE = re.compile(
     r"^\s*(?:export\s+)?(?P<key>[A-Za-z_][A-Za-z0-9_]*)\s*=",
 )
-SAFE_SQL_LEADS = frozenset(("select", "show", "table", "values"))
+DATABASE_CONFIG_KEYS = frozenset(
+    (
+        "ATLAS_DB_CONNECTION_STRING",
+        "ATLAS_DB_HOST",
+        "ATLAS_DB_PORT",
+        "ATLAS_DB_DATABASE",
+        "ATLAS_DB_USER",
+        "ATLAS_DB_PASSWORD",
+        "ATLAS_DB_SOCKET_PATH",
+    )
+)
+DATABASE_INSPECTIONS = {
+    "connectivity": "SELECT 1 AS ok",
+    "migrations": (
+        "SELECT count(*) AS applied_count, max(version) AS latest_version "
+        "FROM public.schema_migrations"
+    ),
+}
+TEST_DATABASE_URL_KEYS = (
+    "ATLAS_MIGRATION_TEST_DATABASE_URL",
+    "ATLAS_RECEIVABLES_TEST_DATABASE_URL",
+    "ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL",
+)
 
 
 class OpsError(RuntimeError):
@@ -55,9 +77,14 @@ def run(
         return subprocess.CompletedProcess(args, 127, "", str(exc))
 
 
-def exec_command(args: list[str], *, cwd: Path | None = None) -> int:
+def exec_command(
+    args: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
     try:
-        return subprocess.call(args, cwd=cwd)
+        return subprocess.call(args, cwd=cwd, env=env)
     except OSError as exc:
         raise OpsError(str(exc)) from exc
 
@@ -198,216 +225,91 @@ def parse_env_values(path: Path, allowed: set[str]) -> dict[str, str]:
     return values
 
 
-def database_environment() -> dict[str, str]:
-    allowed = {
-        "ATLAS_DB_CONNECTION_STRING",
-        "ATLAS_DB_HOST",
-        "ATLAS_DB_PORT",
-        "ATLAS_DB_DATABASE",
-        "ATLAS_DB_USER",
-        "ATLAS_DB_PASSWORD",
-        "ATLAS_DB_SOCKET_PATH",
-    }
+def database_runtime_environment() -> dict[str, str]:
+    """Pass DB configuration to the project interpreter without argv exposure."""
     config: dict[str, str] = {}
     for path in env_files():
-        config.update(parse_env_values(path, allowed))
-    for key in allowed:
+        config.update(parse_env_values(path, DATABASE_CONFIG_KEYS))
+    for key in DATABASE_CONFIG_KEYS:
         if key in os.environ:
             config[key] = os.environ[key]
 
     child_env = os.environ.copy()
-    dsn = config.get("ATLAS_DB_CONNECTION_STRING", "").strip()
-    if dsn:
-        parsed = urlsplit(dsn)
-        if parsed.scheme not in ("postgres", "postgresql"):
-            raise OpsError("ATLAS_DB_CONNECTION_STRING is not a PostgreSQL URL")
-        if parsed.hostname:
-            child_env["PGHOST"] = parsed.hostname
-        if parsed.port:
-            child_env["PGPORT"] = str(parsed.port)
-        if parsed.path.lstrip("/"):
-            child_env["PGDATABASE"] = unquote(parsed.path.lstrip("/"))
-        if parsed.username:
-            child_env["PGUSER"] = unquote(parsed.username)
-        if parsed.password:
-            child_env["PGPASSWORD"] = unquote(parsed.password)
-    else:
-        child_env["PGHOST"] = config.get(
-            "ATLAS_DB_SOCKET_PATH",
-            config.get("ATLAS_DB_HOST", "127.0.0.1"),
-        )
-        child_env["PGPORT"] = config.get("ATLAS_DB_PORT", "5433")
-        child_env["PGDATABASE"] = config.get("ATLAS_DB_DATABASE", "atlas")
-        child_env["PGUSER"] = config.get("ATLAS_DB_USER", "atlas")
-        if config.get("ATLAS_DB_PASSWORD"):
-            child_env["PGPASSWORD"] = config["ATLAS_DB_PASSWORD"]
-    child_env["PGCONNECT_TIMEOUT"] = "5"
-    child_env["PGOPTIONS"] = (
-        "-c default_transaction_read_only=on "
-        "-c statement_timeout=5000 -c lock_timeout=1000"
-    )
+    for key in DATABASE_CONFIG_KEYS:
+        child_env.pop(key, None)
+    child_env.update(config)
+    child_env["ATLAS_OPS_INTERNAL_DB_INSPECTION"] = "1"
     return child_env
 
 
-def sanitize_sql(sql: str) -> str:
-    """Blank SQL strings/comments while retaining statement punctuation."""
-    out: list[str] = []
-    index = 0
-    state = "normal"
-    dollar_tag = ""
-    block_depth = 0
-    while index < len(sql):
-        char = sql[index]
-        pair = sql[index:index + 2]
-        if state == "normal":
-            if pair == "--":
-                state = "line-comment"
-                out.extend("  ")
-                index += 2
-                continue
-            if pair == "/*":
-                state = "block-comment"
-                block_depth = 1
-                out.extend("  ")
-                index += 2
-                continue
-            if char == "'":
-                state = "single"
-                out.append(" ")
-                index += 1
-                continue
-            if char == '"':
-                state = "double"
-                out.append(" ")
-                index += 1
-                continue
-            if char == "$":
-                match = re.match(r"\$[A-Za-z_][A-Za-z0-9_]*\$|\$\$", sql[index:])
-                if match:
-                    dollar_tag = match.group(0)
-                    state = "dollar"
-                    out.extend(" " * len(dollar_tag))
-                    index += len(dollar_tag)
-                    continue
-            out.append(char)
-            index += 1
-            continue
-        if state == "line-comment":
-            out.append("\n" if char == "\n" else " ")
-            if char == "\n":
-                state = "normal"
-            index += 1
-            continue
-        if state == "block-comment":
-            if pair == "/*":
-                block_depth += 1
-                out.extend("  ")
-                index += 2
-            elif pair == "*/":
-                block_depth -= 1
-                out.extend("  ")
-                index += 2
-                if block_depth == 0:
-                    state = "normal"
-            else:
-                out.append("\n" if char == "\n" else " ")
-                index += 1
-            continue
-        if state == "single":
-            if pair == "''":
-                out.extend("  ")
-                index += 2
-            elif char == "'":
-                out.append(" ")
-                state = "normal"
-                index += 1
-            elif char == "\\" and index + 1 < len(sql):
-                out.extend("  ")
-                index += 2
-            else:
-                out.append("\n" if char == "\n" else " ")
-                index += 1
-            continue
-        if state == "double":
-            if pair == '""':
-                out.extend("  ")
-                index += 2
-            elif char == '"':
-                out.append(" ")
-                state = "normal"
-                index += 1
-            else:
-                out.append("\n" if char == "\n" else " ")
-                index += 1
-            continue
-        if state == "dollar":
-            if sql.startswith(dollar_tag, index):
-                out.extend(" " * len(dollar_tag))
-                index += len(dollar_tag)
-                state = "normal"
-            else:
-                out.append("\n" if char == "\n" else " ")
-                index += 1
-    if state not in ("normal", "line-comment"):
-        raise OpsError("SQL contains an unterminated string or comment")
-    return "".join(out)
+def database_inspection_command(name: str) -> list[str]:
+    if name not in DATABASE_INSPECTIONS:
+        raise OpsError(f"unknown database inspection: {name}")
+    return [str(python_command()), str(repo_root() / "ops"), "__db-inspect", name]
 
 
-def validate_read_only_sql(sql: str) -> tuple[bool, str]:
-    if not sql.strip():
-        return False, "query is empty"
-    if "\x00" in sql:
-        return False, "query contains a NUL byte"
+async def execute_database_inspection(name: str) -> int:
+    """Execute one fixed inspection through the same config path as Atlas."""
+    if name not in DATABASE_INSPECTIONS:
+        raise OpsError(f"unknown database inspection: {name}")
     try:
-        code = sanitize_sql(sql)
-    except OpsError as exc:
-        return False, str(exc)
-    statements = [part.strip() for part in code.split(";") if part.strip()]
-    if len(statements) != 1:
-        return False, "exactly one SQL statement is required"
-    lead_match = re.match(r"[A-Za-z]+", statements[0])
-    lead = lead_match.group(0).lower() if lead_match else ""
-    if lead not in SAFE_SQL_LEADS:
-        return False, "only SELECT, SHOW, TABLE, or VALUES statements are admitted"
-    if re.search(r"\binto\b", statements[0], re.IGNORECASE):
-        return False, "SELECT INTO is not read-only"
-    if re.search(
-        r"\bfor\s+(?:no\s+key\s+update|key\s+share|update|share)\b",
-        statements[0],
-        re.IGNORECASE,
-    ):
-        return False, "row-locking SELECT statements are not admitted"
-    return True, "ok"
+        import asyncpg
+        from atlas_brain.storage.config import DatabaseConfig
+    except ImportError as exc:
+        raise OpsError("project Python is missing asyncpg/database dependencies") from exc
+
+    config = DatabaseConfig(_env_file=None)
+    connection = None
+    try:
+        connection = await asyncpg.connect(
+            **config.connection_kwargs(command_timeout=5)
+        )
+        async with connection.transaction(readonly=True):
+            await connection.execute("SET LOCAL statement_timeout = '5s'")
+            await connection.execute("SET LOCAL lock_timeout = '1s'")
+            rows = await connection.fetch(DATABASE_INSPECTIONS[name])
+    except Exception as exc:
+        raise OpsError(f"database inspection failed ({type(exc).__name__})") from exc
+    finally:
+        if connection is not None:
+            try:
+                await connection.close()
+            except Exception as exc:
+                raise OpsError(
+                    f"database inspection cleanup failed ({type(exc).__name__})"
+                ) from exc
+
+    if rows:
+        columns = list(rows[0].keys())
+        print("\t".join(columns))
+        for row in rows:
+            print(
+                "\t".join(
+                    "" if row[column] is None else str(row[column])
+                    for column in columns
+                )
+            )
+    return 0
 
 
-def psql_readonly_command(sql: str) -> list[str]:
-    return [
-        "psql",
-        "-X",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-P",
-        "pager=off",
-        "-c",
-        "BEGIN TRANSACTION READ ONLY;",
-        "-c",
-        sql,
-        "-c",
-        "ROLLBACK;",
-    ]
+def run_database_inspection(
+    name: str,
+    *,
+    capture: bool = False,
+) -> int | subprocess.CompletedProcess[str]:
+    command = database_inspection_command(name)
+    env = database_runtime_environment()
+    if capture:
+        return run(command, env=env, timeout=10)
+    return exec_command(command, env=env)
 
 
 def database_probe() -> tuple[str, str]:
-    if shutil.which("pg_isready") is None or shutil.which("psql") is None:
-        return "UNAVAILABLE", "install psql/pg_isready or use CI"
-    env = database_environment()
-    ready = run(["pg_isready", "-t", "3"], env=env, timeout=5)
-    if ready.returncode != 0:
-        return "FAIL", "PostgreSQL is not accepting connections"
-    query = run(psql_readonly_command("SELECT 1"), env=env, timeout=8)
-    if query.returncode != 0:
-        return "FAIL", "server reachable but query authentication failed"
-    return "OK", "read-only SELECT succeeded"
+    result = run_database_inspection("connectivity", capture=True)
+    assert isinstance(result, subprocess.CompletedProcess)
+    if result.returncode != 0:
+        return "FAIL", "fixed connectivity inspection failed"
+    return "OK", "fixed connectivity inspection succeeded"
 
 
 def systemd_state() -> tuple[str, dict[str, str]]:
@@ -475,13 +377,12 @@ def brain_health() -> tuple[str, str]:
 def print_git_snapshot() -> None:
     root = worktree_root()
     if root is None:
-        status_line("repository", str(shared_root()))
+        status_line("repository", REPOSITORY)
         status_line("worktree", "UNAVAILABLE", "shared/bare root; use a dedicated worktree")
         return
-    remote = run(["git", "-C", str(root), "remote", "get-url", "origin"], timeout=5)
     branch = run(["git", "-C", str(root), "branch", "--show-current"], timeout=5)
     state = run(["git", "-C", str(root), "status", "--porcelain"], timeout=5)
-    status_line("repository", remote.stdout.strip() if remote.returncode == 0 else str(root))
+    status_line("repository", REPOSITORY)
     status_line("branch", branch.stdout.strip() or "detached")
     status_line("working tree", "clean" if state.returncode == 0 and not state.stdout else "dirty")
 
@@ -515,7 +416,7 @@ def doctor() -> int:
     print("\nDATABASE")
     db_state, db_detail = ("UNKNOWN", "offline test mode") if offline() else database_probe()
     status_line("PostgreSQL", db_state, db_detail)
-    status_line("safe query", "available", './ops db query "SELECT 1"')
+    status_line("fixed inspections", "available", "./ops db inspect connectivity")
     print("\nCI")
     status_line("provider", "GitHub Actions")
     status_line("GitHub authentication", auth_probe(["gh", "auth", "status"]))
@@ -528,7 +429,7 @@ def doctor() -> int:
         "./ops status",
         "./ops test focused tests/<test_file>.py",
         "./ops env keys",
-        './ops db query "SELECT 1"',
+        "./ops db inspect connectivity",
         "./ops logs brain",
         "./ops deploy status",
         "./ops ci status",
@@ -575,28 +476,25 @@ def env_command(args: list[str]) -> int:
 
 def db_command(args: list[str]) -> int:
     if not args:
-        raise OpsError("usage: ./ops db {status|query SQL|migrations}")
+        raise OpsError("usage: ./ops db {status|inspect NAME|migrations}")
     action = args[0]
     if action == "status":
         state, detail = database_probe()
         status_line("database", state, detail)
         return 0 if state == "OK" else 1
-    if action == "query":
+    if action == "inspect":
         if len(args) != 2:
-            raise OpsError('usage: ./ops db query "SELECT ..."')
-        allowed, reason = validate_read_only_sql(args[1])
-        if not allowed:
-            raise OpsError(f"query refused: {reason}")
-        return subprocess.call(psql_readonly_command(args[1]), env=database_environment())
+            raise OpsError("usage: ./ops db inspect {connectivity|migrations}")
+        result = run_database_inspection(args[1])
+        assert isinstance(result, int)
+        return result
     if action == "migrations":
-        sql = (
-            "SELECT count(*) AS applied_count, max(version) AS latest_version "
-            "FROM schema_migrations"
-        )
-        return subprocess.call(psql_readonly_command(sql), env=database_environment())
-    if action in ("write", "migrate", "rollback", "drop"):
-        raise OpsError("mutating database operations are intentionally not exposed by ./ops")
-    raise OpsError("usage: ./ops db {status|query SQL|migrations}")
+        result = run_database_inspection("migrations")
+        assert isinstance(result, int)
+        return result
+    if action in ("query", "write", "migrate", "rollback", "drop"):
+        raise OpsError("arbitrary SQL and mutating database operations are intentionally not exposed by ./ops")
+    raise OpsError("usage: ./ops db {status|inspect NAME|migrations}")
 
 
 def container_status() -> None:
@@ -772,16 +670,15 @@ def test_command(args: list[str]) -> int:
     if action == "integration":
         if len(args) < 2:
             raise OpsError("name a focused integration test target")
-        if not (
-            os.environ.get("ATLAS_MIGRATION_TEST_DATABASE_URL")
-            or os.environ.get("ATLAS_RECEIVABLES_TEST_DATABASE_URL")
-        ):
+        if not any(os.environ.get(key) for key in TEST_DATABASE_URL_KEYS):
             raise OpsError(
-                "integration tests require an explicit disposable "
-                "ATLAS_MIGRATION_TEST_DATABASE_URL or ATLAS_RECEIVABLES_TEST_DATABASE_URL"
+                "integration tests require one explicit disposable test database URL; "
+                f"use one of: {', '.join(TEST_DATABASE_URL_KEYS)}"
             )
         if os.environ.get("ATLAS_CONFIRM_DISPOSABLE_TEST_DB") != "1":
-            raise OpsError("set ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1 after verifying the DB is disposable")
+            raise OpsError(
+                "set ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1 after verifying the DB is disposable"
+            )
         return exec_command([python, "-m", "pytest", *args[1:]], cwd=root)
     if action == "frontend":
         if len(args) not in (2, 3):
@@ -825,7 +722,7 @@ Read-only discovery and inspection:
   doctor
   status
   env {keys [--file PATH]|systemd|vercel}
-  db {status|query SQL|migrations}
+  db {status|inspect {connectivity|migrations}|migrations}
   deploy status
   logs {brain|container NAME|frontend [--since 1h] [--limit N] [--follow]}
   ci {status [LIMIT]|run RUN_ID [--log-failed]}
@@ -868,6 +765,10 @@ def main(argv: list[str]) -> int:
         return ci_command(args)
     if command == "test":
         return test_command(args)
+    if command == "__db-inspect" and len(args) == 1:
+        if os.environ.get("ATLAS_OPS_INTERNAL_DB_INSPECTION") != "1":
+            raise OpsError("internal database inspection entrypoint is not public")
+        return asyncio.run(execute_database_inspection(args[0]))
     raise OpsError(f"unknown command: {command}; run ./ops --help")
 
 

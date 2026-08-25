@@ -52,6 +52,33 @@ would leave an incomplete and unverified operational path between PRs.
   root Compose commands and missing-template instruction are removed from the
   affected operational sections.
 
+### Contract revision 2
+
+- New evidence: current-head review and code tracing proved four reachable
+  gaps in the new operations layer. PostgreSQL `READ ONLY` transactions still
+  admit operationally mutating functions invoked by arbitrary `SELECT`; DSN
+  decomposition drops libpq query parameters; the integration guard omits the
+  documented legacy monthly writer URL; and doctor prints a raw origin URL that
+  may contain HTTPS userinfo.
+- Revised root cause: the initial implementation treated SQL statement class,
+  decomposed connection coordinates, a sampled test-variable set, and a raw Git
+  remote as sufficient safety boundaries. Those are weaker than the contract's
+  no-mutation, exact-runtime, complete-canonical-set, and no-secret-output
+  requirements.
+- Revised required change surface: replace arbitrary SQL with named, fixed
+  database inspections executed through Atlas's own asyncpg configuration path;
+  pass the complete connection string through the child environment without
+  argv exposure; admit all three canonical disposable-test URL variables; print
+  only the canonical repository identifier; and update the capability/runbook
+  claims plus boundary tests for those decisions.
+- Revised non-scope: do not provision a database role, change application
+  database configuration, add dependencies, change migrations, expose raw SQL,
+  or touch provider/runtime configuration.
+- Revised verification plan: add negative proof that arbitrary queries are not
+  exposed, exact-DSN handoff/argv-secret tests, a complete-variable-set test,
+  credential-bearing-origin redaction proof, focused tests, live fixed
+  inspections, and the canonical guarded push review.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
@@ -72,10 +99,10 @@ Slice phase: workflow/process
   - `./ops env keys` emits variable names only, never values; settled by a
     fixture containing a canary secret and an assertion that the canary never
     appears in output.
-  - `./ops db query` admits only a single read-only SQL statement and also
-    starts a PostgreSQL read-only transaction; settled by boundary tests for a
-    SELECT and representative write/multi-statement inputs plus command
-    inspection.
+  - `./ops db inspect` exposes only named, fixed inspections and arbitrary SQL
+    is unavailable until a privilege-restricted inspection role exists; settled
+    by the fixed registry, rejection tests, exact-DSN handoff proof, and live
+    connectivity/migration inspection.
   - `.agent/capabilities.yaml` distinguishes verified, unavailable, and
     authentication-dependent capabilities and records safe verification and
     failure modes without secret values; settled by its checked-in contents
@@ -101,14 +128,16 @@ Required when this diff changes a guard, validator, normalizer, resolver,
 router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
-- Boundary path/seam: `./ops db query` SQL admission and read-only execution;
+- Boundary path/seam: `./ops db inspect` named-inspection admission and
+  read-only execution; integration-test database-variable admission;
   `./ops env keys` secret-value suppression.
 - Replaced-path behaviors: N/A - no existing runtime path is replaced.
-- Guard-relevant fields: SQL first keyword, statement count/comment handling,
-  PostgreSQL read-only transaction options, environment assignment key/value
-  split, subprocess output redaction.
-- Caller x input shape: shell caller x SELECT/SHOW/TABLE/VALUES inputs;
-  shell caller x INSERT/UPDATE/DELETE/DDL/COPY/CALL/multi-statement inputs;
+- Guard-relevant fields: inspection name, complete PostgreSQL connection string,
+  the canonical disposable-test URL set, Git origin userinfo, environment
+  assignment key/value split, and subprocess output redaction.
+- Caller x input shape: shell caller x fixed connectivity/migrations names;
+  shell caller x arbitrary/unknown query names; test caller x each canonical
+  disposable database URL independently; Git origin x credential-bearing URL;
   env files x blank/comment/export/quoted/canary-secret assignments.
 
 ### Deployed-config probing
@@ -119,16 +148,18 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Deployed/default config values: database defaults come from
   `atlas_brain/storage/config.py`; the linked Vercel project comes from ignored
   `.vercel/project.json`; neither secret value is copied into version control.
-- Explicit value probe: tests pass explicit safe SQL and fixture env paths;
+- Explicit value probe: tests pass fixed inspection names, a complete DSN with
+  TLS/socket parameters, each canonical disposable-test URL, and fixture env paths;
   safe live probes use the current authenticated CLIs where available.
 - Absent value probe: doctor and status report UNKNOWN/unavailable when a CLI,
   auth context, linked project, env file, or database is absent.
 - Default-session/default-context probe: run from the dedicated worktree, where
   ignored environment/provider link files are absent, and from the shared root
   context via explicit discovery only.
-- Side-effect ordering: input admission and read-only transaction setup occur
-  before the database client receives SQL; env rendering extracts keys before
-  any output is produced.
+- Side-effect ordering: fixed inspection selection occurs before the database
+  client receives SQL; the exact DSN remains in the child environment rather
+  than argv; Git output selects the canonical identifier before printing; env
+  rendering extracts keys before any output is produced.
 
 ### Files touched
 
@@ -185,12 +216,13 @@ Parked hardening: none.
 
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile ops` - pass.
 - PyYAML `safe_load(.agent/capabilities.yaml)` - schema version `1` parsed.
-- `./ops test focused tests/test_agent_operations_contract.py -q` - 23 passed.
+- `./ops test focused tests/test_agent_operations_contract.py -q` - 16 passed.
+- `./ops test focused tests/test_eom_render_profile.py::test_database_config_prefers_connection_string_for_asyncpg_kwargs -q` - 1 passed.
 - `./ops doctor` - pass; live systemd/Brain ping, Docker, Vercel, Render CLI,
-  PostgreSQL read-only query, GitHub auth, and environment-source discovery
+  PostgreSQL fixed inspection, GitHub auth, and environment-source discovery
   reported without secret values.
-- `./ops status`, `./ops db status`, a live bounded read-only metadata query,
-  and `./ops db migrations` - pass.
+- `./ops db inspect connectivity` and `./ops db migrations` - pass through the
+  Atlas `DatabaseConfig`/asyncpg path.
 - `./ops env keys`, `./ops env systemd`, and `./ops env vercel` - pass;
   names/sources only.
 - `./ops ci status 3`, `./ops logs brain`, targeted container logs, and
@@ -198,25 +230,25 @@ Parked hardening: none.
   legitimately returned no records in that window.
 - `python scripts/sync_pr_plan.py --check plans/PR-Agent-Operations-Contract.md`
   and `git diff --check` - pass after final sync.
-- Pending at commit time: mechanical local review and secret scan will run once
-  through `scripts/push_pr.sh` at push time.
+- The original head's guarded push/local review and secret scan passed. The
+  current review-fix head will rerun the same guarded push before publication.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.agent/capabilities.yaml` | 286 |
+| `.agent/capabilities.yaml` | 288 |
 | `.agent/runbooks/ci.md` | 65 |
-| `.agent/runbooks/database.md` | 83 |
+| `.agent/runbooks/database.md` | 85 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 186 |
+| `.agent/runbooks/discovery-ledger.md` | 189 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
 | `.agent/runbooks/testing.md` | 85 |
 | `AGENTS.md` | 13 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 879 |
-| `plans/PR-Agent-Operations-Contract.md` | 222 |
-| `tests/test_agent_operations_contract.py` | 193 |
-| **Total** | **2346** |
+| `ops` | 780 |
+| `plans/PR-Agent-Operations-Contract.md` | 254 |
+| `tests/test_agent_operations_contract.py` | 258 |
+| **Total** | **2351** |

@@ -13,55 +13,119 @@ import yaml
 ROOT = Path(__file__).parents[1]
 OPS = ROOT / "ops"
 OPS_MODULE = runpy.run_path(str(OPS), run_name="atlas_ops_contract_test")
-validate_read_only_sql = OPS_MODULE["validate_read_only_sql"]
-psql_readonly_command = OPS_MODULE["psql_readonly_command"]
+DATABASE_INSPECTIONS = OPS_MODULE["DATABASE_INSPECTIONS"]
+TEST_DATABASE_URL_KEYS = OPS_MODULE["TEST_DATABASE_URL_KEYS"]
+database_inspection_command = OPS_MODULE["database_inspection_command"]
+database_runtime_environment = OPS_MODULE["database_runtime_environment"]
+
+
+def test_database_surface_contains_only_fixed_inspections() -> None:
+    assert DATABASE_INSPECTIONS == {
+        "connectivity": "SELECT 1 AS ok",
+        "migrations": (
+            "SELECT count(*) AS applied_count, max(version) AS latest_version "
+            "FROM public.schema_migrations"
+        ),
+    }
+    for name in DATABASE_INSPECTIONS:
+        command = database_inspection_command(name)
+        assert command[-2:] == ["__db-inspect", name]
+        assert DATABASE_INSPECTIONS[name] not in command
 
 
 @pytest.mark.parametrize(
-    "sql",
+    "args",
     (
-        "SELECT 1",
-        "-- harmless comment\nSELECT ';' AS value;",
-        "SELECT $$semicolon ; in dollar quote$$",
-        "SELECT 1 /* ignored ; nested /* comment */ safely */;",
-        "SHOW transaction_read_only",
-        "TABLE schema_migrations",
-        "VALUES (1), (2)",
+        ("db", "query", "SELECT pg_terminate_backend(1)"),
+        ("db", "query", "SELECT 1"),
+        ("db", "inspect", "pg_terminate_backend"),
+        ("__db-inspect", "connectivity"),
     ),
 )
-def test_read_only_sql_admits_single_safe_statement(sql: str) -> None:
-    assert validate_read_only_sql(sql) == (True, "ok")
+def test_database_surface_rejects_arbitrary_sql(args: tuple[str, ...]) -> None:
+    result = subprocess.run(
+        [str(OPS), *args],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert any(
+        reason in result.stderr
+        for reason in (
+            "arbitrary SQL",
+            "unknown database inspection",
+            "internal database inspection entrypoint is not public",
+        )
+    )
 
 
-@pytest.mark.parametrize(
-    "sql,reason_fragment",
-    (
-        ("", "empty"),
-        ("INSERT INTO audit_log VALUES (1)", "only SELECT"),
-        ("WITH changed AS (DELETE FROM x RETURNING *) SELECT * FROM changed", "only SELECT"),
-        ("SELECT 1; DELETE FROM contacts", "exactly one"),
-        ("SELECT * INTO copied_contacts FROM contacts", "SELECT INTO"),
-        ("SELECT * FROM contacts FOR UPDATE", "row-locking"),
-        ("SELECT 'unterminated", "unterminated"),
-        ("/* unterminated", "unterminated"),
-        ("\\copy contacts TO '/tmp/contacts'", "only SELECT"),
-    ),
-)
-def test_read_only_sql_rejects_write_and_ambiguous_boundaries(
-    sql: str,
-    reason_fragment: str,
+def test_database_runtime_preserves_exact_dsn_without_argv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    allowed, reason = validate_read_only_sql(sql)
-    assert allowed is False
-    assert reason_fragment in reason
+    dsn = (
+        "postgresql://agent:canary-password@db.example/atlas"
+        "?sslmode=require&host=%2Fvar%2Frun%2Fpostgresql"
+    )
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"ATLAS_DB_CONNECTION_STRING={dsn}\n", encoding="utf-8")
+    monkeypatch.setenv("ATLAS_OPS_ENV_FILES", str(env_file))
+    for key in TEST_DATABASE_URL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("ATLAS_DB_CONNECTION_STRING", raising=False)
+
+    child_env = database_runtime_environment()
+    command = database_inspection_command("connectivity")
+
+    assert child_env["ATLAS_DB_CONNECTION_STRING"] == dsn
+    assert all(dsn not in argument for argument in command)
 
 
-def test_psql_query_has_database_enforced_read_only_boundary() -> None:
-    command = psql_readonly_command("SELECT 1")
-    assert "BEGIN TRANSACTION READ ONLY;" in command
-    assert "ROLLBACK;" in command
-    assert command.index("BEGIN TRANSACTION READ ONLY;") < command.index("SELECT 1")
-    assert command.index("SELECT 1") < command.index("ROLLBACK;")
+def test_git_snapshot_never_reads_or_prints_raw_origin(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        commands.append(args)
+        output = "main\n" if "--show-current" in args else ""
+        return subprocess.CompletedProcess(args, 0, output, "")
+
+    function_globals = OPS_MODULE["print_git_snapshot"].__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
+    monkeypatch.setitem(function_globals, "run", fake_run)
+    OPS_MODULE["print_git_snapshot"]()
+
+    output = capsys.readouterr().out
+    assert "canfieldjuan/ATLAS" in output
+    assert "canary-token" not in output
+    assert all("get-url" not in command for command in commands)
+
+
+@pytest.mark.parametrize("database_key", TEST_DATABASE_URL_KEYS)
+def test_integration_guard_admits_each_canonical_database_variable(
+    database_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for key in TEST_DATABASE_URL_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(database_key, "postgresql://disposable.invalid/atlas_test")
+    monkeypatch.setenv("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", "1")
+    calls: list[list[str]] = []
+
+    def fake_exec(args: list[str], **_kwargs: object) -> int:
+        calls.append(args)
+        return 0
+
+    function_globals = OPS_MODULE["test_command"].__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: ROOT)
+    monkeypatch.setitem(function_globals, "exec_command", fake_exec)
+
+    assert OPS_MODULE["test_command"](["integration", "tests/example.py", "-q"]) == 0
+    assert calls and calls[0][-2:] == ["tests/example.py", "-q"]
 
 
 def test_env_keys_never_emit_values_or_evaluate_file(tmp_path: Path) -> None:
@@ -151,7 +215,8 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
         "repository_operations",
     ):
         assert key in capabilities
-    assert capabilities["database"]["safe_query"].startswith("./ops db query")
+    assert capabilities["database"]["safe_inspection"] == "./ops db inspect connectivity"
+    assert capabilities["database"]["arbitrary_query"].startswith("unavailable")
     assert capabilities["deployment"]["brain"]["provider"] == "local systemd user service"
     assert capabilities["deployment"]["frontend"]["provider"] == "Vercel"
 

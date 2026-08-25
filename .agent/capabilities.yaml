@@ -78,7 +78,7 @@ testing:
     status: available-with-explicit-disposable-database
     provider: pytest plus PostgreSQL 16
     command: ./ops test integration <focused-test-target>
-    authentication: ATLAS_MIGRATION_TEST_DATABASE_URL or ATLAS_RECEIVABLES_TEST_DATABASE_URL
+    authentication: one of ATLAS_MIGRATION_TEST_DATABASE_URL, ATLAS_RECEIVABLES_TEST_DATABASE_URL, or ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
     current_session_capable: false-until-a-disposable-url-is-exported
     mutation: destructive within the explicitly confirmed disposable database
     safe_verify: use the matching GitHub Actions workflow when no disposable local database is prepared
@@ -152,19 +152,21 @@ database:
   authentication: local PostgreSQL rules or ATLAS_DB_* environment variables
   current_session_capable: true
   access: ./ops db status
-  safe_query: ./ops db query "SELECT 1"
+  safe_inspection: ./ops db inspect connectivity
+  arbitrary_query: unavailable-until-a-privilege-restricted-inspection-role-exists
   migration_status: ./ops db migrations
   migrations:
     provider: custom SQL runner
     path: atlas_brain/storage/migrations
     invocation: automatic during full application startup
     warning: the full chain is not fresh-database applicable because later migrations depend on out-of-band product_metadata
-  mutation: query is read-only; app startup and integration tests can mutate
+  mutation: fixed inspections are read-only; app startup and integration tests can mutate
   likely_failures:
     - assuming root Docker Compose provides PostgreSQL
     - using Alembic even though Atlas uses its custom SQL runner
     - treating app startup as a read-only health check
     - using the live atlas database for integration tests
+    - assuming a READ ONLY transaction makes arbitrary SELECT functions non-mutating
   runbook: .agent/runbooks/database.md
 
 logs:

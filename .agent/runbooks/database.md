@@ -1,6 +1,6 @@
 # Database operations
 
-Use this runbook for PostgreSQL connectivity, bounded read-only queries,
+Use this runbook for PostgreSQL connectivity, fixed read-only inspections,
 migration status, and database-backed tests.
 
 ## Architecture and safe inspection
@@ -11,20 +11,22 @@ create PostgreSQL.
 
 ```bash
 ./ops db status
-./ops db query "SELECT 1"
+./ops db inspect connectivity
 ./ops db migrations
 ```
 
-`./ops db query` accepts exactly one `SELECT`, `SHOW`, `TABLE`, or `VALUES`
-statement. It refuses write/DDL leads, `SELECT INTO`, row-locking selects, and
-multiple statements, then still runs the admitted SQL inside a PostgreSQL
-`READ ONLY` transaction with statement and lock timeouts. It uses exported
-`ATLAS_DB_*` variables or the same selected keys from discovered env files, but
-never prints credentials.
+`./ops db inspect` accepts only the named, fixed `connectivity` and `migrations`
+inspections. It executes them through the project Python and Atlas's
+`DatabaseConfig`/asyncpg path, so a complete `ATLAS_DB_CONNECTION_STRING`
+retains TLS, socket, and other connection parameters without appearing in a
+process argument. The fixed SQL still runs inside a PostgreSQL `READ ONLY`
+transaction with command, statement, and lock timeouts.
 
-The command is a write guard, not a data-privacy guard. Query only the columns
-and rows needed, add a `LIMIT`, and do not paste customer content or identifiers
-into chat or GitHub. There is intentionally no `./ops db write`.
+There is intentionally no arbitrary `./ops db query`: PostgreSQL permits
+functions with operational side effects inside a `READ ONLY` transaction. A
+generic query command is unavailable until Atlas has a privilege-restricted
+inspection role. Do not paste customer content or identifiers into chat or
+GitHub, and do not substitute the live application role as an ad hoc read role.
 
 ## Migrations
 
@@ -72,7 +74,7 @@ workflow as the canonical proof.
 
 - `pg_isready` fails: check `systemctl status postgresql@16-main` and whether
   port `5433` is listening; do not fall back to an unrelated `5432` database.
-- Readiness passes but the query fails: authentication or database selection is
+- Connectivity inspection fails: authentication or database selection is
   wrong. Inspect key names with `./ops env keys`; never print the URL/password.
 - `schema_migrations` is absent: stop. The target is probably a fresh or wrong
   database; do not “fix” it by applying the full chain.
