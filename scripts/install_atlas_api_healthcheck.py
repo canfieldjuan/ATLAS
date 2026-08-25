@@ -300,6 +300,11 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
             )
         topic_message = ensure_notification_topic(paths, environment)
         messages = [topic_message]
+        _run_required(
+            runner,
+            ("systemctl", "--user", "stop", SERVICE_NAME),
+            action="existing health service stop",
+        )
         for source, destination, executable in sources:
             _write_copy(source, destination, executable=executable)
             messages.append(f"wrote: {destination}")

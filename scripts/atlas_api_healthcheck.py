@@ -154,7 +154,14 @@ def probe_lead_intake(probe_url: str, opener: Opener) -> tuple[bool, str]:
     return False, f"lead-intake probe returned HTTP {status}"
 
 
-def observe(settings: Settings, runner: Runner, opener: Opener, sleeper: Callable[[float], None]) -> Observation:
+def observe(
+    settings: Settings,
+    runner: Runner,
+    opener: Opener,
+    sleeper: Callable[[float], None],
+    *,
+    before_start: Callable[[], None] | None = None,
+) -> Observation:
     """Observe the provider and recover only an inactive, non-maintenance unit."""
     if settings.maintenance_lock.exists():
         return Observation("maintenance", f"maintenance lock present: {settings.maintenance_lock}")
@@ -163,6 +170,8 @@ def observe(settings: Settings, runner: Runner, opener: Opener, sleeper: Callabl
         healthy, detail = probe_lead_intake(settings.probe_url, opener)
         return Observation("healthy" if healthy else "down", detail)
 
+    if before_start is not None:
+        before_start()
     started = runner(("systemctl", "--user", "start", settings.service))
     if started.returncode != 0:
         return Observation(
@@ -215,6 +224,15 @@ def _normalized_notification(value: object) -> dict[str, str] | None:
     return {"alert": alert, "detail": detail}
 
 
+def _normalized_recovery_intent(value: object) -> dict[str, str] | None:
+    if not isinstance(value, dict):
+        return None
+    service = value.get("service")
+    if not isinstance(service, str) or not service.strip():
+        return None
+    return {"service": service}
+
+
 def normalize_state(value: object) -> dict[str, object] | None:
     """Validate the persisted state and migrate the previous singular queue."""
     if not isinstance(value, dict):
@@ -222,9 +240,12 @@ def normalize_state(value: object) -> dict[str, object] | None:
 
     queued_value = value.get("pending_notifications")
     legacy_value = value.get("pending_notification")
+    recovery_value = value.get("recovery_intent")
     if queued_value is not None and legacy_value is not None:
         return None
     if legacy_value is not None:
+        if recovery_value is not None:
+            return None
         notification = _normalized_notification(legacy_value)
         next_state = _normalized_base_state(
             legacy_value.get("next_state") if isinstance(legacy_value, dict) else None
@@ -242,29 +263,34 @@ def normalize_state(value: object) -> dict[str, object] | None:
     state = _normalized_base_state(value)
     if state is None:
         return None
-    if queued_value is None:
-        return state
-    if not isinstance(queued_value, list):
-        return None
-    notifications: list[dict[str, str]] = []
-    for candidate in queued_value:
-        notification = _normalized_notification(candidate)
-        if notification is None:
+    if queued_value is not None:
+        if not isinstance(queued_value, list):
             return None
-        notifications.append(notification)
-    if notifications:
-        state["pending_notifications"] = notifications
+        notifications: list[dict[str, str]] = []
+        for candidate in queued_value:
+            notification = _normalized_notification(candidate)
+            if notification is None:
+                return None
+            notifications.append(notification)
+        if notifications:
+            state["pending_notifications"] = notifications
+    if recovery_value is not None:
+        recovery_intent = _normalized_recovery_intent(recovery_value)
+        if recovery_intent is None:
+            return None
+        state["recovery_intent"] = recovery_intent
     return state
 
 
 def read_state(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"WARNING state read failed: {type(exc).__name__}", file=sys.stderr)
+    except FileNotFoundError:
         return {}
+    except OSError as exc:
+        raise RuntimeError(f"unable to read Atlas API health state at {path}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"unable to decode Atlas API health state at {path}") from exc
     normalized = normalize_state(value)
     if normalized is None:
         print("WARNING state schema is invalid; resetting monitor state", file=sys.stderr)
@@ -331,7 +357,9 @@ def decide_alert(previous: dict[str, object], observation: Observation, realert_
     if observation.status == "maintenance":
         return {"status": "maintenance", "consecutive": 0}, None, EXIT_OK
     if observation.status == "healthy":
-        alert = "recovered" if previous_status == "down" else None
+        alert = "auto-recovered" if recovery_intent_service(previous) is not None else None
+        if alert is None and previous_status == "down":
+            alert = "recovered"
         return {"status": "healthy", "consecutive": 0}, alert, EXIT_OK
     if observation.status == "recovered":
         return {"status": "healthy", "consecutive": 0}, "auto-recovered", EXIT_RECOVERED
@@ -360,6 +388,22 @@ def state_with_pending_notifications(
     if notifications:
         state["pending_notifications"] = notifications
     return state
+
+
+def state_with_recovery_intent(state: dict[str, object], service: str) -> dict[str, object]:
+    pending_state = dict(state)
+    pending_state.setdefault("status", "healthy")
+    pending_state.setdefault("consecutive", 0)
+    pending_state["recovery_intent"] = {"service": service}
+    return pending_state
+
+
+def recovery_intent_service(state: dict[str, object]) -> str | None:
+    intent = state.get("recovery_intent")
+    if not isinstance(intent, dict):
+        return None
+    service = intent.get("service")
+    return service if isinstance(service, str) and service.strip() else None
 
 
 def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tags: str) -> bool:
@@ -415,12 +459,24 @@ def run_healthcheck(
     """Run one serialized observation/recovery/notification cycle."""
     state_path = settings.state_dir / "state.json"
     with serialized_monitor_state(settings):
-        observation = observe(settings, runner, opener, sleeper)
         previous = read_state(state_path)
+        observation = observe(
+            settings,
+            runner,
+            opener,
+            sleeper,
+            before_start=lambda: write_state(
+                state_path, state_with_recovery_intent(previous, settings.service)
+            ),
+        )
         next_state, alert, exit_code = decide_alert(previous, observation, settings.realert_every)
         notifications = pending_notifications(previous)
         if alert is not None:
-            notifications.append({"alert": alert, "detail": observation.detail})
+            detail = observation.detail
+            recovered_service = recovery_intent_service(previous)
+            if alert == "auto-recovered" and recovered_service is not None:
+                detail = f"auto-recovered {recovered_service}: {detail}"
+            notifications.append({"alert": alert, "detail": detail})
         append_log(settings.state_dir, f"{observation.status.upper()} {observation.detail}")
         print(f"{observation.status.upper()}: {observation.detail}")
 

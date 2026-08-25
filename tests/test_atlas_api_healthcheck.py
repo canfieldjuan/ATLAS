@@ -504,6 +504,77 @@ def test_recovery_outbox_is_persisted_before_a_delivery_crash(tmp_path):
     assert _state(settings) == {"consecutive": 0, "status": "healthy"}
 
 
+def test_recovery_intent_is_persisted_before_start_and_replayed_after_crash(tmp_path):
+    settings = _settings(tmp_path)
+    crashed_commands: list[tuple[str, ...]] = []
+
+    def crash_after_start(command):
+        command = tuple(command)
+        crashed_commands.append(command)
+        if "is-active" in command:
+            return subprocess.CompletedProcess(command, 3, "", "")
+        raise SystemExit("simulated crash after systemd accepted start")
+
+    with pytest.raises(SystemExit, match="simulated crash"):
+        healthcheck.run_healthcheck(
+            settings,
+            runner=crash_after_start,
+            opener=_opener(204),
+            notifier=lambda *args: True,
+            sleeper=lambda _: None,
+        )
+
+    assert crashed_commands[-1] == ("systemctl", "--user", "start", settings.service)
+    assert _state(settings) == {
+        "status": "healthy",
+        "consecutive": 0,
+        "recovery_intent": {"service": settings.service},
+    }
+
+    sent: list[tuple] = []
+    result = healthcheck.run_healthcheck(
+        settings,
+        runner=_Runner(active=True),
+        opener=_opener(204),
+        notifier=lambda *args: (sent.append(args), True)[1],
+        sleeper=lambda _: None,
+    )
+
+    assert result == healthcheck.EXIT_OK
+    assert sent[0][2] == "atlas-api auto-recovered"
+    assert _state(settings) == {"status": "healthy", "consecutive": 0}
+
+
+def test_state_read_error_prevents_recovery_and_state_replacement(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    settings.state_dir.mkdir(parents=True)
+    state_path = settings.state_dir / "state.json"
+    original_payload = '{"status":"down","consecutive":1}'
+    state_path.write_text(original_payload, encoding="utf-8")
+    original_read_text = Path.read_text
+
+    def fail_state_read(path, *args, **kwargs):
+        if path == state_path:
+            raise OSError("transient read failure")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_state_read)
+    runner = _Runner(active=False)
+
+    with pytest.raises(RuntimeError, match="unable to read Atlas API health state"):
+        healthcheck.run_healthcheck(
+            settings,
+            runner=runner,
+            opener=_opener(204),
+            notifier=lambda *args: True,
+            sleeper=lambda _: None,
+        )
+
+    assert runner.commands == []
+    with state_path.open(encoding="utf-8") as handle:
+        assert handle.read() == original_payload
+
+
 def test_missing_notification_configuration_does_not_block_recovery(tmp_path):
     settings = _settings(tmp_path, ntfy_topic="")
     runner = _Runner(active=False)
@@ -536,12 +607,14 @@ def test_no_alert_does_not_consume_a_transition(tmp_path):
     assert _state(settings)["pending_notifications"][0]["alert"] == "down"
 
 
-def test_invalid_state_is_visible_before_monitor_resets_it(tmp_path, capsys):
+def test_invalid_json_state_is_not_reset_or_replaced(tmp_path):
     state_path = tmp_path / "state.json"
     state_path.write_text("not-json", encoding="utf-8")
 
-    assert healthcheck.read_state(state_path) == {}
-    assert "WARNING state read failed: JSONDecodeError" in capsys.readouterr().err
+    with pytest.raises(RuntimeError, match="unable to decode Atlas API health state"):
+        healthcheck.read_state(state_path)
+
+    assert state_path.read_text(encoding="utf-8") == "not-json"
 
 
 @pytest.mark.parametrize(
@@ -563,6 +636,11 @@ def test_invalid_state_is_visible_before_monitor_resets_it(tmp_path, capsys):
             "status": "healthy",
             "consecutive": 0,
             "pending_notifications": [{"alert": "unknown", "detail": "old"}],
+        },
+        {
+            "status": "healthy",
+            "consecutive": 0,
+            "recovery_intent": {"service": ""},
         },
     ],
 )
@@ -721,6 +799,7 @@ def test_installer_deploys_source_and_invokes_enabled_timer_path(tmp_path):
     assert runner.commands == [
         ("systemctl", "--user", "is-enabled", "--quiet", installer.TIMER_NAME),
         ("systemctl", "--user", "is-active", "--quiet", installer.TIMER_NAME),
+        ("systemctl", "--user", "stop", installer.SERVICE_NAME),
         ("systemctl", "--user", "daemon-reload"),
         ("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME),
         ("systemctl", "--user", "enable", "--now", installer.TIMER_NAME),
@@ -749,6 +828,46 @@ def test_installer_requires_private_topic_before_writing_or_enabling(tmp_path):
         ("systemctl", "--user", "is-active", "--quiet", installer.TIMER_NAME),
         ("systemctl", "--user", "daemon-reload"),
     ]
+
+
+def test_installer_quiesces_old_service_before_replacing_files(tmp_path, monkeypatch):
+    paths = _install_paths(tmp_path)
+    events: list[tuple[str, ...]] = []
+    runner = _InstallerRunner()
+    original_write_copy = installer._write_copy
+
+    def record_runner(command):
+        events.append(("command", *tuple(command)))
+        return runner(command)
+
+    def record_copy(source, destination, *, executable):
+        events.append(("copy", str(destination)))
+        return original_write_copy(source, destination, executable=executable)
+
+    monkeypatch.setattr(installer, "_write_copy", record_copy)
+
+    installer.install(
+        paths,
+        runner=record_runner,
+        environment={installer.TOPIC_ENV: "test-private-topic"},
+    )
+
+    stop_index = events.index(
+        ("command", "systemctl", "--user", "stop", installer.SERVICE_NAME)
+    )
+    first_copy_index = next(index for index, event in enumerate(events) if event[0] == "copy")
+    proof_index = events.index(
+        (
+            "command",
+            "systemctl",
+            "--user",
+            "start",
+            "--wait",
+            installer.SERVICE_NAME,
+        )
+    )
+
+    assert stop_index < first_copy_index < proof_index
 
 
 def test_topic_file_is_private_before_atomic_publish(tmp_path, monkeypatch):

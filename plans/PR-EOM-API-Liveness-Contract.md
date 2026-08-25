@@ -239,7 +239,7 @@ Parked hardening: none.
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
 | `plans/PR-EOM-API-Liveness-Contract.md` | 245 |
-| `scripts/atlas_api_healthcheck.py` | 506 |
-| `scripts/install_atlas_api_healthcheck.py` | 397 |
-| `tests/test_atlas_api_healthcheck.py` | 852 |
-| **Total** | **2028** |
+| `scripts/atlas_api_healthcheck.py` | 562 |
+| `scripts/install_atlas_api_healthcheck.py` | 402 |
+| `tests/test_atlas_api_healthcheck.py` | 971 |
+| **Total** | **2208** |
