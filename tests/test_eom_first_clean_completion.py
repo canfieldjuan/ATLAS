@@ -1539,6 +1539,15 @@ async def test_schema_readiness_rejects_atlas_database_ownership() -> None:
             await pool._connection.execute(
                 f"ALTER DATABASE {database_ident} OWNER TO {owner_ident}"
             )
+            # A temporary ownership transfer can remove the test runtime's
+            # explicit database CREATE baseline. Restore it before this fixture
+            # releases so later disposable schemas remain isolated.
+            await pool._connection.execute(
+                f"GRANT CREATE ON DATABASE {database_ident} TO atlas"
+            )
+        assert await pool._connection.fetchval(
+            "SELECT has_database_privilege('atlas', current_database(), 'CREATE')"
+        )
         assert await first_clean_completion_schema_ready(pool) is True
 
 
@@ -1750,6 +1759,14 @@ async def test_completion_migration_rejects_atlas_database_ownership() -> None:
             await pool._connection.execute(
                 f"ALTER DATABASE {database_ident} OWNER TO {owner_ident}"
             )
+            # Keep the disposable runtime's explicit CREATE baseline after the
+            # owner reversal so following isolated fixtures can create schemas.
+            await pool._connection.execute(
+                f"GRANT CREATE ON DATABASE {database_ident} TO atlas"
+            )
+        assert await pool._connection.fetchval(
+            "SELECT has_database_privilege('atlas', current_database(), 'CREATE')"
+        )
 
 
 @pytest.mark.asyncio

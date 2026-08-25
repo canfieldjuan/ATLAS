@@ -293,6 +293,30 @@ Max files: 13
 - Parked hardening: none; the new isolated service is required to prove the
   production role separation rather than emulate it with a test-only bypass.
 
+### Isolated database-owner probe baseline disposition preflight
+
+- Root decision: restore the isolated runtime's explicit database `CREATE`
+  privilege after every test that temporarily transfers database ownership to
+  `atlas`, and assert that restored fixture baseline before later disposable
+  schemas can depend on it.
+- Source trace: owner-probe test -> `ALTER DATABASE ... OWNER TO atlas` ->
+  owner reversal can remove the runtime's explicit `CREATE` privilege -> later
+  `_test_store()` cannot create its disposable schema -> unrelated isolated
+  PostgreSQL proofs fail before their behavior executes.
+- Upstream files: `tests/test_eom_first_clean_completion.py` and this plan.
+- Fix strategy: upstream-root. Both database-owner probes re-grant the exact
+  `CREATE` privilege after restoring the original owner and assert it directly,
+  preserving the synthetic runtime's fixture contract rather than skipping or
+  weakening the later database-backed cases.
+- Blocking predicate: CI/test isolation.
+- Disposition: fix in this PR.
+- Allowed files: `tests/test_eom_first_clean_completion.py` and
+  `plans/PR-First-Clean-Completion-Receipt.md` only.
+- Max files: 13. No production database ACL, migration, service contract, or
+  customer workflow changes are introduced.
+- Parked hardening: none; this exact fixture baseline is required for the
+  current isolated proof to run.
+
 ### Effective runtime authority, dependency fence, and timeout disposition preflight
 
 - Root decision: attest the runtime's complete administrative authority graph,
@@ -696,9 +720,9 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 757 |
 | `atlas_brain/storage/migrations/__init__.py` | 40 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 149 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 704 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 728 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 460 |
-| `tests/test_eom_first_clean_completion.py` | 3337 |
+| `tests/test_eom_first_clean_completion.py` | 3354 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 852 |
 | `tests/test_migrations_runner.py` | 39 |
-| **Total** | **7806** |
+| **Total** | **7847** |
