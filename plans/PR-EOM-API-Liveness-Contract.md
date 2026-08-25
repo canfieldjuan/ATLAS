@@ -267,6 +267,32 @@ Notification delivery is at-least-once, not exactly-once.
   that the PR runs the full Unit Gate; plan sync and diff audit. GitHub remains
   the source of truth for the full Unit Gate.
 
+### Contract revision: browser-ready probe and exact timer restoration
+
+- New evidence: the provider probe sends an OPTIONS preflight but treats a
+  200/204 status as healthy without verifying the route-owned CORS response
+  headers needed by the browser. Separately, installer rollback collapses
+  persistent `enabled` and temporary `enabled-runtime` timer states into one
+  boolean and always restores persistent enablement.
+- Revised root cause: both boundaries discard contract-bearing state after
+  reading it: the health probe drops preflight headers, and the installer drops
+  the systemd enablement class. Later decisions therefore prove or restore less
+  than the state they claim.
+- Revised required change surface: send the browser's Content-Type preflight
+  request and require the canonical origin, POST method, and Content-Type
+  allowance before reporting provider health; preserve disabled, persistent,
+  and runtime-only timer enablement distinctly and replay the exact enablement
+  form during rollback; cover missing/wrong/mixed CORS headers and runtime-only
+  rollback in the existing focused test file.
+- Revised explicit non-scope: do not change Atlas route CORS behavior, allowed
+  origins, the website request shape, service/timer templates, public CLI,
+  schemas, dependencies, notification behavior, or live deployment. Continue
+  to park non-finite intervals and desktop-notification diagnostics.
+- Revised verification plan: focused regression tests for valid and invalid
+  preflight response shapes plus persistent/runtime/disabled timer restoration;
+  syntax, systemd verification, plan sync, diff audit, and the existing managed
+  full Unit Gate before push.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -386,8 +412,8 @@ notification exit diagnostics, as listed above.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 19 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 393 |
-| `scripts/atlas_api_healthcheck.py` | 649 |
-| `scripts/install_atlas_api_healthcheck.py` | 482 |
-| `tests/test_atlas_api_healthcheck.py` | 1420 |
-| **Total** | **2973** |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 419 |
+| `scripts/atlas_api_healthcheck.py` | 675 |
+| `scripts/install_atlas_api_healthcheck.py` | 490 |
+| `tests/test_atlas_api_healthcheck.py` | 1510 |
+| **Total** | **3123** |

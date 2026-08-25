@@ -32,6 +32,7 @@ EXIT_ALERT_UNDELIVERED = 4
 
 DEFAULT_SERVICE = "atlas-api.service"
 DEFAULT_PROBE_URL = "http://127.0.0.1:8012/api/v1/leads/intake"
+PROBE_ORIGIN = "https://effinghamofficemaids.com"
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 DEFAULT_REALERT_EVERY = 6
 DEFAULT_RECOVERY_ATTEMPTS = 8
@@ -176,19 +177,44 @@ def probe_lead_intake(probe_url: str, opener: Opener) -> tuple[bool, str]:
     request = urllib.request.Request(
         probe_url,
         headers={
-            "Origin": "https://effinghamofficemaids.com",
+            "Origin": PROBE_ORIGIN,
             "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "Content-Type",
         },
         method="OPTIONS",
     )
     try:
         with opener(request, timeout=8) as response:
             status = int(response.status)
-    except (urllib.error.URLError, http.client.HTTPException, OSError, ValueError) as exc:
+            allow_origin = str(response.headers.get("Access-Control-Allow-Origin", "")).strip()
+            allow_methods = {
+                method.strip().upper()
+                for method in str(response.headers.get("Access-Control-Allow-Methods", "")).split(",")
+                if method.strip()
+            }
+            allow_headers = {
+                header.strip().lower()
+                for header in str(response.headers.get("Access-Control-Allow-Headers", "")).split(",")
+                if header.strip()
+            }
+    except (
+        urllib.error.URLError,
+        http.client.HTTPException,
+        AttributeError,
+        OSError,
+        TypeError,
+        ValueError,
+    ) as exc:
         return False, f"lead-intake probe failed: {type(exc).__name__}"
-    if status in (200, 204):
-        return True, f"lead-intake probe returned HTTP {status}"
-    return False, f"lead-intake probe returned HTTP {status}"
+    if status not in (200, 204):
+        return False, f"lead-intake probe returned HTTP {status}"
+    if allow_origin != PROBE_ORIGIN:
+        return False, f"lead-intake probe CORS origin mismatch at HTTP {status}"
+    if "POST" not in allow_methods:
+        return False, f"lead-intake probe CORS methods omit POST at HTTP {status}"
+    if "content-type" not in allow_headers:
+        return False, f"lead-intake probe CORS headers omit Content-Type at HTTP {status}"
+    return True, f"lead-intake probe returned browser-ready HTTP {status}"
 
 
 def observe(

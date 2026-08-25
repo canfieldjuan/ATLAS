@@ -35,8 +35,17 @@ _INSTALLER_SPEC.loader.exec_module(installer)
 
 
 class _Response:
-    def __init__(self, status: int) -> None:
+    def __init__(self, status: int, headers: dict[str, str] | None = None) -> None:
         self.status = status
+        self.headers = (
+            {
+                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGIN,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+            if headers is None
+            else headers
+        )
 
     def __enter__(self):
         return self
@@ -98,6 +107,7 @@ class _InstallerRunner:
         *,
         failing_command: tuple[str, ...] | None = None,
         timer_enabled: bool = False,
+        timer_runtime: bool = False,
         timer_active: bool = False,
         timer_load_state: str = "loaded",
         health_service_load_state: str = "loaded",
@@ -105,7 +115,8 @@ class _InstallerRunner:
         need_daemon_reload: dict[str, str] | None = None,
     ) -> None:
         self.failing_command = failing_command
-        self.timer_enabled = timer_enabled
+        self.timer_enabled = timer_enabled or timer_runtime
+        self.timer_runtime = timer_runtime
         self.timer_active = timer_active
         self.timer_load_state = timer_load_state
         self.health_service_load_state = health_service_load_state
@@ -139,16 +150,28 @@ class _InstallerRunner:
                 command, 0, self.need_daemon_reload.get(command[-1], "") + "\n", ""
             )
         if "show" in command and "--property=UnitFileState" in command:
-            state = "enabled" if self.timer_enabled else "disabled"
+            state = (
+                "enabled-runtime"
+                if self.timer_runtime
+                else "enabled"
+                if self.timer_enabled
+                else "disabled"
+            )
             return subprocess.CompletedProcess(command, 0, state + "\n", "")
         if command[2:4] == ("enable", "--now"):
             self.timer_enabled = True
+            self.timer_runtime = False
             self.timer_active = True
         elif command[2:4] == ("disable", "--now"):
             self.timer_enabled = False
+            self.timer_runtime = False
             self.timer_active = False
+        elif command[2:4] == ("enable", "--runtime"):
+            self.timer_enabled = True
+            self.timer_runtime = True
         elif command[2:] == ("enable", installer.TIMER_NAME):
             self.timer_enabled = True
+            self.timer_runtime = False
         elif command[2:] == ("start", installer.TIMER_NAME):
             self.timer_active = True
         elif command[2:] == ("stop", installer.TIMER_NAME):
@@ -173,11 +196,15 @@ def _settings(tmp_path: Path, **overrides):
     return healthcheck.Settings(**values)
 
 
-def _opener(status: int, seen: list | None = None):
+def _opener(
+    status: int,
+    seen: list | None = None,
+    headers: dict[str, str] | None = None,
+):
     def _open(request, *, timeout):
         if seen is not None:
             seen.append((request.method, request.headers, timeout))
-        return _Response(status)
+        return _Response(status, headers)
 
     return _open
 
@@ -260,9 +287,59 @@ def test_inactive_service_is_started_and_reprobed(tmp_path):
     assert _start_commands(runner) == [
         ("systemctl", "--user", "start", "atlas-api.service")
     ]
-    assert seen == [("OPTIONS", {"Origin": "https://effinghamofficemaids.com", "Access-control-request-method": "POST"}, 8)]
+    assert seen == [
+        (
+            "OPTIONS",
+            {
+                "Origin": healthcheck.PROBE_ORIGIN,
+                "Access-control-request-method": "POST",
+                "Access-control-request-headers": "Content-Type",
+            },
+            8,
+        )
+    ]
     assert sent[0][2] == "atlas-api auto-recovered"
     assert _state(settings) == {"consecutive": 0, "status": "healthy"}
+
+
+@pytest.mark.parametrize(
+    ("headers", "expected_detail"),
+    [
+        ({}, "CORS origin"),
+        (
+            {
+                "Access-Control-Allow-Origin": "https://example.invalid",
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+            "CORS origin",
+        ),
+        (
+            {
+                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGIN,
+                "Access-Control-Allow-Methods": "OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            },
+            "POST",
+        ),
+        (
+            {
+                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGIN,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "X-Request-ID",
+            },
+            "Content-Type",
+        ),
+    ],
+)
+def test_probe_rejects_non_browser_ready_cors_responses(headers, expected_detail):
+    healthy, detail = healthcheck.probe_lead_intake(
+        "http://example.test/api/v1/leads/intake",
+        _opener(204, headers=headers),
+    )
+
+    assert not healthy
+    assert expected_detail in detail
 
 
 def test_maintenance_lock_never_starts_service(tmp_path):
@@ -616,7 +693,7 @@ def test_recovery_outbox_is_persisted_before_a_delivery_crash(tmp_path):
         "pending_notifications": [
             {
                 "alert": "auto-recovered",
-                "detail": "auto-recovered atlas-api.service: lead-intake probe returned HTTP 204",
+                "detail": "auto-recovered atlas-api.service: lead-intake probe returned browser-ready HTTP 204",
             }
         ],
     }
@@ -658,7 +735,7 @@ def test_recovery_outbox_is_persisted_before_console_output_crash(tmp_path, monk
         "pending_notifications": [
             {
                 "alert": "auto-recovered",
-                "detail": "auto-recovered atlas-api.service: lead-intake probe returned HTTP 204",
+                "detail": "auto-recovered atlas-api.service: lead-intake probe returned browser-ready HTTP 204",
             }
         ],
     }
@@ -1306,7 +1383,19 @@ def test_file_restore_preserves_a_falsy_zero_mode(tmp_path):
     assert destination.read_bytes() == b"previous"
 
 
-def test_installer_restores_files_and_timer_when_service_proof_fails(tmp_path):
+@pytest.mark.parametrize(
+    ("timer_runtime", "restore_enable_command"),
+    [
+        (False, ("systemctl", "--user", "enable", installer.TIMER_NAME)),
+        (
+            True,
+            ("systemctl", "--user", "enable", "--runtime", installer.TIMER_NAME),
+        ),
+    ],
+)
+def test_installer_restores_files_and_timer_when_service_proof_fails(
+    tmp_path, timer_runtime, restore_enable_command
+):
     paths = _install_paths(tmp_path)
     installed_files = [
         paths.installed_monitor,
@@ -1324,7 +1413,8 @@ def test_installer_restores_files_and_timer_when_service_proof_fails(tmp_path):
     previous_payloads = {path: path.read_bytes() for path in installed_files}
     runner = _InstallerRunner(
         failing_command=("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME),
-        timer_enabled=True,
+        timer_enabled=not timer_runtime,
+        timer_runtime=timer_runtime,
         timer_active=True,
     )
 
@@ -1337,7 +1427,7 @@ def test_installer_restores_files_and_timer_when_service_proof_fails(tmp_path):
     assert ("systemctl", "--user", "enable", "--now", installer.TIMER_NAME) not in runner.commands
     assert runner.commands[-3:] == [
         ("systemctl", "--user", "daemon-reload"),
-        ("systemctl", "--user", "enable", installer.TIMER_NAME),
+        restore_enable_command,
         ("systemctl", "--user", "start", installer.TIMER_NAME),
     ]
 

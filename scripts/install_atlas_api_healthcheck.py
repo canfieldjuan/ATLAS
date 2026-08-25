@@ -59,8 +59,12 @@ class FileSnapshot:
 
 @dataclass(frozen=True)
 class TimerState:
-    enabled: bool
+    enablement: str
     active: bool
+
+    @property
+    def enabled(self) -> bool:
+        return self.enablement in {"enabled", "enabled-runtime"}
 
 
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
@@ -248,7 +252,7 @@ def _timer_state(runner: Runner) -> TimerState:
     if unit_state is None:
         raise RuntimeError(query_error or "cannot query existing health timer")
     if unit_state.load_state == "not-found":
-        return TimerState(enabled=False, active=False)
+        return TimerState(enablement="disabled", active=False)
     if unit_state.load_state != "loaded":
         raise RuntimeError(f"health timer has unsupported LoadState={unit_state.load_state}")
     if unit_state.active_state not in {"active", "inactive", "failed"}:
@@ -266,15 +270,14 @@ def _timer_state(runner: Runner) -> TimerState:
     if result.returncode != 0:
         raise RuntimeError(f"cannot query health timer enablement ({_command_detail(result)})")
     unit_file_state = result.stdout.strip().lower()
-    if unit_file_state in {"enabled", "enabled-runtime"}:
-        enabled = True
-    elif unit_file_state in {"disabled", "static"}:
-        enabled = False
-    else:
+    if unit_file_state not in {"disabled", "enabled", "enabled-runtime", "static"}:
         raise RuntimeError(
             f"health timer has unsupported UnitFileState={unit_file_state or 'empty'}"
         )
-    return TimerState(enabled=enabled, active=unit_state.active_state == "active")
+    return TimerState(
+        enablement=unit_file_state,
+        active=unit_state.active_state == "active",
+    )
 
 
 def _existing_health_service_is_loaded(runner: Runner) -> bool:
@@ -339,7 +342,12 @@ def _rollback_install(
         except RuntimeError as exc:
             errors.append(str(exc))
     run_rollback(("systemctl", "--user", "daemon-reload"), "cannot reload restored systemd files")
-    if timer_state.enabled:
+    if timer_state.enablement == "enabled-runtime":
+        run_rollback(
+            ("systemctl", "--user", "enable", "--runtime", TIMER_NAME),
+            "cannot restore runtime-enabled timer",
+        )
+    elif timer_state.enablement == "enabled":
         run_rollback(("systemctl", "--user", "enable", TIMER_NAME), "cannot restore enabled timer")
     if timer_state.active:
         run_rollback(("systemctl", "--user", "start", TIMER_NAME), "cannot restore active timer")
