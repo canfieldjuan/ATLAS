@@ -218,11 +218,11 @@ an automatic completion source and is intentionally left outside this slice.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 12 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 696 |
-| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 340 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 706 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 394 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 76 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 226 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 228 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
-| `tests/test_eom_first_clean_completion.py` | 1013 |
+| `tests/test_eom_first_clean_completion.py` | 1172 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **2814** |
+| **Total** | **3039** |
