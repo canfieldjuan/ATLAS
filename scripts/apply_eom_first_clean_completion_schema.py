@@ -51,6 +51,8 @@ class _TargetIdentity:
     schema_name: str
     database_name: str
     database_oid: int
+    current_user: str
+    session_user: str
 
     @property
     def database_identity(self) -> tuple[str, int]:
@@ -60,6 +62,12 @@ class _TargetIdentity:
             self.database_name,
             self.database_oid,
         )
+
+    @property
+    def uses_direct_atlas_login(self) -> bool:
+        """Return whether this is the exact runtime session the route requires."""
+
+        return self.current_user == "atlas" and self.session_user == "atlas"
 
 
 class _PinnedMigrationPool:
@@ -140,6 +148,11 @@ async def _create_pool(
         "dsn": database_url,
         "min_size": 1,
         "max_size": 1,
+        # The runner deliberately supports PgBouncer transaction pooling. A
+        # prepared-statement cache could reuse a statement name on a different
+        # backend after an acquire/release boundary, including after DDL has
+        # committed but before the final target attestation.
+        "statement_cache_size": 0,
     }
     if schema_name is not None:
         pool_kwargs["server_settings"] = {
@@ -164,6 +177,14 @@ def _require_database_oid(value: object, *, source: str) -> int:
     return value
 
 
+def _require_role_name(value: object, *, source: str) -> str:
+    """Require a non-empty PostgreSQL role name from a catalog identity row."""
+
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"Missing or invalid session identity from {source}")
+    return value
+
+
 async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
     """Read the current schema and database identity without DDL."""
 
@@ -172,6 +193,8 @@ async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
             """
             SELECT pg_catalog.current_schema() AS schema_name,
                    pg_catalog.current_database() AS database_name,
+                   CURRENT_USER AS current_user,
+                   SESSION_USER AS session_user,
                    (
                        SELECT oid
                          FROM pg_catalog.pg_database
@@ -187,10 +210,14 @@ async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
     )
     database_name = _require_database_name(row["database_name"], source=source)
     database_oid = _require_database_oid(row["database_oid"], source=source)
+    current_user = _require_role_name(row["current_user"], source=source)
+    session_user = _require_role_name(row["session_user"], source=source)
     return _TargetIdentity(
         schema_name=schema_name,
         database_name=database_name,
         database_oid=database_oid,
+        current_user=current_user,
+        session_user=session_user,
     )
 
 
@@ -363,6 +390,10 @@ async def _run(
             runtime_pool,
             source="EOM funnel runtime",
         )
+        if not runtime_target.uses_direct_atlas_login:
+            raise RuntimeError(
+                "EOM funnel runtime connection must use the direct atlas login"
+            )
         if runtime_target.schema_name != schema_name:
             raise RuntimeError(
                 "Configured controlled DBA schema does not match the EOM funnel "

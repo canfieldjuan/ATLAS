@@ -323,6 +323,36 @@ Max files: 13
 - Parked hardening: none; the controls are required to make the current
   protected receipt boundary fail closed, not a parallel CRM hardening slice.
 
+### Controlled runner runtime-session and transaction-pooling disposition preflight
+
+- Root decision: prove the configured funnel connection is the same direct
+  `atlas` session the serving readiness predicate requires, and make the
+  runner's one-connection pools safe for its documented transaction-pooling
+  compatibility.
+- Source trace: matching schema/database/OID plus shared advisory lock -> a
+  non-`atlas` runtime DSN can still pass apply preflight -> serving readiness
+  rejects the resulting session; asyncpg's default prepared-statement cache ->
+  a transaction-pooling proxy can resume a cache entry on another backend ->
+  post-apply attestation may fail after DDL commits.
+- Upstream files: `scripts/apply_eom_first_clean_completion_schema.py`,
+  `tests/test_eom_first_clean_completion_dba_runner.py`,
+  `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md`, and this plan.
+- Fix strategy: upstream-root. Target identity captures `current_user` and
+  `session_user`; the runner rejects anything other than direct `atlas` before
+  opening the DBA pool. Both pools set asyncpg `statement_cache_size=0`, which
+  removes backend-specific prepared-statement reuse across transaction-pooling
+  acquire/release boundaries.
+- Blocking predicate: security.
+- Disposition: fix in this PR.
+- Allowed files: `scripts/apply_eom_first_clean_completion_schema.py`,
+  `tests/test_eom_first_clean_completion_dba_runner.py`,
+  `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md`, and
+  `plans/PR-First-Clean-Completion-Receipt.md` only.
+- Max files: 13. No migration SQL, receipt-service contract, or customer
+  workflow changes are required.
+- Parked hardening: none; disabling the cache is the minimal compatibility
+  configuration for the documented transaction-pooling path.
+
 ### Lifecycle ACL, guard-membership, sequence, and DBA configuration P1 disposition preflight
 
 - Root decision: require the canonical lifecycle ordering sequence before the
@@ -559,7 +589,11 @@ a dedicated typed configuration object; it compares the declared schema plus
 database name/OID, then requires both live pools to contend on a random
 transaction-scoped advisory key before and after the exact migration. That
 proves the target across TCP, Unix-socket, and transaction-pooling DSNs without
-adding a privileged cluster identifier dependency.
+adding a privileged cluster identifier dependency. It also requires that the
+configured runtime pool's `current_user` and `session_user` are both `atlas`
+before a DBA pool is opened, and disables asyncpg statement caching on both
+one-connection pools so transaction-pooling backends cannot replay a prepared
+statement name across an acquire/release boundary.
 Rollback stops the route/consumer while preserving audit evidence.
 
 The shared migration runner reserves migration 394 from every default startup
@@ -620,10 +654,12 @@ an automatic completion source and is intentionally left outside this slice.
   - `python -m py_compile scripts/apply_eom_first_clean_completion_schema.py atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py tests/test_eom_first_clean_completion.py` — passed.
   - Ruff passed for the controlled runner, readiness service, and their two
     focused test modules.
-  - `pytest -q tests/test_eom_first_clean_completion_dba_runner.py` — `16 passed`.
+  - `pytest -q tests/test_eom_first_clean_completion_dba_runner.py` — `19 passed`.
     The pinned-runner regression proves a failed initial serialization-lock
     attempt ends its transaction before retry and that the canonical runner
-    receives the same connection while the successful transaction is active.
+    receives the same connection while the successful transaction is active;
+    new runner-boundary regressions require direct `atlas` session identity
+    before DBA-pool creation and pass cacheless pool configuration to asyncpg.
   - `pytest -q tests/test_eom_first_clean_completion.py -k 'runtime_and_dba_connections_share_advisory_lock_namespace or handoff_finalization_trigger_rejects_runtime_temp_shadowing'` — `2 skipped, 59 deselected`: the disposable DBA/runtime PostgreSQL URLs are intentionally absent locally.
   - `pytest -q tests/test_eom_first_clean_completion.py -k 'completion_migration_refuses_preexisting_runtime_receipt_relation or completion_migration_rebuilds_lifecycle_guard_before_transfer'` — `3 skipped, 61 deselected`: the same isolated PostgreSQL URLs are intentionally absent locally. GitHub must prove the new migration refuses both runtime-created receipt relations and reconstructs the lifecycle guard before transfer.
   - `pytest -q tests/test_eom_first_clean_completion.py -k 'completion_migration_rebuilds_handoff_guards_before_trusting_them'` — `1 skipped, 64 deselected`: the same isolated PostgreSQL URLs are intentionally absent locally. GitHub must prove migration 394 replaces malformed inherited handoff functions/triggers and restores runtime insert/update/truncate enforcement.
@@ -652,10 +688,10 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/services/eom_first_clean_completion.py` | 1220 |
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 736 |
 | `atlas_brain/storage/migrations/__init__.py` | 40 |
-| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 140 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 661 |
-| `scripts/apply_eom_first_clean_completion_schema.py` | 429 |
+| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 145 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 697 |
+| `scripts/apply_eom_first_clean_completion_schema.py` | 460 |
 | `tests/test_eom_first_clean_completion.py` | 3264 |
-| `tests/test_eom_first_clean_completion_dba_runner.py` | 751 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 852 |
 | `tests/test_migrations_runner.py` | 39 |
-| **Total** | **7512** |
+| **Total** | **7685** |

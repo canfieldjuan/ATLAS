@@ -107,6 +107,8 @@ class _Connection:
                 "schema_name": self._state.schema_name,
                 "database_name": getattr(self._state, "database_name", "atlas"),
                 "database_oid": getattr(self._state, "database_oid", 16_384),
+                "current_user": getattr(self._state, "current_user", "atlas"),
+                "session_user": getattr(self._state, "session_user", "atlas"),
             }
         raise AssertionError(f"unexpected query: {query}")
 
@@ -121,6 +123,45 @@ class _Pool:
 
     async def close(self) -> None:
         self.closed = True
+
+
+def test_create_pool_disables_statement_cache_for_transaction_pooling(
+    monkeypatch,
+) -> None:
+    """Every controlled pool must avoid backend-specific prepared statements."""
+
+    runner = _load_runner_module()
+    calls: list[dict[str, object]] = []
+    created_pool = object()
+
+    async def create_pool(**kwargs: object) -> object:
+        calls.append(dict(kwargs))
+        return created_pool
+
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool))
+
+    runtime_pool = asyncio.run(runner._create_pool("postgresql://runtime/test"))
+    dba_pool = asyncio.run(
+        runner._create_pool("postgresql://dba/test", schema_name="eom_canonical")
+    )
+
+    assert runtime_pool is created_pool
+    assert dba_pool is created_pool
+    assert calls == [
+        {
+            "dsn": "postgresql://runtime/test",
+            "min_size": 1,
+            "max_size": 1,
+            "statement_cache_size": 0,
+        },
+        {
+            "dsn": "postgresql://dba/test",
+            "min_size": 1,
+            "max_size": 1,
+            "statement_cache_size": 0,
+            "server_settings": {"search_path": '"eom_canonical", pg_catalog'},
+        },
+    ]
 
 
 def test_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
@@ -438,6 +479,66 @@ def test_runner_rejects_runtime_schema_mismatch_before_opening_dba_pool(
             )
         )
     assert pool_calls == [(runtime_database_url, None)]
+    assert runtime_pool.closed is True
+
+
+@pytest.mark.parametrize(
+    ("current_user", "session_user"),
+    (("postgres", "postgres"), ("atlas", "postgres")),
+)
+def test_runner_rejects_non_direct_atlas_runtime_before_opening_dba_pool(
+    monkeypatch,
+    current_user: str,
+    session_user: str,
+) -> None:
+    """A matching schema/database is not enough without the route's login."""
+
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    runtime_pool = _Pool(
+        SimpleNamespace(
+            schema_name="eom_canonical",
+            current_user=current_user,
+            session_user=session_user,
+        )
+    )
+    pool_calls: list[tuple[str, str | None]] = []
+    migration_calls: list[object] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        pool_calls.append((database_url, schema_name))
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        raise AssertionError("invalid runtime identity must not open the DBA pool")
+
+    async def run_migrations(*args: object, **_kwargs: object) -> None:
+        migration_calls.append(args)
+
+    with pytest.raises(
+        RuntimeError,
+        match="runtime connection must use the direct atlas login",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args(["--apply"]),
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+
+    assert pool_calls == [(runtime_database_url, None)]
+    assert migration_calls == []
     assert runtime_pool.closed is True
 
 

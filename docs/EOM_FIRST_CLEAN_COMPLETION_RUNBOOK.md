@@ -32,7 +32,9 @@ only the dedicated runner's explicit selection may apply it.
    nor has a direct or inherited membership path to an elevated PostgreSQL
    role. If `atlas_eom_handoff_owner` already exists, it must already be
    `NOLOGIN`; migration 394 refuses it rather than converting a role that may
-   have an authenticated session.
+   have an authenticated session. The configured funnel runtime DSN must also
+   authenticate directly as `atlas`; the runner verifies both `current_user`
+   and `session_user` before it opens the DBA pool.
 3. Inject a short-lived, protected PostgreSQL superuser DSN into
    `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL`. Do not put that DSN in
    a command line, browser configuration, source file, or application runtime
@@ -76,6 +78,9 @@ The controlled runner holds the canonical migration serialization lock, the
 migration SQL, and its bookkeeping on one explicit transaction-pinned
 connection. That keeps the apply safe through a transaction-pooling proxy while
 still releasing the session lock before the transaction ends. The migration
+runner disables asyncpg's prepared-statement cache on both one-connection pools,
+so a PgBouncer transaction-pooling backend cannot reuse a statement name after
+an acquire/release boundary. The migration
 atomically records its ledger row, requires the pre-existing
 handoff table and its protected functions to be guard-owned, transfers the
 schema plus the two receipt tables, lifecycle table, lifecycle ordering
