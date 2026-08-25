@@ -219,6 +219,22 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           AND NOT guard_role.rolsuper
                           AND NOT guard_role.rolcreaterole
                    )
+                   -- `NOLOGIN` prevents a new connection but does not end a
+                   -- former direct guard session. That session remains the
+                   -- owner of this protected boundary, so serving must fail
+                   -- closed until it is gone from the target database.
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_stat_activity AS activity
+                         JOIN pg_roles AS guard_role
+                           ON guard_role.rolname = 'atlas_eom_handoff_owner'
+                        WHERE activity.usesysid = guard_role.oid
+                          AND activity.datid = (
+                              SELECT database.oid
+                                FROM pg_database AS database
+                               WHERE database.datname = current_database()
+                          )
+                   )
                    AND NOT EXISTS (
                        SELECT 1
                          FROM pg_roles AS member_role

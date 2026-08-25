@@ -1543,6 +1543,35 @@ async def test_schema_readiness_rejects_atlas_database_ownership() -> None:
 
 
 @pytest.mark.asyncio
+async def test_schema_readiness_rejects_live_former_guard_session() -> None:
+    """A former guard session keeps serving fail-closed until it disconnects."""
+
+    guard_connection: Any | None = None
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        try:
+            await pool._connection.execute(
+                "ALTER ROLE atlas_eom_handoff_owner LOGIN PASSWORD 'test-guard-session'"
+            )
+            guard_connection = await asyncpg.connect(
+                _dba_database_url_or_skip(),
+                user="atlas_eom_handoff_owner",
+                password="test-guard-session",
+            )
+            await pool._connection.execute("ALTER ROLE atlas_eom_handoff_owner NOLOGIN")
+
+            assert await first_clean_completion_schema_ready(pool) is False
+        finally:
+            if guard_connection is not None:
+                await guard_connection.close()
+            await pool._connection.execute(
+                "ALTER ROLE atlas_eom_handoff_owner NOLOGIN PASSWORD NULL"
+            )
+
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
 async def test_schema_readiness_reattests_receipt_guard_owners_and_paths() -> None:
     """A runtime cannot retain a stale ready state after guard drift."""
 

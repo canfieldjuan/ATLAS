@@ -36,7 +36,8 @@ only the dedicated runner's explicit selection may apply it.
    authenticate directly as `atlas`; the runner verifies both `current_user`
    and `session_user` before it opens the DBA pool. The guard must also have no
    live session in the target database: `NOLOGIN` prevents future connections
-   but does not terminate a former direct guard session.
+   but does not terminate a former direct guard session. Migration preflight
+   and serving readiness both fail closed until that session ends.
 3. Inject a short-lived, protected PostgreSQL superuser DSN into
    `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL`. Do not put that DSN in
    a command line, browser configuration, source file, or application runtime

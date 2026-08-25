@@ -256,11 +256,13 @@ Max files: 13
   connection's temporary objects and reject any elevated or re-assumed runtime
   before it can bypass the guard boundary; never normalize a pre-existing
   login-enabled guard or transfer a new protected boundary while a former
-  guard's authenticated session remains live.
+  guard's authenticated session remains live, and never serve completion
+  operations until that session ends.
 - Source trace: unqualified receipt-trigger reads -> PostgreSQL implicit
   temporary-schema precedence -> fabricated source rows satisfy the permanent
-  receipt trigger; separately, migration/readiness check only `rolcanlogin` ->
-  a superuser/role administrator retains DDL and ACL bypass authority; a
+  receipt trigger; separately, migration/readiness guard checks only role
+  attributes and memberships -> a superuser/role administrator retains DDL and
+  ACL bypass authority; a
   login-enabled guard session retains ownership authority after a later
   `NOLOGIN` attribute change unless the direct session is terminated.
 - Upstream files: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`,
@@ -272,7 +274,8 @@ Max files: 13
   settings, guard owners, trigger OIDs, and the direct nonprivileged runtime
   session. Migration 394 rejects an elevated target runtime and a pre-existing
   login-enabled guard and a live former-guard session in the target database
-  before it creates or transfers any protected guard role/object.
+  before it creates or transfers any protected guard role/object, while serving
+  readiness reattests that the same session class is absent.
   The workflow adds one isolated synthetic
   DBA/runtime database so the proof does not reconfigure the shared
   lead-pipeline test role.
@@ -580,7 +583,8 @@ relation or runtime-created operator/function cannot shadow canonical evidence
 or built-in predicates. Readiness attests the trusted owner ACL, lifecycle
 sequence binding/owner/exact ACL, all receipt/lifecycle trigger-to-function
 bindings, admission-function path configuration, direct/effective runtime
-authority, canonical FK dependencies, and guard namespace ownership. The route
+authority, canonical FK dependencies, guard namespace ownership, and the
+absence of a live former-guard session in the target database. The route
 refuses to serve if any receipt/lifecycle/namespace ownership, ACL, sequence,
 trigger, foreign-key, or prerequisite handoff boundary is not exactly ready,
 so deploying code before the DBA apply is safe.
@@ -652,7 +656,7 @@ an automatic completion source and is intentionally left outside this slice.
 - Current review-round fast checks:
   - `python -m py_compile atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion.py` — passed.
   - Ruff checked `atlas_brain/services/eom_first_clean_completion.py` and `tests/test_eom_first_clean_completion.py` — `All checks passed!`.
-  - `pytest -q tests/test_eom_first_clean_completion.py -k 'live_former_guard_session or preexisting_login_guard or command_timeout or effective_runtime_privilege_membership or database_ownership or canonical_contact_foreign_keys or contact_foreign_keys_inside or contact_dependency_lock'` — `1 passed, 18 skipped, 65 deselected`. The passed ASGI regression proves timeout translation; isolated PostgreSQL role/FK/lock/guard regressions are intentionally GitHub-owned because their synthetic DBA/runtime URLs are absent locally.
+  - `pytest -q tests/test_eom_first_clean_completion.py -k 'live_former_guard_session or preexisting_login_guard or command_timeout or effective_runtime_privilege_membership or database_ownership or canonical_contact_foreign_keys or contact_foreign_keys_inside or contact_dependency_lock'` — `1 passed, 19 skipped, 65 deselected`. The passed ASGI regression proves timeout translation; isolated PostgreSQL role/FK/lock/guard regressions are intentionally GitHub-owned because their synthetic DBA/runtime URLs are absent locally.
 - Current fast local checks:
   - `python -m py_compile scripts/apply_eom_first_clean_completion_schema.py atlas_brain/services/eom_first_clean_completion.py tests/test_eom_first_clean_completion_dba_runner.py tests/test_eom_first_clean_completion.py` — passed.
   - Ruff passed for the controlled runner, readiness service, and their two
@@ -688,13 +692,13 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/config.py` | 50 |
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_first_clean_completion.py` | 1220 |
+| `atlas_brain/services/eom_first_clean_completion.py` | 1236 |
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 757 |
 | `atlas_brain/storage/migrations/__init__.py` | 40 |
-| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 148 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 700 |
+| `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 149 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 704 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 460 |
-| `tests/test_eom_first_clean_completion.py` | 3308 |
+| `tests/test_eom_first_clean_completion.py` | 3337 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 852 |
 | `tests/test_migrations_runner.py` | 39 |
-| **Total** | **7756** |
+| **Total** | **7806** |
