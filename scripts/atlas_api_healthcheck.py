@@ -136,7 +136,8 @@ def read_state(path: Path) -> dict[str, object]:
         return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"WARNING state read failed: {type(exc).__name__}", file=sys.stderr)
         return {}
     return value if isinstance(value, dict) else {}
 
@@ -147,10 +148,14 @@ def write_state(path: Path, state: dict[str, object]) -> None:
 
 
 def append_log(state_dir: Path, message: str) -> None:
-    state_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S%z")
-    with (state_dir / "health.log").open("a", encoding="utf-8") as handle:
-        handle.write(f"{stamp} {message}\n")
+    log_path = state_dir / "health.log"
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S%z")
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} {message}\n")
+    except OSError as exc:
+        raise RuntimeError(f"unable to append Atlas API health log at {log_path}") from exc
 
 
 def decide_alert(previous: dict[str, object], observation: Observation, realert_every: int) -> tuple[dict[str, object], str | None, int]:
@@ -232,8 +237,8 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
             stderr=subprocess.DEVNULL,
             check=False,
         )
-    except OSError:
-        pass
+    except OSError as exc:
+        print(f"WARNING desktop notification failed: {type(exc).__name__}", file=sys.stderr)
     return delivered
 
 
@@ -262,7 +267,11 @@ def run_healthcheck(
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     state_path = settings.state_dir / "state.json"
     lock_path = settings.state_dir / "state.lock"
-    with lock_path.open("w", encoding="utf-8") as lock:
+    try:
+        lock_handle = lock_path.open("w", encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"unable to open Atlas API health lock at {lock_path}") from exc
+    with lock_handle as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         observation = observe(settings, runner, opener, sleeper)
         previous = read_state(state_path)

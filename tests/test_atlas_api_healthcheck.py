@@ -366,6 +366,37 @@ def test_no_alert_does_not_consume_a_transition(tmp_path):
     assert not (settings.state_dir / "state.json").exists()
 
 
+def test_invalid_state_is_visible_before_monitor_resets_it(tmp_path, capsys):
+    state_path = tmp_path / "state.json"
+    state_path.write_text("not-json", encoding="utf-8")
+
+    assert healthcheck.read_state(state_path) == {}
+    assert "WARNING state read failed: JSONDecodeError" in capsys.readouterr().err
+
+
+def test_health_log_failure_has_context(tmp_path):
+    invalid_state_dir = tmp_path / "not-a-directory"
+    invalid_state_dir.write_text("occupied", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="unable to append Atlas API health log"):
+        healthcheck.append_log(invalid_state_dir, "DOWN test")
+
+
+def test_health_lock_failure_has_context(tmp_path):
+    settings = _settings(tmp_path)
+    settings.state_dir.mkdir(parents=True)
+    (settings.state_dir / "state.lock").mkdir()
+
+    with pytest.raises(RuntimeError, match="unable to open Atlas API health lock"):
+        healthcheck.run_healthcheck(
+            settings,
+            runner=_Runner(active=True),
+            opener=_opener(204),
+            notifier=lambda *args: True,
+            sleeper=lambda _: None,
+        )
+
+
 def test_publish_preserves_the_desktop_notification_channel(monkeypatch):
     commands: list[tuple[str, ...]] = []
 
@@ -378,6 +409,18 @@ def test_publish_preserves_the_desktop_notification_channel(monkeypatch):
 
     assert healthcheck.publish("https://ntfy.test", "private-topic", "Title", "Body", "urgent", "warning")
     assert commands == [("notify-send", "-u", "critical", "Title", "Body")]
+
+
+def test_publish_reports_an_unavailable_desktop_notification(monkeypatch, capsys):
+    monkeypatch.setattr(healthcheck.urllib.request, "urlopen", lambda *args, **kwargs: _Response(200))
+    monkeypatch.setattr(
+        healthcheck.subprocess,
+        "run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("notify-send")),
+    )
+
+    assert healthcheck.publish("https://ntfy.test", "private-topic", "Title", "Body", "urgent", "warning")
+    assert "WARNING desktop notification failed: FileNotFoundError" in capsys.readouterr().err
 
 
 def test_missing_ntfy_topic_still_preserves_desktop_notification(monkeypatch):
