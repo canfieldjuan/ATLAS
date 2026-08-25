@@ -93,6 +93,11 @@ contain the same credential; they let current test consumers use their existing
 interface without inheriting a second database. The DSN is never placed in
 process arguments or output.
 
+`./ops test focused ...` uses the removal half of the same boundary without
+restoring any DSN. Database-backed focused targets therefore cannot inherit a
+stale credential; rerun the exact file/node through `./ops test integration ...`
+only after confirming a disposable database.
+
 Never point those variables at the live `atlas` database. Run only a focused
 database test target and do not run concurrent DB-backed suites against the
 same disposable database; many tests create/drop or rewrite shared objects.

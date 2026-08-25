@@ -329,6 +329,30 @@ would leave an incomplete and unverified operational path between PRs.
   and the mechanical push. Do not run the local unit gate or a database-backed
   test.
 
+### Contract revision 10
+
+- New current-head blocker: `./ops test focused` passes the ambient environment
+  directly to pytest, so any exported canonical, generic, Atlas application, or
+  libpq credential can activate a database-writing test without the disposable
+  confirmation and isolated child used by integration mode.
+- Revised root cause: database credential isolation exists only inside the
+  integration branch instead of at the common local pytest boundary. The
+  recommended focused entrypoint therefore has broader database authority than
+  the explicit destructive-test entrypoint.
+- Revised required change surface: factor one database-credential removal
+  helper over URL-shaped, uppercase `PG*`, Atlas application, and confirmation
+  keys; use its credential-free child for every focused pytest invocation; let
+  integration mode restore only the confirmed DSN aliases; add negative focused
+  child-environment proof and align the capability/testing/database/ledger
+  contract.
+- Revised non-scope: do not classify test targets, parse test source, change
+  pytest markers, run a database-backed test, rebase, or change Brain identity,
+  container inventory, Vercel linkage, hosted CI, APIs, schemas, or providers.
+- Revised verification plan: prove the focused-child regression fails before
+  implementation, then run the operations-contract test file, compile/schema/
+  plan/body/diff audits, and the mechanical push. Do not run the local unit gate
+  or a database-backed test.
+
 ## Scope (this PR)
 
 Ownership lane: agent-operations
@@ -375,6 +399,10 @@ Max files: 16
     canonical, generic, and Atlas application interfaces while every other
     database credential is absent; settled by child-environment and argv
     canary assertions without executing a database-backed test.
+  - Focused pytest receives no canonical, URL-shaped, Atlas application, libpq,
+    or disposable-confirmation database authority while unrelated environment
+    values remain available; settled by child-environment canaries without
+    executing a database-backed test.
   - Local PR review and `./ops test unit` cannot launch the unit gate; both
     direct agents to `.github/workflows/unit_gate.yml`, while focused tests
     remain locally available; settled by subprocess canaries that would fail if
@@ -509,14 +537,25 @@ redaction, and command-boundary behavior without requiring live providers.
 - Fail-closed handling for unreadable selected database configuration is
   deferred as read-only inspection hardening; it does not change the current
   hosted-only unit boundary or disposable integration credential authority.
+- Brain health payload identity validation is deferred as non-blocking status
+  accuracy hardening; no current-head evidence shows the configured endpoint is
+  serving an unrelated 2xx response.
+- Home Assistant and Wyze container enrollment in the aggregate status registry
+  is deferred as non-blocking inventory completeness; their tracked Compose
+  files remain directly inspectable.
+- Shared Vercel link identity validation is deferred as non-blocking provider
+  hardening; the current authenticated link was already verified during live
+  archaeology and no project mutation is exposed.
 
 Parking predicate: provider-specific conveniences, optional formatting, and
 additional mutating operations that are not required to answer the operator's
 fresh-agent questions are parked unless current verification proves they block
 the contract or create a security/data-safety defect.
 
-Parked hardening: project-interpreter dotenv decoding and unreadable selected
-database-configuration rejection, as listed above.
+Parked hardening: project-interpreter dotenv decoding, unreadable selected
+database-configuration rejection, Brain response identity, aggregate
+Home Assistant/Wyze status enrollment, and shared Vercel link identity, as
+listed above.
 
 ## Verification
 
@@ -532,7 +571,10 @@ database-configuration rejection, as listed above.
 - The integration credential-isolation regression failed before implementation
   in all 3 canonical cases because pytest received no explicit child
   environment.
-- `./ops test focused tests/test_agent_operations_contract.py -q` - 40 passed;
+- Focused-child database-authority regression failed before implementation with
+  `KeyError: 'env'`, proving focused mode supplied no explicit child environment;
+  it then passed after the shared removal helper was wired into focused mode.
+- `./ops test focused tests/test_agent_operations_contract.py -q` - 41 passed;
   the frozen pass covers integration URL counts 0/1/2/3, database selection
   across explicit/worktree/shared/systemd contexts, both shared-root path
   shapes, Docker CLI/offline/daemon/object states, and single-credential
@@ -580,20 +622,20 @@ database-configuration rejection, as listed above.
 
 | File | LOC |
 |---|---:|
-| `.agent/capabilities.yaml` | 299 |
+| `.agent/capabilities.yaml` | 302 |
 | `.agent/runbooks/ci.md` | 67 |
-| `.agent/runbooks/database.md` | 121 |
+| `.agent/runbooks/database.md` | 126 |
 | `.agent/runbooks/deployment.md` | 103 |
-| `.agent/runbooks/discovery-ledger.md` | 313 |
+| `.agent/runbooks/discovery-ledger.md` | 321 |
 | `.agent/runbooks/environment.md` | 109 |
 | `.agent/runbooks/logs.md` | 74 |
-| `.agent/runbooks/testing.md` | 101 |
+| `.agent/runbooks/testing.md` | 107 |
 | `AGENTS.md` | 17 |
 | `CLAUDE.md` | 32 |
 | `README.md` | 16 |
-| `ops` | 894 |
-| `plans/PR-Agent-Operations-Contract.md` | 599 |
+| `ops` | 905 |
+| `plans/PR-Agent-Operations-Contract.md` | 641 |
 | `scripts/local_pr_review.sh` | 132 |
-| `tests/test_agent_operations_contract.py` | 675 |
+| `tests/test_agent_operations_contract.py` | 723 |
 | `tests/test_local_pr_review.py` | 131 |
-| **Total** | **3683** |
+| **Total** | **3806** |

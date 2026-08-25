@@ -157,6 +157,11 @@ environment: ambient URL-shaped, uppercase libpq `PG*`, and Atlas application
 database settings are removed, and the one confirmed DSN is adapted to every
 supported current test interface.
 
+The nominally narrow `focused` entrypoint is also a database-authority boundary,
+not merely a pytest selector. It removes the same credential classes and the
+disposable confirmation flag without restoring a DSN, so database-backed tests
+must enter through guarded integration mode.
+
 Canonical method:
 Inspect `atlas_brain/storage/migrations/__init__.py`, use
 `.agent/runbooks/database.md`, and prefer the matching GitHub Actions workflow
@@ -173,6 +178,9 @@ cardinality before the pytest executor.
 sole DSN exposed through the canonical, generic, and Atlas application
 interfaces; unconfirmed URL-shaped, application, current libpq, and novel `PG*`
 credentials do not reach argv or the child environment.
+2026-08-25: a focused-child regression failed before implementation because no
+explicit environment was passed, then passed with every database credential
+class absent and an unrelated canary preserved.
 
 Failure notes:
 A skipped DB test is not proof. Never apply the full chain to a fresh target as

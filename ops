@@ -699,14 +699,8 @@ def python_command() -> Path:
     return Path(sys.executable)
 
 
-def integration_test_environment(confirmed_key: str) -> dict[str, str]:
-    """Bind every supported DB interface to one confirmed disposable DSN."""
-    if confirmed_key not in TEST_DATABASE_URL_KEYS:
-        raise OpsError("unknown integration database credential")
-    confirmed_url = os.environ.get(confirmed_key)
-    if not confirmed_url:
-        raise OpsError("confirmed integration database credential is unavailable")
-
+def database_free_test_environment() -> dict[str, str]:
+    """Remove every supported or open-class database authority from pytest."""
     child_env = os.environ.copy()
     for key in tuple(child_env):
         if (
@@ -716,6 +710,19 @@ def integration_test_environment(confirmed_key: str) -> dict[str, str]:
             or key in DATABASE_CONFIG_KEYS
         ):
             child_env.pop(key)
+    child_env.pop("ATLAS_CONFIRM_DISPOSABLE_TEST_DB", None)
+    return child_env
+
+
+def integration_test_environment(confirmed_key: str) -> dict[str, str]:
+    """Bind every supported DB interface to one confirmed disposable DSN."""
+    if confirmed_key not in TEST_DATABASE_URL_KEYS:
+        raise OpsError("unknown integration database credential")
+    confirmed_url = os.environ.get(confirmed_key)
+    if not confirmed_url:
+        raise OpsError("confirmed integration database credential is unavailable")
+
+    child_env = database_free_test_environment()
     child_env[confirmed_key] = confirmed_url
     child_env["DATABASE_URL"] = confirmed_url
     child_env["EXTRACTED_DATABASE_URL"] = confirmed_url
@@ -766,7 +773,11 @@ def test_command(args: list[str]) -> int:
     if action == "focused":
         if len(args) < 2:
             raise OpsError("usage: ./ops test focused <pytest target/args...>")
-        return exec_command([python, "-m", "pytest", *args[1:]], cwd=root)
+        return exec_command(
+            [python, "-m", "pytest", *args[1:]],
+            cwd=root,
+            env=database_free_test_environment(),
+        )
     if action == "integration":
         if len(args) < 2:
             raise OpsError("name a focused integration test target")

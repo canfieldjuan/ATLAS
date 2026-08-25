@@ -27,6 +27,12 @@ Common commands:
 ./ops test local-review
 ```
 
+Focused mode preserves unrelated environment configuration but removes every
+canonical, URL-shaped, Atlas application, and libpq `PG*` database credential,
+plus `ATLAS_CONFIRM_DISPOSABLE_TEST_DB`, before pytest starts. A database-backed
+test must use the guarded integration entrypoint below; an exported stale URL
+never grants the focused command write authority.
+
 The Unit Gate is branch-required, GitHub-only, and uses impacted-test selection plus the
 committed baseline. The scheduled Repo-Wide Unit Backstop runs the full
 non-integration/e2e suite. See `.github/workflows/unit_gate.yml`,

@@ -73,7 +73,10 @@ testing:
   focused:
     status: verified
     command: ./ops test focused <pytest-target-and-args>
+    credential_isolation: removes canonical, URL-shaped, Atlas application, libpq PG*, and disposable-confirmation database authority before pytest
     mutation: depends on the selected test
+    likely_failures:
+      - database-backed tests skip or fail without credentials; use guarded integration mode with an explicitly disposable database
   integration:
     status: available-with-explicit-disposable-database
     provider: pytest plus PostgreSQL 16
