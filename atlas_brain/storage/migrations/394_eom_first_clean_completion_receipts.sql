@@ -375,6 +375,78 @@ CREATE TRIGGER trg_require_eom_first_clean_completion_receipt
     FOR EACH ROW
     EXECUTE FUNCTION require_eom_first_clean_completion_receipt();
 
+-- The handoff table and its guards predate this controlled migration. Migration
+-- 354 moved their ownership out of the runtime role, but ownership alone cannot
+-- attest an implementation the runtime could previously replace. Rebuild the
+-- complete canonical boundary while the DBA owns the deployment transaction.
+CREATE OR REPLACE FUNCTION require_eom_customer_handoff_finalization()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM contacts AS contact
+        JOIN eom_lead_lifecycle_events AS lifecycle
+          ON lifecycle.contact_id = contact.id
+        WHERE contact.id = NEW.contact_id
+          AND contact.business_context_id = 'effingham_maids'
+          AND contact.contact_type = 'customer'
+          AND contact.lead_stage IS NULL
+          AND contact.status = 'active'
+          AND lifecycle.event_type = 'customer_approved'
+          AND lifecycle.source = 'eom_office'
+          AND lifecycle.operation_key = NEW.approval_key
+          AND lifecycle.actor = (
+              'employee:' || NEW.approved_by_employee_id::text || ':' || NEW.approved_by_name
+          )
+          AND lifecycle.metadata @> jsonb_build_object(
+              'tracker_customer_id', NEW.tracker_customer_id,
+              'tracker_site_id', NEW.tracker_site_id,
+              'approved_by_employee_id', NEW.approved_by_employee_id
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'eom_customer_handoffs requires the matching customer transition and lifecycle evidence';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+ALTER FUNCTION require_eom_customer_handoff_finalization() RESET ALL;
+
+CREATE OR REPLACE FUNCTION prevent_eom_customer_handoff_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    RAISE EXCEPTION 'eom_customer_handoffs is immutable';
+END;
+$$;
+ALTER FUNCTION prevent_eom_customer_handoff_mutation() RESET ALL;
+
+DROP TRIGGER IF EXISTS trg_require_eom_customer_handoff_finalization
+    ON eom_customer_handoffs;
+CREATE TRIGGER trg_require_eom_customer_handoff_finalization
+    BEFORE INSERT ON eom_customer_handoffs
+    FOR EACH ROW
+    EXECUTE FUNCTION require_eom_customer_handoff_finalization();
+
+DROP TRIGGER IF EXISTS trg_prevent_eom_customer_handoff_mutation
+    ON eom_customer_handoffs;
+CREATE TRIGGER trg_prevent_eom_customer_handoff_mutation
+    BEFORE UPDATE OR DELETE ON eom_customer_handoffs
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_eom_customer_handoff_mutation();
+
+DROP TRIGGER IF EXISTS trg_prevent_eom_customer_handoff_truncate
+    ON eom_customer_handoffs;
+CREATE TRIGGER trg_prevent_eom_customer_handoff_truncate
+    BEFORE TRUNCATE ON eom_customer_handoffs
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION prevent_eom_customer_handoff_mutation();
+
 -- The lifecycle table and its append-only guard existed before this controlled
 -- migration. Rebuild the complete canonical guard while the DBA still owns the
 -- deployment transaction; merely transferring a previously runtime-owned

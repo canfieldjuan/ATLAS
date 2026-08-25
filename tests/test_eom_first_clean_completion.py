@@ -902,6 +902,136 @@ async def test_completion_migration_rebuilds_lifecycle_guard_before_transfer() -
 
 
 @pytest.mark.asyncio
+async def test_completion_migration_rebuilds_handoff_guards_before_trusting_them() -> None:
+    """A permissive handoff boundary cannot survive the DBA completion migration."""
+
+    async with _test_store(
+        migrations=_COMPLETION_SCHEMA_MIGRATIONS[:-1]
+    ) as (pool, schema):
+        await pool._connection.execute(
+            """
+            CREATE OR REPLACE FUNCTION require_eom_customer_handoff_finalization()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path TO pg_temp
+            AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$;
+
+            CREATE OR REPLACE FUNCTION prevent_eom_customer_handoff_mutation()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            SECURITY DEFINER
+            SET search_path TO pg_temp
+            AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$;
+
+            DROP TRIGGER IF EXISTS trg_require_eom_customer_handoff_finalization
+                ON eom_customer_handoffs;
+            CREATE TRIGGER trg_require_eom_customer_handoff_finalization
+                BEFORE UPDATE ON eom_customer_handoffs
+                FOR EACH ROW
+                EXECUTE FUNCTION require_eom_customer_handoff_finalization();
+
+            DROP TRIGGER IF EXISTS trg_prevent_eom_customer_handoff_mutation
+                ON eom_customer_handoffs;
+            CREATE TRIGGER trg_prevent_eom_customer_handoff_mutation
+                BEFORE INSERT ON eom_customer_handoffs
+                FOR EACH ROW
+                EXECUTE FUNCTION prevent_eom_customer_handoff_mutation();
+
+            DROP TRIGGER IF EXISTS trg_prevent_eom_customer_handoff_truncate
+                ON eom_customer_handoffs;
+            CREATE TRIGGER trg_prevent_eom_customer_handoff_truncate
+                BEFORE DELETE ON eom_customer_handoffs
+                FOR EACH ROW
+                EXECUTE FUNCTION prevent_eom_customer_handoff_mutation();
+            """
+        )
+        completion_sql = (
+            MIGRATIONS / "394_eom_first_clean_completion_receipts.sql"
+        ).read_text()
+        async with pool._connection.transaction():
+            await pool._connection.execute(completion_sql)
+
+        assert await first_clean_completion_schema_ready(pool) is True
+        handoff_guard_properties = await pool._connection.fetch(
+            """
+            SELECT protected_function.proname,
+                   protected_function.prosecdef,
+                   protected_function.proconfig
+            FROM pg_proc AS protected_function
+            WHERE protected_function.oid = ANY(
+                ARRAY[
+                    'require_eom_customer_handoff_finalization()'::regprocedure,
+                    'prevent_eom_customer_handoff_mutation()'::regprocedure
+                ]
+            )
+            ORDER BY protected_function.proname
+            """
+        )
+        assert [dict(row) for row in handoff_guard_properties] == [
+            {
+                "proname": "prevent_eom_customer_handoff_mutation",
+                "prosecdef": False,
+                "proconfig": None,
+            },
+            {
+                "proname": "require_eom_customer_handoff_finalization",
+                "prosecdef": False,
+                "proconfig": [
+                    f"search_path=pg_catalog, {schema}, pg_temp"
+                ],
+            },
+        ]
+
+        contact_id, _customer_id, _site_id = await _insert_customer(
+            pool,
+            with_handoff=False,
+        )
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="matching customer transition and lifecycle evidence",
+        ):
+            await pool._runtime_connection.execute(
+                """
+                INSERT INTO eom_customer_handoffs (
+                    contact_id, approval_key, tracker_customer_id, tracker_site_id,
+                    approved_by_employee_id, approved_by_name
+                ) VALUES ($1, $2, $3, $4, 7, 'Juan')
+                """,
+                contact_id,
+                _operation_key("forged-handoff"),
+                next(_TRACKER_IDS),
+                next(_TRACKER_IDS),
+            )
+
+        valid_contact_id, _valid_customer_id, _valid_site_id = await _insert_customer(
+            pool
+        )
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="eom_customer_handoffs is immutable",
+        ):
+            await pool._runtime_connection.execute(
+                "UPDATE eom_customer_handoffs SET approved_by_name = approved_by_name "
+                "WHERE contact_id = $1",
+                valid_contact_id,
+            )
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="eom_customer_handoffs is immutable",
+        ):
+            await pool._runtime_connection.execute("TRUNCATE eom_customer_handoffs")
+
+
+@pytest.mark.asyncio
 async def test_runtime_and_dba_connections_share_advisory_lock_namespace() -> None:
     """The controlled runner's live target proof holds across real connections."""
 

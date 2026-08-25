@@ -39,6 +39,11 @@ cannot be safely exercised or a route without the durable invariants it claims.
   after that function had been runtime-owned. Readiness could then observe the
   expected labels, owner, and bindings after a permissive historical body or
   trigger definition was adopted.
+- Review root cause: migration 354 transferred the inherited handoff
+  finalization/immutability functions and their relation to the guard owner,
+  but did not reconstruct the bodies or trigger events that had previously
+  been mutable by the runtime. Migration 394 then depended on those names and
+  owners without proving their implementation.
 - Review root cause: the new receipt tables used `CREATE TABLE IF NOT EXISTS`,
   so migration 394 could transfer a runtime-created lookalike while request
   readiness checked only a subset of its eventual table/constraint shape.
@@ -104,11 +109,13 @@ Max files: 13
     superuser and an explicitly unprivileged Atlas login, refuses pre-existing
     receipt relations rather than adopting them, creates the foreign-keyed
     receipt tables in a trusted no-login guard-owned schema, rebuilds the
-    lifecycle append-only function and both exact trigger definitions before
-    ownership transfer, revokes direct runtime/NocoDB guard membership, rejects
-    an inherited guard path, preserves the guard owner's foreign-key check
-    access, moves the lifecycle append-only table/function boundary to that same
-    guard, pins the inherited
+    inherited handoff finalization/immutability functions and all three exact
+    handoff trigger definitions plus the lifecycle append-only function and
+    both exact lifecycle trigger definitions before trusting either inherited
+    guard, revokes direct runtime/NocoDB guard membership, rejects an inherited
+    guard path, preserves the guard owner's foreign-key check access, moves the
+    lifecycle append-only table/function boundary to that same guard, pins the
+    inherited
     handoff-finalization and both receipt-evidence trigger functions to
     `pg_catalog`, then the guarded schema, and then `pg_temp`,
     and grants the Atlas runtime only schema/table access ordinary writers and
@@ -378,13 +385,16 @@ Max files: 13
 ### Current P1 migration-admission and transaction-affinity disposition preflight
 
 - Root decision: reject any pre-existing new receipt relation instead of
-  adopting it, rebuild the inherited lifecycle append-only implementation and
-  both trigger events before its guard-owner transfer, and keep controlled
-  migration serialization on one transaction-pinned connection.
+  adopting it, rebuild both inherited handoff guards and all three trigger
+  events plus the inherited lifecycle append-only implementation and both
+  trigger events before trusting either guard, and keep controlled migration
+  serialization on one transaction-pinned connection.
 - Source trace: runtime schema `CREATE` before 394 -> `CREATE TABLE IF NOT
   EXISTS` adopts a lookalike -> later owner/ACL transfer makes it appear ready;
   pre-394 runtime-owned lifecycle function/trigger -> ownership transfer without
-  reconstruction -> permissive update path remains guard-owned; generic
+  reconstruction -> permissive update path remains guard-owned; pre-354
+  runtime-owned handoff functions/triggers -> ownership transfer without
+  reconstruction -> fabricated or mutable handoffs remain guard-owned; generic
   session advisory lock -> transaction-pooling backend may change between
   standalone statements -> lock, DDL, and bookkeeping can diverge.
 - Upstream files:
@@ -394,11 +404,11 @@ Max files: 13
   `tests/test_eom_first_clean_completion_dba_runner.py`, the existing DBA
   runbook, and this plan.
 - Fix strategy: upstream-root. The controlled migration uses exact `CREATE
-  TABLE` statements for its new relations, reconstructs the canonical lifecycle
-  function/trigger boundary before ownership transfer, and calls the canonical
-  runner through a one-connection adapter while an explicit transaction holds
-  the shared serialization lock. Failed lock attempts leave their transaction
-  before retrying.
+  TABLE` statements for its new relations, reconstructs the canonical inherited
+  handoff and lifecycle function/trigger boundaries before trusting them, and
+  calls the canonical runner through a one-connection adapter while an explicit
+  transaction holds the shared serialization lock. Failed lock attempts leave
+  their transaction before retrying.
 - Blocking predicate: security.
 - Disposition: fix in this PR.
 - Allowed files: the listed upstream files only. No new migration number,
@@ -453,9 +463,10 @@ preserves the guard owner's operation-table access needed by PostgreSQL
 foreign-key checks, and grants the direct runtime only schema `USAGE, CREATE`,
 lifecycle table reads/inserts/row-lock `UPDATE`, plus sequence `USAGE` for that
 default. It refuses to adopt either receipt relation if it already exists and
-rebuilds the inherited lifecycle append-only function plus both trigger events
-before transfer, so a formerly runtime-owned permissive implementation cannot
-become the guard. The target `atlas` login
+rebuilds the inherited handoff finalization/immutability functions plus all
+three trigger events, alongside the lifecycle append-only function and both
+trigger events, before trusting either guard, so a formerly runtime-owned
+permissive implementation cannot become the guard. The target `atlas` login
 must be a direct nonprivileged runtime, and the prerequisite handoff-finalization
 function plus the two receipt-admission functions pin `pg_catalog` first, their
 guarded schema second, and `pg_temp` explicitly last, so a caller's temporary
@@ -530,6 +541,7 @@ an automatic completion source and is intentionally left outside this slice.
     receives the same connection while the successful transaction is active.
   - `pytest -q tests/test_eom_first_clean_completion.py -k 'runtime_and_dba_connections_share_advisory_lock_namespace or handoff_finalization_trigger_rejects_runtime_temp_shadowing'` — `2 skipped, 59 deselected`: the disposable DBA/runtime PostgreSQL URLs are intentionally absent locally.
   - `pytest -q tests/test_eom_first_clean_completion.py -k 'completion_migration_refuses_preexisting_runtime_receipt_relation or completion_migration_rebuilds_lifecycle_guard_before_transfer'` — `3 skipped, 61 deselected`: the same isolated PostgreSQL URLs are intentionally absent locally. GitHub must prove the new migration refuses both runtime-created receipt relations and reconstructs the lifecycle guard before transfer.
+  - `pytest -q tests/test_eom_first_clean_completion.py -k 'completion_migration_rebuilds_handoff_guards_before_trusting_them'` — `1 skipped, 64 deselected`: the same isolated PostgreSQL URLs are intentionally absent locally. GitHub must prove migration 394 replaces malformed inherited handoff functions/triggers and restores runtime insert/update/truncate enforcement.
   - The runner probe proves a same-name/OID clone cannot acquire the shared
     runtime lock and reaches no migration call; the isolated PostgreSQL probe
     confirms the configured runtime/DBA pair shares that lock namespace. The
@@ -553,12 +565,12 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/eom_api/funnel.py` | 123 |
 | `atlas_brain/main_eom.py` | 1 |
 | `atlas_brain/services/eom_first_clean_completion.py` | 1120 |
-| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 573 |
+| `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 645 |
 | `atlas_brain/storage/migrations/__init__.py` | 40 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 129 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 564 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 576 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 429 |
-| `tests/test_eom_first_clean_completion.py` | 2778 |
+| `tests/test_eom_first_clean_completion.py` | 2908 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 751 |
 | `tests/test_migrations_runner.py` | 39 |
-| **Total** | **6655** |
+| **Total** | **6869** |
