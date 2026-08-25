@@ -9,6 +9,8 @@ import yaml
 
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "session_lane.yml"
+STABLE_BASE_SHA = "1" * 40
+MOVED_BASE_SHA = "2" * 40
 
 
 def _audit_step_script() -> str:
@@ -26,15 +28,36 @@ def _run_lifecycle_gate(
     tmp_path: Path,
     *,
     state: str,
-) -> tuple[subprocess.CompletedProcess[str], tuple[str, ...]]:
+    base_sha_before: str = STABLE_BASE_SHA,
+    base_sha_after: str = STABLE_BASE_SHA,
+) -> tuple[subprocess.CompletedProcess[str], tuple[str, ...], tuple[str, ...]]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _write_executable(bin_dir / "gh", '#!/bin/sh\nprintf "%s\\n" "${PR_STATE}"\n')
 
     audit_log = tmp_path / "audit.log"
+    call_log = tmp_path / "calls.log"
+    _write_executable(
+        bin_dir / "git",
+        """#!/bin/sh
+printf 'git %s\n' "$*" >> "${CALL_LOG}"
+case "$1" in
+  rev-parse)
+    printf '%s\n' "${BASE_SHA_BEFORE}"
+    ;;
+  ls-remote)
+    printf '%s\trefs/heads/%s\n' "${BASE_SHA_AFTER}" "${BASE_REF}"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+    )
     _write_executable(
         bin_dir / "python",
-        '#!/bin/sh\nprintf "%s\\n" "$*" >> "${AUDIT_LOG}"\n',
+        '#!/bin/sh\nprintf "audit %s\\n" "$*" >> "${CALL_LOG}"\n'
+        'printf "%s\\n" "$*" >> "${AUDIT_LOG}"\n',
     )
 
     runner_temp = tmp_path / "runner"
@@ -48,7 +71,10 @@ def _run_lifecycle_gate(
         env={
             **os.environ,
             "AUDIT_LOG": str(audit_log),
+            "BASE_SHA_AFTER": base_sha_after,
+            "BASE_SHA_BEFORE": base_sha_before,
             "BASE_REF": "main",
+            "CALL_LOG": str(call_log),
             "GH_TOKEN": "test-token",
             "GITHUB_HEAD_REF": "claude/test-branch",
             "GITHUB_WORKSPACE": "/trusted-base",
@@ -59,7 +85,8 @@ def _run_lifecycle_gate(
         },
     )
     audit_calls = tuple(audit_log.read_text(encoding="utf-8").splitlines()) if audit_log.exists() else ()
-    return result, audit_calls
+    call_trace = tuple(call_log.read_text(encoding="utf-8").splitlines()) if call_log.exists() else ()
+    return result, audit_calls, call_trace
 
 
 def test_session_lane_workflow_runs_as_trusted_base_pr_target() -> None:
@@ -109,7 +136,7 @@ def test_session_lane_workflow_executes_lifecycle_gate(
     expected_returncode: int,
     expected_auditor_calls: int,
 ) -> None:
-    result, audit_calls = _run_lifecycle_gate(tmp_path, state=state)
+    result, audit_calls, _ = _run_lifecycle_gate(tmp_path, state=state)
 
     assert result.returncode == expected_returncode
     assert len(audit_calls) == expected_auditor_calls
@@ -119,6 +146,21 @@ def test_session_lane_workflow_executes_lifecycle_gate(
             f"--current-pr-body-file {tmp_path}/runner/current-pr-body.md "
             "--require-current-pr-body",
         )
+
+
+def test_session_lane_workflow_rejects_base_movement_during_audit(tmp_path: Path) -> None:
+    result, audit_calls, call_trace = _run_lifecycle_gate(
+        tmp_path,
+        state="OPEN",
+        base_sha_after=MOVED_BASE_SHA,
+    )
+
+    assert result.returncode == 1
+    assert len(audit_calls) == 1
+    assert call_trace[0] == "git rev-parse origin/main"
+    assert call_trace[1].startswith("audit /trusted-base/scripts/audit_pr_session_drift.py origin/main ")
+    assert call_trace[2] == "git ls-remote --heads origin refs/heads/main"
+    assert "base moved during Session Lane audit" in result.stdout
 
 
 def test_session_lane_workflow_passes_current_body_to_base_owned_auditor() -> None:
