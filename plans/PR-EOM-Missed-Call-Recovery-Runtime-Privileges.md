@@ -81,6 +81,10 @@ Max files: 10
   the receipt/attempt fence checks attest only each trigger's OID binding.
   PostgreSQL preserves that OID under `CREATE OR REPLACE FUNCTION`, so a
   replaced append-only function body can admit a table-wide runtime `UPDATE`.
+  Finally, migration 393 clears direct definer execution for `atlas_nocodb`
+  but not `atlas`; an explicit pre-existing or later `atlas` `EXECUTE` grant
+  can bypass the intended CRM-trigger-only path and terminalize arbitrary
+  active sequences.
 - Required change surface: update only the controlled DBA runner, migration
   393, their existing focused tests, the EOM workflow enrollment, the rollout
   runbook, and this plan. On
@@ -106,7 +110,11 @@ Max files: 10
   only when an explicitly authorized 390-392 receipt advanced; an unchanged
   ledger must re-raise. Migration 393 must attest both receipt/attempt fence
   function bodies before it grants `UPDATE`, and runtime readiness must reject
-  either body outside the exact migration-389 source body.
+  either body outside the exact migration-389 source body. Migration 393 must
+  revoke direct `EXECUTE` from `atlas` on all six definer helpers, and readiness
+  must reject an admitted runtime role that regains direct execution on any of
+  them; tests must prove the migration clears all six and the probe rejects then
+  re-admits one runtime-role grant/revoke boundary.
 - Explicit non-scope: do not alter migration 389, the generic migration runner,
   the slim startup tuple, database schema, role memberships, service routes,
   delivery behavior, PostgreSQL CI image, or production state. Do not reapply
@@ -132,7 +140,8 @@ Max files: 10
      tables plus the privileged CRM-trigger functions to that guard, clears
      stale table/column/function ACLs, and refuses to grant mutable evidence
      access unless the exact append-only trigger bindings and trusted migration-
-     389 function bodies are intact.
+     389 function bodies are intact. It also leaves neither NocoDB nor the
+     runtime role with direct `EXECUTE` on the six definer helpers.
   2. After applying the migration in a disposable schema, the runtime role has
      the exact required table privileges: read/insert/lock for receipts and
      attempts, read/insert for suppressions/events, and read/insert/update for
@@ -186,10 +195,10 @@ Required when this diff changes a guard, validator, normalizer, resolver,
 router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
-- Boundary path/seam: `atlas` service role -> recovery tables; `atlas_nocodb`
-  CRM-table write -> guarded recovery trigger functions; startup probe -> worker
-  admission; protected DBA DSN -> exact 390-392 historical prelude -> recorded
-  migration 389 -> recorded migration 393 -> normal runtime startup.
+- Boundary path/seam: `atlas` service role -> recovery tables; `atlas`/NocoDB
+  direct function execution -> guarded CRM-trigger functions; startup probe ->
+  worker admission; protected DBA DSN -> exact 390-392 historical prelude ->
+  recorded migration 389 -> recorded migration 393 -> normal runtime startup.
 - Replaced-path behaviors: previously a table's mere existence admitted the
   worker; after this change only structural presence plus usable runtime ACLs
   and guarded trigger properties admit it. Previously the DBA runner could not
@@ -197,10 +206,11 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   393 trusted pre-existing bridge code; it now gives only the proven prelude
   set to the existing selector, requires the 389 receipt before 393, and
   rejects bridge and mutable-evidence fence bodies outside the migration-389
-  allowlist before elevation or runtime `UPDATE`. A committed historical
-  prelude's expected integrity stop now continues only when the ledger proves
-  that exact prelude advanced.
-- Guard-relevant fields: table/column ACL, table owner, function ACL/owner,
+  allowlist before elevation or runtime `UPDATE`, and removes/rejects direct
+  runtime execution of the definer helpers. A committed historical prelude's
+  expected integrity stop now continues only when the ledger proves that exact
+  prelude advanced.
+- Guard-relevant fields: table/column/function ACL, table owner, function owner,
   `prosecdef`, function `search_path`, trusted bridge/fence function-body
   SHA-256 or source body, trigger identity/enabled state, role
   login/inheritance/membership properties, the six recovery table names,
@@ -337,15 +347,15 @@ Parked hardening: none.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 7 |
 | `atlas_brain/main_eom.py` | 11 |
-| `atlas_brain/services/eom_missed_call_recovery.py` | 215 |
-| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 562 |
+| `atlas_brain/services/eom_missed_call_recovery.py` | 218 |
+| `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 568 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 66 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 356 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 366 |
 | `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 293 |
 | `tests/test_eom_missed_call_privilege_runner.py` | 403 |
-| `tests/test_eom_missed_call_recovery.py` | 917 |
+| `tests/test_eom_missed_call_recovery.py` | 953 |
 | `tests/test_eom_render_profile.py` | 3 |
-| **Total** | **2833** |
+| **Total** | **2888** |
 
 ## Diff size rationale
 

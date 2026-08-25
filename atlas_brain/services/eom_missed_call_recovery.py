@@ -638,6 +638,9 @@ async def missed_call_recovery_schema_ready(pool: Any) -> bool:
                               AND NOT has_function_privilege(
                                   'atlas_nocodb', procedure.oid, 'EXECUTE'
                               )
+                              AND NOT has_function_privilege(
+                                  current_user, procedure.oid, 'EXECUTE'
+                              )
                           )
                        FROM pg_proc AS procedure
                        JOIN pg_namespace AS function_namespace

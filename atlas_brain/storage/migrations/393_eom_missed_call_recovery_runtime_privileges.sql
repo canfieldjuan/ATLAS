@@ -510,8 +510,9 @@ BEGIN
         schema_name
     );
 
-    -- REVOKE FROM PUBLIC does not remove an explicit old NocoDB EXECUTE
-    -- grant. Clear that direct path on all SECURITY DEFINER bridge helpers.
+    -- REVOKE FROM PUBLIC does not remove an explicit old NocoDB or runtime
+    -- EXECUTE grant. Clear both direct paths on all SECURITY DEFINER bridge
+    -- helpers; CRM table triggers remain the only supported invocation path.
     FOR function_signature IN
         SELECT unnest(ARRAY[
             'cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)',
@@ -524,6 +525,11 @@ BEGIN
     LOOP
         EXECUTE format(
             'REVOKE ALL ON FUNCTION %I.%s FROM atlas_nocodb',
+            schema_name,
+            function_signature
+        );
+        EXECUTE format(
+            'REVOKE ALL ON FUNCTION %I.%s FROM atlas',
             schema_name,
             function_signature
         );

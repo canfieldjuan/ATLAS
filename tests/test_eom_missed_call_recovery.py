@@ -263,6 +263,12 @@ def test_privilege_repair_trusted_function_bodies_match_migration_389_source() -
             assert signature in readiness
             assert readiness_body in readiness
     assert "language_state.lanname = 'plpgsql'" in readiness
+    assert "REVOKE ALL ON FUNCTION %I.%s FROM atlas" in repair
+    assert (
+        "AND NOT has_function_privilege(\n"
+        "                                  current_user, procedure.oid, 'EXECUTE'\n"
+        "                              )"
+    ) in readiness
 
 
 async def _tamper_bridge_function(
@@ -699,6 +705,11 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 "TO atlas_nocodb"
             )
             await connection.execute(
+                f"GRANT EXECUTE ON FUNCTION {_quote_ident(schema)}."
+                "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR) "
+                "TO atlas"
+            )
+            await connection.execute(
                 f"ALTER TABLE {_quote_ident(schema)}."
                 "eom_missed_call_operation_receipts DISABLE TRIGGER "
                 "trg_prevent_eom_missed_call_operation_receipt_mutation"
@@ -775,6 +786,18 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 "eom_missed_call_sequence_steps": {"INSERT", "SELECT", "UPDATE"},
                 "eom_missed_call_sequence_events": {"INSERT", "SELECT"},
             }
+            for function_signature in _TRUSTED_BRIDGE_FUNCTION_SIGNATURES:
+                qualified_signature = f"{_quote_ident(schema)}.{function_signature}"
+                assert not await connection.fetchval(
+                    """
+                    SELECT has_function_privilege(
+                        'atlas',
+                        pg_catalog.to_regprocedure($1::text),
+                        'EXECUTE'
+                    )
+                    """,
+                    qualified_signature,
+                )
             stale_column_acl_rows = await connection.fetch(
                 """
                 SELECT relation.relname, attribute.attname
@@ -842,6 +865,19 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
                 f"SET search_path TO {_quote_ident(schema)}, public"
             )
             runtime_pool = _ConnectionPool(runtime_connection)
+            assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+
+            await connection.execute(
+                f"GRANT EXECUTE ON FUNCTION {_quote_ident(schema)}."
+                "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR) "
+                f"TO {runtime_probe_ident}"
+            )
+            assert not await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
+            await connection.execute(
+                f"REVOKE EXECUTE ON FUNCTION {_quote_ident(schema)}."
+                "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR) "
+                f"FROM {runtime_probe_ident}"
+            )
             assert await recovery_mod.missed_call_recovery_schema_ready(runtime_pool)
 
             for function_signature in _TRUSTED_APPEND_ONLY_FENCE_FUNCTION_SIGNATURES:
