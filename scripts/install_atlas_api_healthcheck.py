@@ -11,13 +11,15 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Callable, Iterator, Mapping, Sequence
 
 import atlas_api_healthcheck as healthcheck_runtime
 
@@ -80,6 +82,25 @@ Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 def _run(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+
+@contextmanager
+def _termination_signals_as_errors() -> Iterator[None]:
+    admitted = (signal.SIGTERM, signal.SIGHUP)
+    previous = {signum: signal.getsignal(signum) for signum in admitted}
+
+    def terminate(signum, _frame) -> None:
+        for admitted_signal in admitted:
+            signal.signal(admitted_signal, signal.SIG_IGN)
+        raise RuntimeError(f"installer received {signal.Signals(signum).name}")
+
+    try:
+        for signum in admitted:
+            signal.signal(signum, terminate)
+        yield
+    finally:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 def default_paths() -> InstallPaths:
@@ -447,60 +468,61 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
     topic_plan = _notification_topic_plan(paths, environment)
     previous_timer = _timer_state(runner)
     enrollment_attempted = False
-    try:
-        if previous_timer.active:
+    with _termination_signals_as_errors():
+        try:
+            if previous_timer.active:
+                _run_required(
+                    runner,
+                    ("systemctl", "--user", "stop", TIMER_NAME),
+                    action="existing timer stop",
+                )
+            topic_message = ensure_notification_topic(paths, topic_plan)
+            messages = [topic_message]
+            if _existing_health_service_is_loaded(runner):
+                _run_required(
+                    runner,
+                    ("systemctl", "--user", "stop", SERVICE_NAME),
+                    action="existing health service stop",
+                )
+            for source, destination, executable in sources:
+                _write_copy(source, destination, executable=executable)
+                messages.append(f"wrote: {destination}")
+            _run_required(runner, ("systemctl", "--user", "daemon-reload"), action="systemd reload")
             _run_required(
                 runner,
-                ("systemctl", "--user", "stop", TIMER_NAME),
-                action="existing timer stop",
+                ("systemctl", "--user", "start", "--wait", SERVICE_NAME),
+                action="initial installed-monitor invocation",
             )
-        topic_message = ensure_notification_topic(paths, topic_plan)
-        messages = [topic_message]
-        if _existing_health_service_is_loaded(runner):
+            enrollment_attempted = True
             _run_required(
                 runner,
-                ("systemctl", "--user", "stop", SERVICE_NAME),
-                action="existing health service stop",
+                ("systemctl", "--user", "enable", "--now", TIMER_NAME),
+                action="timer enable",
             )
-        for source, destination, executable in sources:
-            _write_copy(source, destination, executable=executable)
-            messages.append(f"wrote: {destination}")
-        _run_required(runner, ("systemctl", "--user", "daemon-reload"), action="systemd reload")
-        _run_required(
-            runner,
-            ("systemctl", "--user", "start", "--wait", SERVICE_NAME),
-            action="initial installed-monitor invocation",
-        )
-        enrollment_attempted = True
-        _run_required(
-            runner,
-            ("systemctl", "--user", "enable", "--now", TIMER_NAME),
-            action="timer enable",
-        )
-        messages.append("proved installed health service and enabled timer")
-        return messages
-    except KeyboardInterrupt as exc:
-        rollback_errors = _rollback_install(
-            snapshots,
-            previous_timer,
-            runner,
-            enrollment_attempted=enrollment_attempted,
-        )
-        if rollback_errors:
-            exc.add_note(f"rollback failed: {'; '.join(rollback_errors)}")
-        raise
-    except (OSError, RuntimeError) as exc:
-        rollback_errors = _rollback_install(
-            snapshots,
-            previous_timer,
-            runner,
-            enrollment_attempted=enrollment_attempted,
-        )
-        if rollback_errors:
-            raise RuntimeError(
-                f"{exc}; rollback failed: {'; '.join(rollback_errors)}"
-            ) from exc
-        raise
+            messages.append("proved installed health service and enabled timer")
+            return messages
+        except KeyboardInterrupt as exc:
+            rollback_errors = _rollback_install(
+                snapshots,
+                previous_timer,
+                runner,
+                enrollment_attempted=enrollment_attempted,
+            )
+            if rollback_errors:
+                exc.add_note(f"rollback failed: {'; '.join(rollback_errors)}")
+            raise
+        except (OSError, RuntimeError) as exc:
+            rollback_errors = _rollback_install(
+                snapshots,
+                previous_timer,
+                runner,
+                enrollment_attempted=enrollment_attempted,
+            )
+            if rollback_errors:
+                raise RuntimeError(
+                    f"{exc}; rollback failed: {'; '.join(rollback_errors)}"
+                ) from exc
+            raise
 
 
 def _matches(source: Path, destination: Path, *, executable: bool) -> tuple[bool, str]:

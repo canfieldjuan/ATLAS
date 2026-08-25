@@ -32,7 +32,10 @@ EXIT_ALERT_UNDELIVERED = 4
 
 DEFAULT_SERVICE = "atlas-api.service"
 DEFAULT_PROBE_URL = "http://127.0.0.1:8012/api/v1/leads/intake"
-PROBE_ORIGIN = "https://effinghamofficemaids.com"
+PROBE_ORIGINS = (
+    "https://effinghamofficemaids.com",
+    "https://www.effinghamofficemaids.com",
+)
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 DEFAULT_REALERT_EVERY = 6
 DEFAULT_RECOVERY_ATTEMPTS = 8
@@ -42,6 +45,7 @@ DEFAULT_MAINTENANCE_LOCK = Path.home() / ".config" / "atlas" / "atlas-api.mainte
 PENDING_ALERTS = frozenset({"down", "recovered", "auto-recovered"})
 STATE_STATUSES = frozenset({"healthy", "down", "maintenance"})
 MAX_COMMAND_DETAIL = 240
+DESKTOP_NOTIFICATION_TIMEOUT_SECONDS = 3.0
 
 
 @dataclass(frozen=True)
@@ -140,17 +144,52 @@ def maintenance_is_active(path: Path) -> bool:
     return present
 
 
+def _durably_publish_maintenance_marker(path: Path) -> None:
+    descriptor: int | None = None
+    directory_descriptor: int | None = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        os.fchmod(descriptor, 0o600)
+        os.fsync(descriptor)
+        directory_descriptor = os.open(
+            path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        os.fsync(directory_descriptor)
+    except OSError as exc:
+        raise RuntimeError(f"unable to durably create Atlas API maintenance lock at {path}") from exc
+    finally:
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _durably_remove_maintenance_marker(path: Path) -> None:
+    directory_descriptor: int | None = None
+    try:
+        path.unlink(missing_ok=True)
+        if not path.parent.exists():
+            return
+        directory_descriptor = os.open(
+            path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        os.fsync(directory_descriptor)
+    except OSError as exc:
+        raise RuntimeError(f"unable to durably remove Atlas API maintenance lock at {path}") from exc
+    finally:
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
+
+
 def enter_maintenance(settings: Settings, *, runner: Runner = _run) -> int:
     """Create the maintenance marker and stop the service under the monitor lock."""
     with serialized_monitor_state(settings):
-        try:
-            settings.maintenance_lock.parent.mkdir(parents=True, exist_ok=True)
-            settings.maintenance_lock.touch(mode=0o600, exist_ok=True)
-            settings.maintenance_lock.chmod(0o600)
-        except OSError as exc:
-            raise RuntimeError(
-                f"unable to create Atlas API maintenance lock at {settings.maintenance_lock}"
-            ) from exc
+        _durably_publish_maintenance_marker(settings.maintenance_lock)
         stopped = runner(("systemctl", "--user", "stop", settings.service))
         if stopped.returncode != 0:
             raise RuntimeError(
@@ -163,21 +202,18 @@ def enter_maintenance(settings: Settings, *, runner: Runner = _run) -> int:
 def exit_maintenance(settings: Settings) -> int:
     """Remove the maintenance marker under the same lock used by recovery."""
     with serialized_monitor_state(settings):
-        try:
-            settings.maintenance_lock.unlink(missing_ok=True)
-        except OSError as exc:
-            raise RuntimeError(
-                f"unable to remove Atlas API maintenance lock at {settings.maintenance_lock}"
-            ) from exc
+        _durably_remove_maintenance_marker(settings.maintenance_lock)
     print(f"MAINTENANCE CLEARED: {settings.maintenance_lock}")
     return EXIT_OK
 
 
-def probe_lead_intake(probe_url: str, opener: Opener) -> tuple[bool, str]:
+def _probe_lead_intake_origin(
+    probe_url: str, origin: str, opener: Opener
+) -> tuple[bool, str]:
     request = urllib.request.Request(
         probe_url,
         headers={
-            "Origin": PROBE_ORIGIN,
+            "Origin": origin,
             "Access-Control-Request-Method": "POST",
             "Access-Control-Request-Headers": "Content-Type",
         },
@@ -208,13 +244,21 @@ def probe_lead_intake(probe_url: str, opener: Opener) -> tuple[bool, str]:
         return False, f"lead-intake probe failed: {type(exc).__name__}"
     if status not in (200, 204):
         return False, f"lead-intake probe returned HTTP {status}"
-    if allow_origin != PROBE_ORIGIN:
+    if allow_origin != origin:
         return False, f"lead-intake probe CORS origin mismatch at HTTP {status}"
     if "POST" not in allow_methods:
         return False, f"lead-intake probe CORS methods omit POST at HTTP {status}"
     if "content-type" not in allow_headers:
         return False, f"lead-intake probe CORS headers omit Content-Type at HTTP {status}"
     return True, f"lead-intake probe returned browser-ready HTTP {status}"
+
+
+def probe_lead_intake(probe_url: str, opener: Opener) -> tuple[bool, str]:
+    for origin in PROBE_ORIGINS:
+        healthy, detail = _probe_lead_intake_origin(probe_url, origin, opener)
+        if not healthy:
+            return False, f"{origin}: {detail}"
+    return True, f"lead-intake probe returned browser-ready responses for {len(PROBE_ORIGINS)} origins"
 
 
 def observe(
@@ -524,8 +568,9 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             check=False,
+            timeout=DESKTOP_NOTIFICATION_TIMEOUT_SECONDS,
         )
-    except OSError as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         print(f"WARNING desktop notification failed: {type(exc).__name__}", file=sys.stderr)
     return delivered
 
@@ -622,7 +667,7 @@ def _settings_from_args(argv: Sequence[str] | None) -> tuple[Settings, str]:
         if args.exit_maintenance
         else "healthcheck"
     )
-    if not args.service.strip():
+    if selected_action != "exit-maintenance" and not args.service.strip():
         raise ValueError("service must not be blank")
     if selected_action == "healthcheck":
         try:

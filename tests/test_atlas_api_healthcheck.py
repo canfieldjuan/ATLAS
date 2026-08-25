@@ -1,6 +1,7 @@
 """Regression coverage for the standalone Atlas API liveness monitor."""
 from __future__ import annotations
 
+import ast
 import importlib.util
 import http.client
 import itertools
@@ -40,7 +41,7 @@ class _Response:
         self.status = status
         self.headers = (
             {
-                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGIN,
+                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGINS[0],
                 "Access-Control-Allow-Methods": "POST, OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type",
             }
@@ -205,7 +206,14 @@ def _opener(
     def _open(request, *, timeout):
         if seen is not None:
             seen.append((request.method, request.headers, timeout))
-        return _Response(status, headers)
+        response_headers = headers
+        if response_headers is None:
+            response_headers = {
+                "Access-Control-Allow-Origin": request.get_header("Origin"),
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            }
+        return _Response(status, response_headers)
 
     return _open
 
@@ -292,12 +300,13 @@ def test_inactive_service_is_started_and_reprobed(tmp_path):
         (
             "OPTIONS",
             {
-                "Origin": healthcheck.PROBE_ORIGIN,
+                "Origin": origin,
                 "Access-control-request-method": "POST",
                 "Access-control-request-headers": "Content-Type",
             },
             8,
         )
+        for origin in healthcheck.PROBE_ORIGINS
     ]
     assert sent[0][2] == "atlas-api auto-recovered"
     assert _state(settings) == {"consecutive": 0, "status": "healthy"}
@@ -317,7 +326,7 @@ def test_inactive_service_is_started_and_reprobed(tmp_path):
         ),
         (
             {
-                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGIN,
+                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGINS[0],
                 "Access-Control-Allow-Methods": "OPTIONS",
                 "Access-Control-Allow-Headers": "Content-Type",
             },
@@ -325,7 +334,7 @@ def test_inactive_service_is_started_and_reprobed(tmp_path):
         ),
         (
             {
-                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGIN,
+                "Access-Control-Allow-Origin": healthcheck.PROBE_ORIGINS[0],
                 "Access-Control-Allow-Methods": "POST, OPTIONS",
                 "Access-Control-Allow-Headers": "X-Request-ID",
             },
@@ -341,6 +350,49 @@ def test_probe_rejects_non_browser_ready_cors_responses(headers, expected_detail
 
     assert not healthy
     assert expected_detail in detail
+
+
+def test_probe_origins_match_the_complete_lead_route_contract():
+    tree = ast.parse((REPO_ROOT / "atlas_brain" / "api" / "leads.py").read_text(encoding="utf-8"))
+    producer_origins = None
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "ALLOWED_FORM_ORIGINS"
+            for target in node.targets
+        ):
+            continue
+        assert isinstance(node.value, ast.Call)
+        producer_origins = frozenset(ast.literal_eval(node.value.args[0]))
+        break
+
+    assert producer_origins is not None
+    assert frozenset(healthcheck.PROBE_ORIGINS) == producer_origins
+
+
+def test_probe_fails_when_the_second_supported_origin_is_not_browser_ready():
+    seen_origins: list[str] = []
+
+    def opener(request, *, timeout):
+        origin = request.get_header("Origin")
+        seen_origins.append(origin)
+        headers = {
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Methods": "POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+        }
+        if origin == healthcheck.PROBE_ORIGINS[1]:
+            headers["Access-Control-Allow-Origin"] = "https://example.invalid"
+        return _Response(204, headers)
+
+    healthy, detail = healthcheck.probe_lead_intake(
+        "http://example.test/api/v1/leads/intake", opener
+    )
+
+    assert not healthy
+    assert healthcheck.PROBE_ORIGINS[1] in detail
+    assert seen_origins == list(healthcheck.PROBE_ORIGINS)
 
 
 def test_maintenance_lock_never_starts_service(tmp_path):
@@ -460,6 +512,67 @@ def test_exit_maintenance_removes_marker_under_monitor_lock(tmp_path):
 
     assert healthcheck.exit_maintenance(settings) == healthcheck.EXIT_OK
     assert not settings.maintenance_lock.exists()
+
+
+def test_exit_maintenance_fsyncs_marker_removal(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    settings.maintenance_lock.parent.mkdir(parents=True, exist_ok=True)
+    settings.maintenance_lock.touch()
+    fsync_calls: list[int] = []
+    real_fsync = healthcheck.os.fsync
+
+    def record_fsync(descriptor):
+        fsync_calls.append(descriptor)
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(healthcheck.os, "fsync", record_fsync)
+
+    assert healthcheck.exit_maintenance(settings) == healthcheck.EXIT_OK
+    assert len(fsync_calls) == 1
+    assert not settings.maintenance_lock.exists()
+
+
+def test_enter_maintenance_fsyncs_marker_and_directory_before_service_stop(
+    tmp_path, monkeypatch
+):
+    settings = _settings(tmp_path)
+    events: list[str] = []
+    real_fsync = healthcheck.os.fsync
+
+    def record_fsync(descriptor):
+        events.append("fsync")
+        return real_fsync(descriptor)
+
+    def runner(command):
+        events.append("stop")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(healthcheck.os, "fsync", record_fsync)
+
+    assert healthcheck.enter_maintenance(settings, runner=runner) == healthcheck.EXIT_OK
+    assert events == ["fsync", "fsync", "stop"]
+
+
+def test_enter_maintenance_does_not_stop_when_marker_fsync_fails(tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    commands: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        healthcheck.os,
+        "fsync",
+        lambda _descriptor: (_ for _ in ()).throw(OSError("simulated fsync failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="durably create"):
+        healthcheck.enter_maintenance(
+            settings,
+            runner=lambda command: (
+                commands.append(tuple(command)),
+                subprocess.CompletedProcess(command, 0, "", ""),
+            )[1],
+        )
+
+    assert commands == []
 
 
 def test_failed_start_remains_a_visible_down_result(tmp_path):
@@ -694,7 +807,7 @@ def test_recovery_outbox_is_persisted_before_a_delivery_crash(tmp_path):
         "pending_notifications": [
             {
                 "alert": "auto-recovered",
-                "detail": "auto-recovered atlas-api.service: lead-intake probe returned browser-ready HTTP 204",
+                "detail": "auto-recovered atlas-api.service: lead-intake probe returned browser-ready responses for 2 origins",
             }
         ],
     }
@@ -736,7 +849,7 @@ def test_recovery_outbox_is_persisted_before_console_output_crash(tmp_path, monk
         "pending_notifications": [
             {
                 "alert": "auto-recovered",
-                "detail": "auto-recovered atlas-api.service: lead-intake probe returned browser-ready HTTP 204",
+                "detail": "auto-recovered atlas-api.service: lead-intake probe returned browser-ready responses for 2 origins",
             }
         ],
     }
@@ -1001,6 +1114,20 @@ def test_publish_reports_an_unavailable_desktop_notification(monkeypatch, capsys
     assert "WARNING desktop notification failed: FileNotFoundError" in capsys.readouterr().err
 
 
+def test_publish_bounds_a_hung_desktop_notification(monkeypatch, capsys):
+    monkeypatch.setattr(healthcheck.urllib.request, "urlopen", lambda *args, **kwargs: _Response(200))
+    monkeypatch.setattr(
+        healthcheck.subprocess,
+        "run",
+        lambda command, **kwargs: (_ for _ in ()).throw(
+            subprocess.TimeoutExpired(command, kwargs["timeout"])
+        ),
+    )
+
+    assert healthcheck.publish("https://ntfy.test", "private-topic", "Title", "Body", "urgent", "warning")
+    assert "WARNING desktop notification failed: TimeoutExpired" in capsys.readouterr().err
+
+
 def test_publish_treats_an_http_protocol_failure_as_undelivered(monkeypatch, capsys):
     commands: list[tuple[str, ...]] = []
 
@@ -1104,6 +1231,19 @@ def test_healthcheck_action_rejects_invalid_numeric_environment(monkeypatch):
     monkeypatch.setenv("ATLAS_API_HEALTHCHECK_REALERT_EVERY", "bad")
 
     with pytest.raises(ValueError, match="realert-every must be an integer"):
+        healthcheck._settings_from_args([])
+
+
+def test_exit_maintenance_ignores_blank_service_but_other_actions_reject_it(monkeypatch):
+    monkeypatch.setenv("ATLAS_API_HEALTHCHECK_SERVICE", "")
+
+    settings, action = healthcheck._settings_from_args(["--exit-maintenance"])
+    assert action == "exit-maintenance"
+    assert settings.service == ""
+
+    with pytest.raises(ValueError, match="service must not be blank"):
+        healthcheck._settings_from_args(["--enter-maintenance"])
+    with pytest.raises(ValueError, match="service must not be blank"):
         healthcheck._settings_from_args([])
 
 
@@ -1643,6 +1783,59 @@ def test_installer_rolls_back_before_reraising_operator_cancellation(tmp_path):
         ("systemctl", "--user", "enable", installer.TIMER_NAME),
         ("systemctl", "--user", "start", installer.TIMER_NAME),
     ]
+
+
+@pytest.mark.parametrize("termination_signal", [installer.signal.SIGTERM, installer.signal.SIGHUP])
+def test_installer_routes_termination_signals_through_rollback_and_restores_handlers(
+    tmp_path, monkeypatch, termination_signal
+):
+    paths = _install_paths(tmp_path)
+    paths.installed_monitor.parent.mkdir(parents=True, exist_ok=True)
+    paths.installed_monitor.write_bytes(b"previous-monitor")
+    paths.installed_monitor.chmod(0o700)
+    paths.notification_env.parent.mkdir(parents=True, exist_ok=True)
+    paths.notification_env.write_text(
+        f"{installer.TOPIC_ENV}=previous-private-topic\n", encoding="utf-8"
+    )
+    paths.notification_env.chmod(0o600)
+    runner = _InstallerRunner(timer_enabled=True, timer_active=True)
+    prior_handlers = {
+        installer.signal.SIGTERM: object(),
+        installer.signal.SIGHUP: object(),
+    }
+    current_handlers = dict(prior_handlers)
+
+    def fake_getsignal(signum):
+        return current_handlers[signum]
+
+    def fake_signal(signum, handler):
+        previous = current_handlers[signum]
+        current_handlers[signum] = handler
+        return previous
+
+    triggered = False
+
+    def terminating_runner(command):
+        nonlocal triggered
+        command = tuple(command)
+        if command == ("systemctl", "--user", "daemon-reload") and not triggered:
+            triggered = True
+            current_handlers[termination_signal](termination_signal, None)
+        return runner(command)
+
+    monkeypatch.setattr(installer.signal, "getsignal", fake_getsignal)
+    monkeypatch.setattr(installer.signal, "signal", fake_signal)
+
+    with pytest.raises(RuntimeError, match=installer.signal.Signals(termination_signal).name):
+        installer.install(paths, runner=terminating_runner, environment={})
+
+    assert paths.installed_monitor.read_bytes() == b"previous-monitor"
+    assert paths.notification_env.read_text(encoding="utf-8") == (
+        f"{installer.TOPIC_ENV}=previous-private-topic\n"
+    )
+    assert runner.timer_enabled
+    assert runner.timer_active
+    assert current_handlers == prior_handlers
 
 
 def test_installer_removes_partial_enrollment_when_timer_enable_fails(tmp_path):

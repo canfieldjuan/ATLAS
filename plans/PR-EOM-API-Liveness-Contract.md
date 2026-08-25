@@ -387,6 +387,36 @@ Notification delivery is at-least-once, not exactly-once.
   the full focused file, syntax/systemd/maturity/plan/diff checks, and the single
   managed full Unit Gate before push.
 
+### Contract revision: complete actor and producer closure
+
+- New evidence: ordinary termination signals can bypass installer rollback;
+  maintenance entry stops the provider before the marker is durably published;
+  the browser probe covers only one of two route-supported origins; maintenance
+  exit validates a service value it never uses; and the best-effort desktop
+  notifier can hold the serialized health cycle without a timeout.
+- Revised root cause: the execution model names transaction, producer, action,
+  and delivery boundaries but the implementation closes only one member of
+  several admitted sets. Catching one cancellation, probing one origin, and
+  separating numeric validation are partial closures rather than the complete
+  contract.
+- Revised required change surface: convert admitted `SIGTERM`/`SIGHUP` into the
+  installer rollback path and restore prior handlers; fsync maintenance-marker
+  publication before service stop and fsync its removal on maintenance exit;
+  probe every route-supported form
+  origin and pin the mirrored standalone set to the producer contract; validate
+  service only for actions that use it; and bound/handle desktop notification
+  timeout without changing primary ntfy acknowledgement semantics.
+- Revised explicit non-scope: do not admit `SIGKILL` or host power loss during
+  rollback, add application-runtime imports to the standalone monitor, change
+  route CORS policy, restart active-but-unhealthy processes, change notification
+  payloads, alter funnel business behavior, schemas, dependencies, or live
+  deployment.
+- Revised verification plan: focused termination-handler restoration/rollback,
+  durable-marker ordering/failure, all-origin request and second-origin failure,
+  action-specific service validation, desktop-timeout recovery, the full focused
+  file, syntax/systemd/maturity/plan/diff checks, and the single managed full
+  Unit Gate before push.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -536,8 +566,8 @@ notification exit diagnostics, as listed above.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 543 |
-| `scripts/atlas_api_healthcheck.py` | 675 |
-| `scripts/install_atlas_api_healthcheck.py` | 579 |
-| `tests/test_atlas_api_healthcheck.py` | 1680 |
-| **Total** | **3505** |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 573 |
+| `scripts/atlas_api_healthcheck.py` | 720 |
+| `scripts/install_atlas_api_healthcheck.py` | 601 |
+| `tests/test_atlas_api_healthcheck.py` | 1873 |
+| **Total** | **3795** |
