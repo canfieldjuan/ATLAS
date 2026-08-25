@@ -219,8 +219,8 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/services/eom_first_clean_completion.py` | 696 |
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 340 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 76 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 223 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 226 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 173 |
 | `tests/test_eom_first_clean_completion.py` | 1013 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 154 |
-| **Total** | **2811** |
+| **Total** | **2814** |
