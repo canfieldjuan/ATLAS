@@ -1,0 +1,18 @@
+[Unit]
+Description=Atlas API liveness recovery (lead intake and EOM provider)
+# This stays independent of atlas-api.service so it can recover that unit when
+# the application runtime is unavailable.
+
+[Service]
+Type=oneshot
+# Install, enable, and prove the source-managed monitor from the merged Atlas
+# checkout; the installer copies it outside the runtime worktree:
+#   python scripts/install_atlas_api_healthcheck.py --install
+ExecStart=/usr/bin/python3 %h/.local/bin/atlas-api-healthcheck.py
+# The private ntfy topic is deliberately supplied outside version control:
+#   ATLAS_API_HEALTHCHECK_NTFY_TOPIC=<private-topic>
+EnvironmentFile=-%h/.config/atlas/atlas-api-healthcheck.env
+Environment=DISPLAY=:0
+# 2 means an inactive provider was recovered and re-probed successfully.
+# 4 means the outcome is durable but its remote alert remains queued for retry.
+SuccessExitStatus=0 2 4

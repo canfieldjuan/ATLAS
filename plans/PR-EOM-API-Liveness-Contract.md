@@ -1,0 +1,573 @@
+# PR-EOM-API-Liveness-Contract
+
+## Why this slice exists
+
+The operator reported that the EOM funnel became unavailable after working
+earlier the same day. Live investigation found `atlas-api.service` cleanly
+stopped at 12:15 CDT; its `Restart=on-failure` policy did not restart a clean
+SIGTERM, and the Tailnet `/api` proxy consequently had no listener on port
+8012. The existing five-minute `atlas-api-healthcheck` timer detected the
+inactive unit for 84 consecutive runs, but its script only notified; it never
+restored the service. This is a production availability defect, so this is a
+small Production hardening slice justified by a real failed EOM provider path.
+The monitor program, its installed user-systemd units, the installer that
+activates those units, and the failure-path proof are indivisible: a program
+without deployment wiring cannot recover production, while wiring without the
+program and its regression coverage is unsafe. That is the reason this slice
+exceeds the normal diff target.
+
+### Problem-derived contract
+
+- Root cause: The source of truth for the existing standalone liveness monitor
+  is an untracked local shell script. It observes an inactive `atlas-api`
+  unit but has no recovery transition. A clean stop therefore persists until a
+  person manually starts the provider, even though the monitor has enough
+  evidence to distinguish an expected maintenance stop from an unexpected one.
+- Correct fix must touch/change: Add a source-managed, stdlib-only health-check
+  implementation plus its user-systemd service/timer templates. When the
+  provider is inactive and no explicit maintenance lock exists, the monitor
+  must start the existing unit, re-probe the existing lead-intake CORS route,
+  record/notify the outcome through the existing ntfy and desktop channels, and
+  remain installed outside the runtime worktree.
+  Add focused tests for the active, inactive/recovered, inactive/failed, and
+  maintenance-lock branches.
+- Must not change: Do not change `atlas_brain` funnel routes, authentication,
+  CRM lifecycle/storage, migrations, invoice behavior, EOM tracker APIs,
+  Render environment variables, Tailnet routing, browser UI, or the running
+  Atlas worktree. Do not automatically restart an *active but unhealthy*
+  process in this slice; preserve the existing alert-only behavior for that
+  distinct failure class.
+
+## Scope (this PR)
+
+Ownership lane: eom-provider-liveness
+Slice phase: Production hardening
+Max files: 6
+
+1. Replace the untracked alert-only health-check logic with a canonical
+   installed-outside-the-runtime monitor that auto-recovers only an unexpected
+   inactive `atlas-api.service`.
+2. Add a maintenance-lock contract so intentional maintenance is never
+   automatically undone.
+3. Add executable regression coverage and source-managed unit templates that
+   make the installation/configuration contract reviewable.
+4. Add an explicit post-merge installer/checker that activates the installed
+   user-systemd path and invokes it once without touching the live deployment
+   during PR review.
+
+### Review Contract
+
+- Acceptance criteria:
+  1. `run_healthcheck()` starts `atlas-api.service` exactly once when the
+     service is inactive, the maintenance lock is absent, and a subsequent
+     probe succeeds; settled by
+     `tests/test_atlas_api_healthcheck.py::test_inactive_service_is_started_and_reprobed`.
+  2. An existing maintenance lock prevents a start attempt, and the supported
+     maintenance-entry command serializes marker creation plus service stop
+     against recovery; settled by the two maintenance tests in
+     `tests/test_atlas_api_healthcheck.py`.
+  3. A start that fails, or a start followed by a failed probe, remains a
+     visible down result rather than a false recovery; settled by the two
+     failed-recovery tests in `tests/test_atlas_api_healthcheck.py`.
+  4. An active but failed lead-intake probe does not restart the process;
+     settled by
+     `tests/test_atlas_api_healthcheck.py::test_active_unhealthy_service_alerts_without_restart`.
+  5. The systemd template runs the installed copy outside the runtime worktree
+   and reads notification settings from a user-local environment file;
+   settled by `tests/test_atlas_api_healthcheck.py::test_service_template_uses_installed_script_and_private_environment`.
+  6. The installer copies the reviewed monitor and both unit templates, proves
+     the installed health service before enabling the timer, restores prior
+     files/timer state on failure, and can later verify the deployment without
+     writing; settled by
+   `tests/test_atlas_api_healthcheck.py::test_installer_deploys_source_and_invokes_enabled_timer_path`.
+- Reachability proof: On deployment, the timer invokes the installed monitor;
+  `python scripts/install_atlas_api_healthcheck.py --install` copies the source,
+  reloads user systemd, invokes the installed health service once, and enables
+  the timer only after that proof succeeds. That service makes the real OPTIONS request to
+  `/api/v1/leads/intake`; `--check` subsequently verifies the installed copies,
+  private topic file, and enabled/active timer without writing. Local tests
+  exercise the same install command order and probe seam without stopping the
+  live provider.
+- Affected surfaces: source-managed standalone monitor, its explicit installer,
+  user-systemd templates, notification/maintenance configuration, and focused
+  tests.
+- Risk areas: unexpected clean stops, deliberate maintenance, failed start,
+  failed re-probe, notification configuration absence, transactional rollback,
+  concurrent maintenance/recovery actors, and keeping the monitor independent
+  of the application worktree.
+- Reviewer rules triggered: R1, R2, R6, R8, R11, R12, R14.
+
+### Contract revision: current-head review findings
+
+- New evidence: the enabled user timer still executes the legacy
+  atlas-api-healthcheck.sh; neither the new Python monitor nor
+  its notification environment file is installed. The current template only
+  names an `install` command, so the source change has no deployment path.
+  Separately, notification transitions need a crash-safe outbox rather than an
+  in-memory decision, and failed `systemctl --user start` details must remain
+  observable.
+- Revised root cause: source-managed monitor files alone cannot change a
+  user-systemd deployment, and the alert state machine acknowledges a
+  notification before it knows that delivery succeeded.
+- Revised required change surface: add a narrowly scoped
+  `scripts/install_atlas_api_healthcheck.py` installer/checker that copies the
+  monitor and templates outside the runtime worktree, preserves or safely
+  migrates the private local notification topic without logging it, reloads and
+  proves the installed health service, then enables the user timer. Persist each
+  transition in an atomic, fsynced outbox before delivery and acknowledge only
+  after success; carry bounded sanitized start-failure detail into the
+  observation; and test installation, rollback, crash-point retry, and diagnostics.
+- Revised explicit non-scope: do not run the installer against the live user
+  systemd configuration in this PR; deployment remains a post-merge host
+  action. Do not change `atlas_brain`, funnel routes, CRM, migrations, tracker
+  APIs, Render/Tailnet topology, browser UI, active-but-unhealthy recovery, or
+  any notification destination.
+- Revised verification plan: unit-test source-to-installed-copy and expected
+  systemd command order in temporary paths, test the retry and failed-start
+  branches directly, run the focused monitor/installer tests and
+  `systemd-analyze verify`, and use the installer `--check` plus its initial
+  systemd service invocation as the post-merge deployment proof.
+
+### Contract revision: closed systemd state and open-execution model
+
+- New evidence: `systemctl is-active` collapses every non-active result into one
+  boolean even though recovery is safe only for a loaded unit whose
+  `ActiveState` is exactly `inactive`. The installer likewise treats a missing
+  old healthcheck unit as a stop failure, while `--check` compares disk bytes
+  without proving that systemd loaded them.
+- Revised root cause: monitor, installer, and verifier do not share one explicit
+  systemd state model, and the contract describes sampled schedules rather than
+  the property that must survive every admitted interleaving.
+- Revised required change surface: query and parse `LoadState` plus
+  `ActiveState` once through the monitor-owned state model; recover only
+  `loaded/inactive`; surface absent, transitional, failed, incomplete, and query
+  error states without a start. Reuse that model to admit a clean install with
+  no old unit and to quiesce a loaded old unit. Require `NeedDaemonReload=no`
+  for both installed units before `--check` succeeds.
+- Revised explicit non-scope: do not add a supervisor, database, dependency,
+  schema, deployment write, active-but-unhealthy restart, or broader systemd
+  policy. The private topic, timer cadence, probe, and public CLI stay unchanged.
+  Out-of-band edits to the monitor state file and underlying filesystem or
+  storage corruption are also excluded; admitted state transitions are the
+  atomic, schema-validated writes made by this monitor.
+- Revised verification plan: exercise loaded/active, loaded/inactive,
+  not-found, transitional, query-failure, incomplete-response, clean-install,
+  unsupported-load-state, and daemon-reload-needed boundaries in the focused
+  test file. GitHub runs the full unit gate.
+
+#### Admitted actors and serialization
+
+1. The user-systemd timer or a manual healthcheck invocation runs one monitor
+   cycle. The oneshot service and `state.lock` serialize monitor cycles.
+2. The supported maintenance command holds the same lock while publishing the
+   marker and stopping `atlas-api.service`, so maintenance and recovery have a
+   total order.
+3. The installer first stops the timer, queries the old healthcheck unit, and
+   waits for a loaded old oneshot to stop before replacing files. A missing old
+   unit is the admitted clean-host state. Direct manual monitor launches during
+   installation are excluded; installation is a single-operator maintenance
+   action.
+4. The systemd user manager owns unit load/active state. The monitor and
+   installer act only on successfully parsed `LoadState`/`ActiveState` values;
+   query failures and non-admitted states fail closed.
+5. The remote ntfy service is an external at-least-once delivery consumer. It
+   cannot participate in the local atomic state write.
+
+#### Crash and cancellation boundaries
+
+- Before recovery-intent persistence: no start is issued.
+- After intent persistence but before/during start or re-probe: the next cycle
+  retains the intent and reconciles the explicit systemd state.
+- After outbox persistence but before notification: the next cycle retries.
+- After successful notification but before acknowledgement persistence: a
+  duplicate notification is admitted; silent loss is not.
+- After the installer stops the prior timer or replaces any installation file,
+  an operator `KeyboardInterrupt` runs the same rollback as an installation
+  failure and is then re-raised. `SIGKILL` remains outside the rollback boundary;
+  atomic file replacement still selects a complete prior or next file.
+- If state cannot be read, decoded, locked, or atomically written, the cycle
+  fails before issuing a new recovery side effect. A SIGKILL cannot interrupt an
+  atomic file replacement, although it can select either the prior or next
+  complete state.
+
+#### Property invariant
+
+For every admitted interleaving: the monitor never starts an unloaded,
+transitional, failed, query-unknown, or maintenance-protected provider; every
+issued recovery start is preceded by durable intent; every derived alert is
+either durably queued or acknowledged after delivery; and installation is
+reported verified only when the provider proof is non-down and source bytes,
+private configuration, timer state, and systemd's loaded definitions agree.
+Notification delivery is at-least-once, not exactly-once.
+
+#### Closed-surface alternatives
+
+- `Restart=always` alone is rejected because an operator stop is intentionally
+  not restarted and it cannot encode the maintenance-marker boundary.
+- SQLite is rejected for this single-host, serialized record because it adds a
+  schema/migration surface while still being unable to atomically couple a
+  remote ntfy response with local acknowledgement. The mode-0600 atomic state
+  file plus `flock` is the smaller closed local surface; its admitted duplicate
+  boundary is explicit above.
+
+### Contract revision: deployed boundary outcomes
+
+- New evidence: the systemd service accepts recovery exit `2` but rejects exit
+  `4`, even though exit `4` means the same recovery/observation is durably
+  recorded with only remote notification delivery pending. Separately,
+  `http.client.HTTPException` is outside both HTTP catch sets, and numeric
+  healthcheck environment defaults are converted before maintenance action
+  selection.
+- Revised root cause: the monitor classifies internal recovery and persistence
+  states, but its systemd, HTTP, and CLI boundaries do not preserve those
+  classifications. A queued alert is mistaken for failed recovery, malformed
+  HTTP escapes instead of becoming an existing failure outcome, and unrelated
+  healthcheck configuration can disable the supported maintenance boundary.
+- Revised required change surface: admit exit `4` as a successful systemd
+  oneshot completion while retaining its journal/outbox evidence; convert
+  `HTTPException` at probe and notification boundaries into the existing down
+  and undelivered outcomes; select maintenance mode before converting
+  healthcheck-only numeric settings; cover all three boundaries in the focused
+  suite.
+- Revised explicit non-scope: do not change exit-code meanings, outbox or retry
+  semantics, timer cadence, notification destination, installer transaction
+  behavior, funnel/CRM APIs, schemas, dependencies, or live deployment.
+- Revised verification plan: focused tests for queued-delivery service status,
+  malformed HTTP at both boundaries, invalid numeric environment on both
+  maintenance actions and the healthcheck path; syntax, systemd verification,
+  focused maturity, plan sync, and diff audit. GitHub runs the full unit gate.
+
+### Contract revision: outcome precedence and installer cancellation
+
+- New evidence: notification delivery failure currently returns exit `4` for
+  both a healthy/recovered provider and a provider that remains down. Because
+  the systemd unit accepts exit `4`, the installer's service proof can therefore
+  succeed while the provider is unavailable. Separately, the installer mutates
+  timer and file state inside a transaction that catches `OSError` and
+  `RuntimeError`, but an operator `KeyboardInterrupt` bypasses rollback.
+- Revised root cause: the monitor collapses the provider observation and remote
+  alert-delivery result into one scalar without failure precedence, while the
+  installer transaction omits an admitted operator-cancellation exception from
+  its rollback boundary.
+- Revised required change surface: retain exit `3` whenever the current provider
+  outcome is down even if its alert remains queued; use exit `4` only when the
+  provider outcome is non-down and alert delivery remains pending; run the
+  existing installer rollback for `KeyboardInterrupt` and then re-raise the
+  cancellation; cover both outcome axes and cancellation after mutation in the
+  focused test file.
+- Revised explicit non-scope: do not change the systemd success-status set,
+  alert queue or retry semantics, timer cadence, notification destinations,
+  public CLI, dependencies, schemas, funnel/CRM behavior, or live deployment.
+  Non-finite recovery-interval validation and nonzero desktop `notify-send`
+  diagnostics are valid hardening but remain parked because neither blocks the
+  observed provider recovery proof. Do not add or change a workflow: the
+  existing every-PR Unit Gate escalates this config diff to the full unit suite.
+- Revised verification plan: focused regressions for down-plus-undelivered,
+  recovered-plus-undelivered, and installer `KeyboardInterrupt` rollback;
+  focused pytest and syntax checks; systemd unit verification; selector proof
+  that the PR runs the full Unit Gate; plan sync and diff audit. GitHub remains
+  the source of truth for the full Unit Gate.
+
+### Contract revision: browser-ready probe and exact timer restoration
+
+- New evidence: the provider probe sends an OPTIONS preflight but treats a
+  200/204 status as healthy without verifying the route-owned CORS response
+  headers needed by the browser. Separately, installer rollback collapses
+  persistent `enabled` and temporary `enabled-runtime` timer states into one
+  boolean and always restores persistent enablement.
+- Revised root cause: both boundaries discard contract-bearing state after
+  reading it: the health probe drops preflight headers, and the installer drops
+  the systemd enablement class. Later decisions therefore prove or restore less
+  than the state they claim.
+- Revised required change surface: send the browser's Content-Type preflight
+  request and require the canonical origin, POST method, and Content-Type
+  allowance before reporting provider health; preserve disabled, persistent,
+  and runtime-only timer enablement distinctly and replay the exact enablement
+  form during rollback; cover missing/wrong/mixed CORS headers and runtime-only
+  rollback in the existing focused test file.
+- Revised explicit non-scope: do not change Atlas route CORS behavior, allowed
+  origins, the website request shape, service/timer templates, public CLI,
+  schemas, dependencies, notification behavior, or live deployment. Continue
+  to park non-finite intervals and desktop-notification diagnostics.
+- Revised verification plan: focused regression tests for valid and invalid
+  preflight response shapes plus persistent/runtime/disabled timer restoration;
+  syntax, systemd verification, plan sync, diff audit, and the existing managed
+  full Unit Gate before push.
+
+### Contract revision: user-manager bus ownership
+
+- New evidence: the user-systemd unit hard-codes
+  `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`, although the installer
+  is not restricted to UID 1000 and every recovery command targets the invoking
+  user's service manager.
+- Revised root cause: deployment configuration overrides the manager-provided
+  user bus identity with an operator-specific UID, so a valid installation for
+  another UID can address the wrong or nonexistent bus.
+- Revised required change surface: remove the hard-coded bus override and prove
+  the unit contains no UID-specific runtime-bus path; let `systemctl --user`
+  resolve the invoking user's manager through its native runtime environment.
+- Revised explicit non-scope: do not change timer cadence, service commands,
+  installation paths, remote ntfy delivery, the best-effort DISPLAY hint, or
+  live deployment.
+- Revised verification plan: focused template assertion, native
+  `systemd-analyze verify`, syntax/diff/plan checks, and the managed full Unit
+  Gate before push.
+
+### Contract revision: complete decision inventory and symlink rollback
+
+- New evidence: the Review Contract omits R8 despite the hand-rolled lock,
+  crash-state, outbox, and rollback model; the closure declaration names only
+  two of the decision-driving memberships introduced by this slice; and file
+  snapshots follow live symlinks while treating broken symlinks as absent, so
+  rollback reconstructs a regular file or deletes the original link.
+- Revised root cause: the implementation and plan model values but not every
+  membership boundary or filesystem node type that those decisions consume.
+  The rollback snapshot therefore cannot reconstruct the pre-install namespace
+  entry, and the review contract cannot prove closure over all admitted states.
+- Revised required change surface: declare R8 and every decision-driving
+  membership with its closed/open status, source, and out-of-set direction;
+  snapshot symlink identity and its raw target before mutation; atomically
+  restore that link entry after a failed install; and prove existing and broken
+  relative symlinks survive a forced service-proof failure unchanged.
+- Revised explicit non-scope: do not change successful-install behavior,
+  source/destination paths, timer state semantics, provider recovery, CORS,
+  notification delivery, public CLI, schemas, dependencies, or live deployment.
+- Revised verification plan: focused out-of-set state tests and parameterized
+  live/broken symlink rollback proof, followed by syntax, systemd, plan, diff,
+  and the managed full Unit Gate before push.
+
+### Contract revision: notification-symlink referent safety
+
+- New evidence: `ensure_notification_topic()` follows an existing notification
+  environment symlink with `chmod(0600)` before service proof, while rollback
+  restores only the link entry. A failed installation can therefore leave the
+  managed target mode, ctime, and ACL mask changed even though the link and bytes
+  appear restored.
+- Revised root cause: the installer transaction snapshots destination namespace
+  entries but mutates a symlink referent outside that snapshot. Numeric-mode
+  restoration cannot reconstruct ctime or ACL side effects, so extending the
+  snapshot would still be lossy.
+- Revised required change surface: validate a notification symlink's followed
+  target mode before any systemd query or mutation; reject broken or group/world
+  accessible targets without reading or chmod; preserve an already-private
+  target/link without chmod; retain regular-file permission tightening; and
+  cover existing-topic, missing-topic, success, and failed-proof paths.
+- Revised explicit non-scope: do not change topic grammar, topic value, regular
+  destination behavior, source/unit paths, service/timer commands, recovery,
+  notification delivery, public CLI, schemas, dependencies, or live deployment.
+- Revised verification plan: focused symlink-target privacy and rollback tests,
+  the complete focused test file, syntax/systemd/maturity/plan/diff checks, and
+  the managed full Unit Gate before push.
+
+### Contract revision: installer preflight and deployed-copy identity closure
+
+- New evidence: notification-file decoding and missing-topic resolution still
+  happen after the prior timer may be stopped; a private symlink without a topic
+  is accepted and then replaced by a regular file; and read-only verification
+  treats a symlink or hard link to the checkout source as an installed copy when
+  its bytes match.
+- Revised root cause: installer admission is split across pre-mutation and
+  post-mutation phases, and deployment proof compares content without proving
+  namespace/inode independence. These are one transaction-boundary defect:
+  shapes that cannot be safely mutated or independently deployed are admitted
+  too late or accepted as proof.
+- Revised required change surface: build and validate the complete notification
+  update plan before any systemd query or mutation; convert malformed UTF-8 into
+  a fail-closed installer error; require an accepted notification symlink to be
+  private and already contain its valid topic; apply a precomputed payload only
+  to a regular destination; and make `--check` reject symlink destinations and
+  same-inode aliases even when bytes and executable mode match.
+- Revised explicit non-scope: do not change monitor recovery logic, systemd
+  commands or unit templates, topic grammar/value, regular-file migration
+  semantics, notification delivery, funnel routes, schemas, dependencies, or
+  live deployment.
+- Revised verification plan: focused malformed-UTF-8 preflight tests for both
+  configuration sources, private missing-topic symlink rejection, private
+  existing-topic preservation, symlink/hard-link deployment-proof rejection,
+  the full focused file, syntax/systemd/maturity/plan/diff checks, and the single
+  managed full Unit Gate before push.
+
+### Contract revision: complete actor and producer closure
+
+- New evidence: ordinary termination signals can bypass installer rollback;
+  maintenance entry stops the provider before the marker is durably published;
+  the browser probe covers only one of two route-supported origins; maintenance
+  exit validates a service value it never uses; and the best-effort desktop
+  notifier can hold the serialized health cycle without a timeout.
+- Revised root cause: the execution model names transaction, producer, action,
+  and delivery boundaries but the implementation closes only one member of
+  several admitted sets. Catching one cancellation, probing one origin, and
+  separating numeric validation are partial closures rather than the complete
+  contract.
+- Revised required change surface: convert admitted `SIGTERM`/`SIGHUP` into the
+  installer rollback path and restore prior handlers; fsync maintenance-marker
+  publication before service stop and fsync its removal on maintenance exit;
+  probe every route-supported form
+  origin and pin the mirrored standalone set to the producer contract; validate
+  service only for actions that use it; and bound/handle desktop notification
+  timeout without changing primary ntfy acknowledgement semantics.
+- Revised explicit non-scope: do not admit `SIGKILL` or host power loss during
+  rollback, add application-runtime imports to the standalone monitor, change
+  route CORS policy, restart active-but-unhealthy processes, change notification
+  payloads, alter funnel business behavior, schemas, dependencies, or live
+  deployment.
+- Revised verification plan: focused termination-handler restoration/rollback,
+  durable-marker ordering/failure, all-origin request and second-origin failure,
+  action-specific service validation, desktop-timeout recovery, the full focused
+  file, syntax/systemd/maturity/plan/diff checks, and the single managed full
+  Unit Gate before push.
+
+### Boundary-change enumeration
+
+The recovery decision is a system state boundary, not an open-input guard.
+
+- Boundary path/seam: `run_healthcheck()` deciding whether to issue
+  `systemctl --user start`.
+- Replaced-path behaviors: inactive service previously notified only; it now
+  recovers only if maintenance is absent. Active/healthy remains no-op;
+  active/unhealthy remains alert-only.
+- Guard-relevant fields: unit load state, unit active state, maintenance-lock
+  path, state-query result, start result, and post-start CORS probe result.
+- Caller x input shape: timer invocation x loaded-active/healthy; timer x
+  loaded-inactive/no lock; timer x loaded-inactive/lock; timer x not-found;
+  timer x transitional; timer x query failure; timer x loaded-inactive/start
+  failure; timer x loaded-active/failed probe.
+
+### Deployed-config probing
+
+- Deployed/default config values: default service is `atlas-api.service`; default
+  probe is local `OPTIONS /api/v1/leads/intake`; maintenance lock defaults under
+  the user Atlas config directory; the installer requires or safely migrates
+  the notification topic into the user-local environment file before enabling
+  the timer.
+- Explicit value probe: focused tests inject service, lock, and probe values.
+- Absent value probe: absent lock permits recovery; absent notification topic
+  must not be committed or silently replaced with a public/default topic.
+- Default-session/default-context probe: the systemd template loads a missing
+  environment file optionally for manual recovery, while the installer refuses
+  to enable an alerting timer until it can preserve a private topic.
+- Side-effect ordering: supported maintenance entry and recovery share one
+  process lock; issue a start only after inactive evidence; prove installed
+  service behavior before timer enrollment.
+
+### Guard-closure declaration
+
+- `TOPIC_RE` and `LEGACY_TOPIC_RE` are CLOSED, DERIVED topic grammars:
+  membership is computed from the bounded ASCII grammar authored in
+  `scripts/install_atlas_api_healthcheck.py`; the legacy grammar additionally
+  derives the topic from the one supported shell assignment shape. Missing or
+  nonmatching input fails before copies or systemd enrollment, the safer side
+  because an unknown notification destination must not be used. The focused
+  grammar-product test exercises token, body, length, and wrapper boundaries
+  against an independent oracle.
+- `PENDING_ALERTS` is CLOSED and ENUMERATED by the three alert events that this
+  monitor can emit (`down`, `recovered`, and `auto-recovered`). An unrecognized
+  persisted notification invalidates the stored document and resets to the safe
+  initial state; recognized events remain queued while each run still derives
+  state from the current observation, so arbitrary stored values cannot choose
+  or suppress a notification path.
+- The systemd response-key set (`LoadState`, `ActiveState`) is CLOSED and
+  ENUMERATED from the exact properties requested by `query_unit_state()`.
+  Unrequested keys are ignored and either missing required key returns a query
+  failure that becomes provider-down; incomplete systemd output cannot authorize
+  recovery.
+- The browser-ready probe memberships are CLOSED and ENUMERATED from the actual
+  public intake contract: HTTP 200/204, the canonical origin, POST, and
+  Content-Type. Any status or required CORS member outside those sets reports
+  the provider down, the safe side because an unusable browser route must not
+  prove deployment health.
+- `STATE_STATUSES` and the observation outcome vocabulary are CLOSED and
+  ENUMERATED by this monitor's persisted/runtime state machine. Unknown persisted
+  status invalidates the document and resets to the initial state; an unknown
+  runtime observation falls into the existing down outcome, so incompleteness
+  cannot manufacture health.
+- The legacy pending-record exit-code set is CLOSED and ENUMERATED from the
+  monitor's original durable outcomes (`EXIT_OK`, `EXIT_RECOVERED`, `EXIT_DOWN`).
+  Any other value invalidates the legacy document instead of being migrated.
+- The systemd `SuccessExitStatus` set is CLOSED and DERIVED from the current
+  monitor outcomes that mean the provider observation is durable and non-down:
+  ordinary health, successful recovery, and queued remote alert. Provider-down
+  remains outside the success set and therefore fails deployment proof.
+- Timer `ActiveState` membership is CLOSED and ENUMERATED by the three states
+  whose rollback meaning this installer defines (`active`, `inactive`, `failed`).
+  Timer `UnitFileState` membership is CLOSED and ENUMERATED by the four states it
+  can restore exactly (`disabled`, `enabled`, `enabled-runtime`, `static`); the
+  enabled subset is DERIVED from those accepted values at `TimerState.enabled`.
+  Any state outside either admitted set raises before installer mutation, while
+  a value outside the enabled subset remains not-enabled during read-only proof.
+
+### Files touched
+
+- `config/atlas-api-healthcheck.service`
+- `config/atlas-api-healthcheck.timer`
+- `plans/PR-EOM-API-Liveness-Contract.md`
+- `scripts/atlas_api_healthcheck.py`
+- `scripts/install_atlas_api_healthcheck.py`
+- `tests/test_atlas_api_healthcheck.py`
+
+## Mechanism
+
+The monitor is a standalone Python program installed under `~/.local/bin`,
+not loaded from the Atlas runtime worktree. Its supported maintenance command
+creates the marker and stops the service under the same lock used by recovery.
+If the service is inactive without that marker, it calls the existing unit and runs the same
+lead-intake OPTIONS probe that the current monitor uses. It records and notifies
+only after the final outcome is known. The templates keep the timer independent
+of `atlas-api.service` and load the private notification topic from a local
+environment file rather than version control. The companion installer copies
+the reviewed source and templates, migrates an existing private topic without
+printing it, proves the installed service before enabling the timer, and rolls
+back prior files/timer state on failure; later `--check` is read-only.
+
+## Intentional
+
+- Do not rely on `Restart=always` as the root fix: an explicit systemd stop can
+  still suppress restart behavior, while the independent timer can recover the
+  observed inactive state.
+- Do not auto-restart an active-but-unhealthy provider. That needs a distinct
+  diagnosis and would widen this slice from the observed inactive-unit failure.
+- Do not commit the ntfy topic or read it from application configuration; it is
+  a private notification credential and remains in a local environment file.
+- Do not consider an alert transition acknowledged until its ntfy push succeeds;
+  failed delivery records a pending transition so the next invocation retries
+  the same event.
+
+## Deferred
+
+- Render-to-Atlas reachability remains a separate deployment-topology slice.
+  The current `ATLAS_FUNNEL_BASE_URL` is not proven reachable from Render by
+  this local liveness monitor, and this PR must not change that network boundary.
+- A deployment-time authenticated, Render-origin funnel smoke is deferred until
+  a supported provider hosting/network path is selected and can be tested.
+- Rejecting non-finite recovery intervals is parked as configuration hardening;
+  ordinary numeric and negative-value validation remains unchanged, and this
+  does not alter the provider-result precedence required for installer proof.
+- Reporting a nonzero desktop `notify-send` return code is parked as secondary
+  observability hardening; desktop notification remains best-effort and remote
+  ntfy delivery plus provider outcome remain the operational contract.
+
+Parking predicate: network-topology changes and active-process recovery are
+parked unless they block this inactive-unit recovery path.
+
+Parked hardening: non-finite recovery-interval validation and nonzero desktop
+notification exit diagnostics, as listed above.
+
+## Verification
+
+- `pytest tests/test_atlas_api_healthcheck.py -q`
+- `systemd-analyze verify config/atlas-api-healthcheck.service config/atlas-api-healthcheck.timer`
+- `python scripts/sync_pr_plan.py plans/PR-EOM-API-Liveness-Contract.md --check`
+- `bash scripts/push_pr.sh <body-file> -u origin HEAD` (runs the mechanical
+  local review bundle exactly once before push).
+
+## Estimated diff size
+
+| File | LOC |
+|---|---:|
+| `config/atlas-api-healthcheck.service` | 18 |
+| `config/atlas-api-healthcheck.timer` | 10 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 573 |
+| `scripts/atlas_api_healthcheck.py` | 720 |
+| `scripts/install_atlas_api_healthcheck.py` | 601 |
+| `tests/test_atlas_api_healthcheck.py` | 1873 |
+| **Total** | **3795** |
