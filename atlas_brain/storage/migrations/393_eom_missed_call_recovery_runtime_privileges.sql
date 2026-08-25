@@ -21,6 +21,12 @@ DECLARE
     relation_name TEXT;
     column_name TEXT;
     function_signature TEXT;
+    expected_function_language TEXT;
+    expected_function_body_sha256 TEXT;
+    observed_function_language TEXT;
+    observed_function_body TEXT;
+    observed_function_body_sha256 TEXT;
+    pgcrypto_schema TEXT;
     append_only_triggers_ready BOOLEAN;
 BEGIN
     SELECT COALESCE(executor_role.rolsuper, FALSE)
@@ -97,6 +103,91 @@ BEGIN
         RAISE EXCEPTION
             'atlas_nocodb must be an unprivileged LOGIN NOINHERIT role before running 393_eom_missed_call_recovery_runtime_privileges';
     END IF;
+
+    -- 393 is the first migration to give the CRM bridge functions definer
+    -- authority. Never elevate an object merely because its signature still
+    -- exists: its stored body and language must be the exact trusted migration-
+    -- 389 source before this migration changes its owner or security mode.
+    SELECT namespace_state.nspname
+      INTO pgcrypto_schema
+      FROM pg_catalog.pg_extension AS extension_state
+      JOIN pg_catalog.pg_namespace AS namespace_state
+        ON namespace_state.oid = extension_state.extnamespace
+     WHERE extension_state.extname = 'pgcrypto'
+     LIMIT 1;
+
+    IF pgcrypto_schema IS NULL THEN
+        RAISE EXCEPTION
+            'pgcrypto SHA-256 support is required before elevating EOM missed-call bridge functions';
+    END IF;
+
+    FOR function_signature, expected_function_language, expected_function_body_sha256 IN
+        SELECT expected_function.signature,
+               expected_function.language_name,
+               expected_function.body_sha256
+          FROM (
+              VALUES
+                  (
+                      'cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)',
+                      'plpgsql',
+                      'd4c08e5d18af991621648f89297fb83170f7355948c52f5da85749cfeb0e535b'
+                  ),
+                  (
+                      'lock_eom_missed_call_interaction_contact()',
+                      'plpgsql',
+                      'f7b6b3a3057c2b68b46c1854a64a693105bda4732d0dea5b8c772400d314e18e'
+                  ),
+                  (
+                      'eom_missed_call_effective_recipient(UUID, TEXT)',
+                      'sql',
+                      '128b147313d03f1bf05a4ce086e225f09647078dfdf43bced4f2b47c0d3f4371'
+                  ),
+                  (
+                      'cancel_eom_missed_call_on_recipient_change(UUID)',
+                      'plpgsql',
+                      '9f099f30ae2303e1f8610217222d40f1bde51ea5adbc2964b72b4b2581c18c0f'
+                  ),
+                  (
+                      'cancel_eom_missed_call_on_contact_change()',
+                      'plpgsql',
+                      'ae2cac20a094b376008dc249098aafef8592aa46ea4e224ba6effc8271cebe8d'
+                  ),
+                  (
+                      'cancel_eom_missed_call_on_interaction()',
+                      'plpgsql',
+                      '0751a416b37e46a3d1960edbc6f4c65496b46465244bae04eeeaf45bd555feee'
+                  )
+          ) AS expected_function(signature, language_name, body_sha256)
+    LOOP
+        SELECT procedure.prosrc, language_state.lanname
+          INTO observed_function_body, observed_function_language
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_language AS language_state
+            ON language_state.oid = procedure.prolang
+         WHERE procedure.oid = pg_catalog.to_regprocedure(
+                   format('%I.%s', schema_name, function_signature)
+               );
+
+        IF observed_function_body IS NULL
+           OR observed_function_language IS DISTINCT FROM expected_function_language THEN
+            RAISE EXCEPTION
+                'required EOM missed-call bridge function % is not the trusted migration-389 function',
+                function_signature;
+        END IF;
+
+        EXECUTE format(
+            'SELECT encode(%1$I.digest($1::text, ''sha256''), ''hex'')',
+            pgcrypto_schema
+        )
+          INTO observed_function_body_sha256
+          USING observed_function_body;
+
+        IF observed_function_body_sha256 IS DISTINCT FROM expected_function_body_sha256 THEN
+            RAISE EXCEPTION
+                'required EOM missed-call bridge function % does not match its trusted migration-389 body',
+                function_signature;
+        END IF;
+    END LOOP;
 
     FOR relation_name IN
         SELECT unnest(ARRAY[

@@ -2,9 +2,10 @@
 """Run the DBA-only EOM missed-call recovery privilege repair safely.
 
 The normal Atlas runtime must never be given the database authority required by
-migration 393. This command defaults to a read-only preflight and applies only
-the selected migration after an explicit ``--apply`` using a protected DBA DSN
-environment variable.
+migration 393 or its exact historical migration prerequisites. This command
+defaults to a read-only preflight. With ``--apply``, it first lets the existing
+historical selector apply only an attested EOM recovery prelude, then applies
+migration 393 after migration 389 is recorded, using a protected DBA DSN.
 """
 
 from __future__ import annotations
@@ -30,6 +31,11 @@ from atlas_brain.storage.migrations import run_migrations  # noqa: E402
 DEFAULT_DSN_ENV = "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL"
 PREREQUISITE_MIGRATION_NAME = "389_eom_missed_call_recovery"
 MIGRATION_NAME = "393_eom_missed_call_recovery_runtime_privileges"
+HISTORICAL_PRELUDE_MIGRATION_NAMES: tuple[str, ...] = (
+    "390_eom_won_loss_direct_sql_fence_recovery",
+    "391_eom_commercial_billing_run_fence_recovery",
+    "392_eom_commercial_billing_run_fence_schema_binding",
+)
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -50,7 +56,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Run migration 393 after the read-only DBA preflight.",
+        help=(
+            "Apply an exact historical EOM recovery prelude if required, then "
+            "run migration 393 after the read-only DBA preflight."
+        ),
     )
     parser.add_argument(
         "--json",
@@ -83,8 +92,10 @@ async def _create_pool(database_url: str) -> Any:
     return await asyncpg.create_pool(dsn=database_url, min_size=1, max_size=1)
 
 
-async def _migration_state(pool: Any) -> tuple[bool, bool, bool]:
-    """Return executor, prerequisite, and repair ledger state without writes."""
+async def _migration_state(
+    pool: Any,
+) -> tuple[bool, bool, bool, bool, dict[str, bool]]:
+    """Return executor, ledger, and exact EOM migration state without writes."""
 
     async with pool.acquire() as connection:
         executor_is_superuser = bool(
@@ -105,6 +116,9 @@ async def _migration_state(pool: Any) -> tuple[bool, bool, bool]:
         )
         prerequisite_migration_recorded = False
         migration_recorded = False
+        historical_prelude_migration_records = {
+            name: False for name in HISTORICAL_PRELUDE_MIGRATION_NAMES
+        }
         if migrations_table_exists:
             prerequisite_migration_recorded = bool(
                 await connection.fetchval(
@@ -118,11 +132,42 @@ async def _migration_state(pool: Any) -> tuple[bool, bool, bool]:
                     MIGRATION_NAME,
                 )
             )
+            for historical_migration_name in HISTORICAL_PRELUDE_MIGRATION_NAMES:
+                historical_prelude_migration_records[historical_migration_name] = bool(
+                    await connection.fetchval(
+                        "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
+                        historical_migration_name,
+                    )
+                )
     return (
         executor_is_superuser,
+        migrations_table_exists,
         prerequisite_migration_recorded,
         migration_recorded,
+        historical_prelude_migration_records,
     )
+
+
+async def _apply_required_historical_prelude(
+    pool: Any,
+    *,
+    run_migrations_fn: Callable[..., Awaitable[None]],
+) -> None:
+    """Apply at most the three explicitly authorized historical EOM preludes.
+
+    ``run_migrations`` deliberately commits one selected historical recovery per
+    invocation. Re-read the ledger after each invocation and stop once the
+    selector has no exact prelude to apply. This command never includes 389 in
+    its requested set, so normal bootstrap ownership remains with the slim EOM
+    runtime path.
+    """
+
+    for _ in HISTORICAL_PRELUDE_MIGRATION_NAMES:
+        _, _, _, _, before = await _migration_state(pool)
+        await run_migrations_fn(pool, only=HISTORICAL_PRELUDE_MIGRATION_NAMES)
+        _, _, _, _, after = await _migration_state(pool)
+        if after == before:
+            return
 
 
 async def _run(
@@ -142,12 +187,15 @@ async def _run(
     try:
         (
             executor_is_superuser,
+            migrations_table_exists,
             prerequisite_migration_recorded,
             migration_recorded,
+            historical_prelude_migration_records,
         ) = await _migration_state(pool)
         result: dict[str, object] = {
             "target": _safe_target_label(database_url),
             "executor_is_superuser": executor_is_superuser,
+            "historical_prelude_migrations": historical_prelude_migration_records,
             "prerequisite_migration": PREREQUISITE_MIGRATION_NAME,
             "prerequisite_migration_recorded": prerequisite_migration_recorded,
             "migration": MIGRATION_NAME,
@@ -159,6 +207,21 @@ async def _run(
                 "Configured DBA connection is not a PostgreSQL superuser; "
                 "refusing to run the privilege repair"
             )
+        if args.apply and migrations_table_exists and not migration_recorded:
+            await _apply_required_historical_prelude(
+                pool,
+                run_migrations_fn=run_migrations_fn,
+            )
+            (
+                _,
+                _,
+                prerequisite_migration_recorded,
+                migration_recorded,
+                historical_prelude_migration_records,
+            ) = await _migration_state(pool)
+            result["historical_prelude_migrations"] = (
+                historical_prelude_migration_records
+            )
         if args.apply and not prerequisite_migration_recorded:
             raise RuntimeError(
                 f"Migration {PREREQUISITE_MIGRATION_NAME} is not recorded; "
@@ -166,13 +229,22 @@ async def _run(
             )
         if args.apply and not migration_recorded:
             await run_migrations_fn(pool, only=(MIGRATION_NAME,))
-            _, _, migration_recorded = await _migration_state(pool)
+            (
+                _,
+                _,
+                _,
+                migration_recorded,
+                historical_prelude_migration_records,
+            ) = await _migration_state(pool)
             if not migration_recorded:
                 raise RuntimeError(
                     "Migration runner returned without recording the EOM "
                     "missed-call recovery privilege repair"
                 )
             result["migration_recorded"] = True
+            result["historical_prelude_migrations"] = (
+                historical_prelude_migration_records
+            )
             result["applied"] = True
         return result
     finally:
@@ -189,7 +261,8 @@ async def _main(argv: list[str] | None = None) -> int:
         print(
             f"{action} {result['migration']} on {result['target']}; "
             f"recorded={result['migration_recorded']}; "
-            f"prerequisite_recorded={result['prerequisite_migration_recorded']}"
+            f"prerequisite_recorded={result['prerequisite_migration_recorded']}; "
+            f"historical_preludes={result['historical_prelude_migrations']}"
         )
     return 0
 

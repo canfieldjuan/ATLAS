@@ -95,6 +95,9 @@ def test_privilege_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> 
     assert result == {
         "target": "dsn=example.test:5432/atlas",
         "executor_is_superuser": True,
+        "historical_prelude_migrations": {
+            name: False for name in runner.HISTORICAL_PRELUDE_MIGRATION_NAMES
+        },
         "prerequisite_migration": runner.PREREQUISITE_MIGRATION_NAME,
         "prerequisite_migration_recorded": False,
         "migration": runner.MIGRATION_NAME,
@@ -142,7 +145,10 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
 
     async def run_migrations(observed_pool: object, *, only: tuple[str, ...]) -> None:
         calls.append((observed_pool, only))
-        state.recorded_migrations.add(runner.MIGRATION_NAME)
+        if only == (runner.MIGRATION_NAME,):
+            state.recorded_migrations.add(runner.MIGRATION_NAME)
+        else:
+            assert only == runner.HISTORICAL_PRELUDE_MIGRATION_NAMES
 
     args = runner._parse_args(
         ["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"]
@@ -155,7 +161,10 @@ def test_privilege_runner_applies_only_the_recorded_repair(monkeypatch) -> None:
         )
     )
 
-    assert calls == [(pool, (runner.MIGRATION_NAME,))]
+    assert calls == [
+        (pool, runner.HISTORICAL_PRELUDE_MIGRATION_NAMES),
+        (pool, (runner.MIGRATION_NAME,)),
+    ]
     assert result["prerequisite_migration_recorded"] is True
     assert result["migration_recorded"] is True
     assert result["applied"] is True
@@ -200,13 +209,15 @@ def test_privilege_runner_refuses_apply_without_prerequisite_receipt(
         recorded_migrations=set(recorded_migrations),
     )
     pool = _Pool(state)
-    calls: list[object] = []
+    calls: list[tuple[str, ...]] = []
 
     async def create_pool(_database_url: str) -> _Pool:
         return pool
 
-    async def run_migrations(*_args: object, **_kwargs: object) -> None:
-        calls.append(object())
+    async def run_migrations(*_args: object, **kwargs: object) -> None:
+        only = kwargs["only"]
+        assert isinstance(only, tuple)
+        calls.append(only)
 
     args = runner._parse_args(
         ["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"]
@@ -223,5 +234,66 @@ def test_privilege_runner_refuses_apply_without_prerequisite_receipt(
             )
         )
 
-    assert calls == []
+    expected_calls = (
+        []
+        if (
+            not migrations_table_exists
+            or runner.MIGRATION_NAME in recorded_migrations
+        )
+        else [runner.HISTORICAL_PRELUDE_MIGRATION_NAMES]
+    )
+    assert calls == expected_calls
+    assert (runner.MIGRATION_NAME,) not in calls
+    assert pool.closed is True
+
+
+def test_privilege_runner_applies_historical_preludes_before_privilege_repair(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
+    )
+    pool = _Pool(state)
+    calls: list[tuple[str, ...]] = []
+    prelude_names = iter(runner.HISTORICAL_PRELUDE_MIGRATION_NAMES)
+
+    async def create_pool(_database_url: str) -> _Pool:
+        return pool
+
+    async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
+        calls.append(only)
+        if only == runner.HISTORICAL_PRELUDE_MIGRATION_NAMES:
+            state.recorded_migrations.add(next(prelude_names))
+        elif only == (runner.MIGRATION_NAME,):
+            state.recorded_migrations.add(runner.MIGRATION_NAME)
+        else:  # pragma: no cover - regression guard for this controlled runner
+            raise AssertionError(f"unexpected migration selection: {only}")
+
+    args = runner._parse_args(
+        ["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"]
+    )
+    result = asyncio.run(
+        runner._run(
+            args,
+            create_pool=create_pool,
+            run_migrations_fn=run_migrations,
+        )
+    )
+
+    assert calls == [
+        runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
+        (runner.MIGRATION_NAME,),
+    ]
+    assert result["historical_prelude_migrations"] == {
+        name: True for name in runner.HISTORICAL_PRELUDE_MIGRATION_NAMES
+    }
+    assert result["prerequisite_migration_recorded"] is True
+    assert result["migration_recorded"] is True
+    assert result["applied"] is True
     assert pool.closed is True

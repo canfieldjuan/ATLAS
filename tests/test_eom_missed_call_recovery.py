@@ -8,8 +8,10 @@ schedule a real appointment.
 from __future__ import annotations
 
 import asyncio
+from hashlib import sha256
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from itertools import product
@@ -59,6 +61,46 @@ _NOCODB_TEST_PASSWORD = "test-only-missed-call-nocodb-password"
 _RUNTIME_PROBE_PASSWORD = "test-only-missed-call-runtime-password"
 _PRIVILEGE_REPAIR_MIGRATION = (
     MIGRATIONS / "393_eom_missed_call_recovery_runtime_privileges.sql"
+)
+_TRUSTED_BRIDGE_FUNCTION_SIGNATURES = (
+    "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)",
+    "lock_eom_missed_call_interaction_contact()",
+    "eom_missed_call_effective_recipient(UUID, TEXT)",
+    "cancel_eom_missed_call_on_recipient_change(UUID)",
+    "cancel_eom_missed_call_on_contact_change()",
+    "cancel_eom_missed_call_on_interaction()",
+)
+_TRUSTED_BRIDGE_FUNCTIONS = (
+    (
+        "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)",
+        "cancel_eom_missed_call_sequences_for_contact",
+        "plpgsql",
+    ),
+    (
+        "lock_eom_missed_call_interaction_contact()",
+        "lock_eom_missed_call_interaction_contact",
+        "plpgsql",
+    ),
+    (
+        "eom_missed_call_effective_recipient(UUID, TEXT)",
+        "eom_missed_call_effective_recipient",
+        "sql",
+    ),
+    (
+        "cancel_eom_missed_call_on_recipient_change(UUID)",
+        "cancel_eom_missed_call_on_recipient_change",
+        "plpgsql",
+    ),
+    (
+        "cancel_eom_missed_call_on_contact_change()",
+        "cancel_eom_missed_call_on_contact_change",
+        "plpgsql",
+    ),
+    (
+        "cancel_eom_missed_call_on_interaction()",
+        "cancel_eom_missed_call_on_interaction",
+        "plpgsql",
+    ),
 )
 
 
@@ -149,6 +191,98 @@ async def _apply_schema(connection: Any, schema: str) -> None:
 
 def _quote_ident(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
+
+
+def test_privilege_repair_trusted_bridge_hashes_match_migration_389_source() -> None:
+    """Keep 393's body allowlist tied to the immutable migration-389 source."""
+
+    source = (MIGRATIONS / "389_eom_missed_call_recovery.sql").read_text()
+    repair = _PRIVILEGE_REPAIR_MIGRATION.read_text()
+    for signature, function_name, language_name in _TRUSTED_BRIDGE_FUNCTIONS:
+        function_match = re.search(
+            rf"CREATE OR REPLACE FUNCTION {re.escape(function_name)}\b(.*?)"
+            r"(?=\nCREATE OR REPLACE FUNCTION|\Z)",
+            source,
+            re.DOTALL,
+        )
+        assert function_match is not None, function_name
+        language_and_body_match = re.search(
+            r"LANGUAGE\s+([A-Za-z0-9_]+)(?:\s+STABLE)?\s+AS \$\$(.*?)\$\$;",
+            function_match.group(1),
+            re.DOTALL,
+        )
+        assert language_and_body_match is not None, function_name
+        assert language_and_body_match.group(1) == language_name
+        body_sha256 = sha256(language_and_body_match.group(2).encode()).hexdigest()
+        expected_entry = re.compile(
+            rf"\(\s*'{re.escape(signature)}'\s*,\s*"
+            rf"'{language_name}'\s*,\s*'{body_sha256}'\s*\)",
+            re.DOTALL,
+        )
+        assert expected_entry.search(repair), signature
+
+
+async def _tamper_bridge_function(
+    connection: Any,
+    *,
+    schema: str,
+    function_signature: str,
+) -> None:
+    """Replace one bridge body while preserving its callable signature."""
+
+    schema_ident = _quote_ident(schema)
+    definitions = {
+        "cancel_eom_missed_call_sequences_for_contact(UUID, VARCHAR, VARCHAR)": f"""
+            CREATE OR REPLACE FUNCTION {schema_ident}.cancel_eom_missed_call_sequences_for_contact(
+                UUID, VARCHAR, VARCHAR
+            ) RETURNS VOID LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN;
+            END;
+            $$;
+        """,
+        "lock_eom_missed_call_interaction_contact()": f"""
+            CREATE OR REPLACE FUNCTION {schema_ident}.lock_eom_missed_call_interaction_contact()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$;
+        """,
+        "eom_missed_call_effective_recipient(UUID, TEXT)": f"""
+            CREATE OR REPLACE FUNCTION {schema_ident}.eom_missed_call_effective_recipient(
+                UUID, TEXT
+            ) RETURNS TEXT LANGUAGE sql AS $$
+            SELECT 'tampered'::TEXT;
+            $$;
+        """,
+        "cancel_eom_missed_call_on_recipient_change(UUID)": f"""
+            CREATE OR REPLACE FUNCTION {schema_ident}.cancel_eom_missed_call_on_recipient_change(
+                UUID
+            ) RETURNS VOID LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN;
+            END;
+            $$;
+        """,
+        "cancel_eom_missed_call_on_contact_change()": f"""
+            CREATE OR REPLACE FUNCTION {schema_ident}.cancel_eom_missed_call_on_contact_change()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$;
+        """,
+        "cancel_eom_missed_call_on_interaction()": f"""
+            CREATE OR REPLACE FUNCTION {schema_ident}.cancel_eom_missed_call_on_interaction()
+            RETURNS TRIGGER LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$;
+        """,
+    }
+    await connection.execute(definitions[function_signature])
 
 
 async def _require_disposable_role_administration(connection: Any) -> None:
@@ -803,6 +937,50 @@ async def test_privilege_repair_keeps_runtime_operable_and_nocodb_guarded() -> N
             if runtime_role_created:
                 await connection.execute(f"DROP OWNED BY {runtime_probe_ident}")
                 await connection.execute(f"DROP ROLE {runtime_probe_ident}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("function_signature", _TRUSTED_BRIDGE_FUNCTION_SIGNATURES)
+async def test_privilege_repair_rejects_each_tampered_bridge_body(
+    function_signature: str,
+) -> None:
+    """No untrusted migration-389 bridge body may gain definer authority."""
+
+    _database_url_or_skip()
+    async with _test_store() as (admin_pool, schema):
+        connection = admin_pool._connection
+        await _provision_privilege_repair_roles(connection)
+        await _tamper_bridge_function(
+            connection,
+            schema=schema,
+            function_signature=function_signature,
+        )
+
+        with pytest.raises(
+            asyncpg.exceptions.RaiseError,
+            match="trusted migration-389 body",
+        ):
+            await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+
+        qualified_signature = f"{_quote_ident(schema)}.{function_signature}"
+        assert not await connection.fetchval(
+            """
+            SELECT procedure.prosecdef
+            FROM pg_catalog.pg_proc AS procedure
+            WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
+            """,
+            qualified_signature,
+        )
+        assert await connection.fetchval(
+            """
+            SELECT owner_role.rolname <> 'atlas_eom_handoff_owner'
+            FROM pg_catalog.pg_proc AS procedure
+            JOIN pg_catalog.pg_roles AS owner_role
+              ON owner_role.oid = procedure.proowner
+            WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
+            """,
+            qualified_signature,
+        )
 
 
 @pytest.mark.asyncio
