@@ -503,6 +503,10 @@ transaction-pooling proxy cannot split lock, DDL, and migration bookkeeping.
   accepted as completion proof.
 - Require an existing canonical customer handoff. A tracker record without a
   canonical contact/customer/site bridge cannot trigger customer onboarding.
+- Treat `eom_customer_handoffs.finalized_at` as the time Atlas recorded that
+  bridge, not as tracker service chronology. A historical completed service may
+  be reported after later canonicalization; only tracker-sourced service evidence
+  can establish a lower-bound policy.
 - Do not infer completion from calendar state, actual-hours projections, or
   generic job status. The next tracker slice will supply an explicit,
   actor-attributed completion action anchored to a durable service identity.
@@ -568,9 +572,9 @@ an automatic completion source and is intentionally left outside this slice.
 | `atlas_brain/storage/migrations/394_eom_first_clean_completion_receipts.sql` | 645 |
 | `atlas_brain/storage/migrations/__init__.py` | 40 |
 | `docs/EOM_FIRST_CLEAN_COMPLETION_RUNBOOK.md` | 129 |
-| `plans/PR-First-Clean-Completion-Receipt.md` | 576 |
+| `plans/PR-First-Clean-Completion-Receipt.md` | 580 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 429 |
 | `tests/test_eom_first_clean_completion.py` | 2910 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 751 |
 | `tests/test_migrations_runner.py` | 39 |
-| **Total** | **6871** |
+| **Total** | **6875** |
