@@ -283,82 +283,32 @@ def test_local_pr_review_forwards_pr_author_to_pre_push_audit(tmp_path: Path) ->
     assert "--pr-author dependabot[bot]" in result.stdout
 
 
-def test_local_pr_review_runs_local_unit_gate_mirror(tmp_path: Path) -> None:
+def test_local_pr_review_never_runs_local_unit_gate(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     _write_unit_gate_fixture(
         repo,
         selector_script="#!/usr/bin/env python3\nprint('tests/test_example.py')\n",
-        checker_script=(
-            "#!/usr/bin/env python3\n"
-            "import os\n"
-            "import sys\n"
-            "print('body env=' + str(os.environ.get('ATLAS_CURRENT_PR_BODY_FILE')))\n"
-            "print('git prefix env=' + str(os.environ.get('GIT_PREFIX')))\n"
-            "print('pytest addopts env=' + str(os.environ.get('PYTEST_ADDOPTS')))\n"
-            "print('pytest disable plugins env=' + str(os.environ.get('PYTEST_DISABLE_PLUGIN_AUTOLOAD')))\n"
-            "print('db connection env=' + str(os.environ.get('ATLAS_DB_CONNECTION_STRING')))\n"
-            "print('db host env=' + str(os.environ.get('ATLAS_DB_HOST')))\n"
-            "print('db port env=' + str(os.environ.get('ATLAS_DB_PORT')))\n"
-            "print('db database env=' + str(os.environ.get('ATLAS_DB_DATABASE')))\n"
-            "print('db user env=' + str(os.environ.get('ATLAS_DB_USER')))\n"
-            "print('db password env=' + str(os.environ.get('ATLAS_DB_PASSWORD')))\n"
-            "print('db socket env=' + str(os.environ.get('ATLAS_DB_SOCKET_PATH')))\n"
-            "print('unit gate args=' + ' '.join(sys.argv[1:]))\n"
-        ),
+        checker_script="#!/usr/bin/env python3\nimport sys\nprint('unit checker ran')\nsys.exit(9)\n",
     )
     (repo / "requirements.unit_gate.txt").write_text("scapy==2.7.0\n", encoding="utf-8")
     _git(repo, "add", "requirements.unit_gate.txt")
     _git(repo, "commit", "-m", "add unit gate test requirements")
-    fake_python = tmp_path / "fake-python"
-    _write_executable(
-        fake_python,
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "if [ \"${1:-}\" = \"-m\" ] && [ \"${2:-}\" = \"pip\" ]; then\n"
-        "  shift 2\n"
-        "  printf 'unit gate deps install=%s\\n' \"$*\"\n"
-        "  exit 0\n"
-        "fi\n"
-        f"exec {sys.executable!r} \"$@\"\n",
-    )
 
     result = _run(
         repo,
         ["bash", "scripts/local_pr_review.sh"],
-        env={
-            "ATLAS_CURRENT_PR_BODY_FILE": "/tmp/body-from-wrapper.md",
-            "GIT_PREFIX": "from-hook/",
-            "GITHUB_ACTIONS": "false",
-            "PYTEST_ADDOPTS": "-k passing",
-            "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
-            "ATLAS_DB_SOCKET_PATH": "/tmp/dev-postgres.sock",
-            "PYTHON": str(fake_python),
-        },
+        env={"GITHUB_ACTIONS": "false"},
     )
 
-    stdout_lines = set(result.stdout.splitlines())
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "Local unit gate mirror" in result.stdout
-    assert "unit gate deps install=install -r " + str(repo / "requirements.unit_gate.txt") in stdout_lines
-    assert "body env=None" in stdout_lines
-    assert "git prefix env=None" in stdout_lines
-    assert "pytest addopts env=None" in stdout_lines
-    assert "pytest disable plugins env=None" in stdout_lines
-    assert "db connection env=" in stdout_lines
-    assert "db host env=127.0.0.1" in stdout_lines
-    assert "db port env=1" in stdout_lines
-    assert "db database env=atlas" in stdout_lines
-    assert "db user env=atlas" in stdout_lines
-    assert "db password env=atlas_dev_password" in stdout_lines
-    assert "db socket env=" in stdout_lines
-    assert "running 1 impacted test file(s)" in result.stdout
-    assert "--selected-files" in result.stdout
-    assert "tests/test_example.py -m not integration and not e2e" in result.stdout
+    assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
+    assert "unit checker ran" not in result.stdout
+    assert "installing unit-gate test dependencies" not in result.stdout
     assert "local PR review passed" in result.stdout
 
 
-def test_local_pr_review_unit_gate_mirror_runs_growth_only_for_empty_selection(tmp_path: Path) -> None:
+def test_local_pr_review_ignores_empty_unit_selection_locally(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     _write_unit_gate_fixture(repo, selector_script="#!/usr/bin/env python3\n")
@@ -366,13 +316,12 @@ def test_local_pr_review_unit_gate_mirror_runs_growth_only_for_empty_selection(t
     result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "no test is reachable from the changed files; growth guard only" in result.stdout
-    assert "--growth-only" in result.stdout
-    assert "--selected-files" not in result.stdout
+    assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
+    assert "no test is reachable from the changed files" not in result.stdout
     assert "local PR review passed" in result.stdout
 
 
-def test_local_pr_review_unit_gate_mirror_runs_full_selection(tmp_path: Path) -> None:
+def test_local_pr_review_ignores_full_unit_selection_locally(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     _write_unit_gate_fixture(repo, selector_script="#!/usr/bin/env python3\nprint('FULL')\n")
@@ -380,13 +329,12 @@ def test_local_pr_review_unit_gate_mirror_runs_full_selection(tmp_path: Path) ->
     result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "running the FULL suite (selection escalated)" in result.stdout
-    assert "--growth-only" not in result.stdout
-    assert "--selected-files" not in result.stdout
+    assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
+    assert "running the FULL suite" not in result.stdout
     assert "local PR review passed" in result.stdout
 
 
-def test_local_pr_review_unit_gate_mirror_checker_failures_block_every_mode(tmp_path: Path) -> None:
+def test_local_pr_review_never_calls_unit_checker_in_any_selection_mode(tmp_path: Path) -> None:
     cases = {
         "selected": (
             "#!/usr/bin/env python3\nprint('tests/test_example.py')\n",
@@ -416,15 +364,14 @@ def test_local_pr_review_unit_gate_mirror_checker_failures_block_every_mode(tmp_
 
         result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
 
-        assert result.returncode == 1, result.stdout + result.stderr
-        assert "Local unit gate mirror" in result.stdout
-        assert mode_message in result.stdout
-        assert args_fragment in result.stdout
-        assert "unit gate rejected:" in result.stdout
-        assert "1 local review check(s) failed" in result.stdout
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
+        assert mode_message not in result.stdout
+        assert args_fragment not in result.stdout
+        assert "unit gate rejected:" not in result.stdout
 
 
-def test_local_pr_review_unit_gate_mirror_propagates_selector_failure(tmp_path: Path) -> None:
+def test_local_pr_review_never_calls_failing_unit_selector(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     _write_unit_gate_fixture(
@@ -435,14 +382,13 @@ def test_local_pr_review_unit_gate_mirror_propagates_selector_failure(tmp_path: 
 
     result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
 
-    assert result.returncode == 1
-    assert "Local unit gate mirror" in result.stdout
-    assert "selector failed while choosing local unit-gate tests" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
+    assert "selector failed" not in result.stdout
     assert "unit gate should not run" not in result.stdout
-    assert "1 local review check(s) failed" in result.stdout
 
 
-def test_local_pr_review_unit_gate_mirror_fails_when_checker_was_removed(tmp_path: Path) -> None:
+def test_local_pr_review_does_not_require_local_unit_checker(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     _write_unit_gate_fixture(repo, selector_script="#!/usr/bin/env python3\nprint('FULL')\n")
@@ -452,14 +398,12 @@ def test_local_pr_review_unit_gate_mirror_fails_when_checker_was_removed(tmp_pat
 
     result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "false"})
 
-    assert result.returncode == 1
-    assert "Local unit gate mirror" in result.stdout
-    assert "scripts/check_unit_gate.py is absent from this PR head" in result.stdout
-    assert "SKIP (scripts/check_unit_gate.py not found)" not in result.stdout
-    assert "1 local review check(s) failed" in result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
+    assert "scripts/check_unit_gate.py is absent" not in result.stdout
 
 
-def test_local_pr_review_skips_unit_gate_mirror_in_github_actions(tmp_path: Path) -> None:
+def test_local_pr_review_defers_unit_gate_inside_github_actions(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     _write_executable(
@@ -472,7 +416,7 @@ def test_local_pr_review_skips_unit_gate_mirror_in_github_actions(tmp_path: Path
     result = _run(repo, ["bash", "scripts/local_pr_review.sh"], env={"GITHUB_ACTIONS": "true"})
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "SKIP (GitHub Actions runs .github/workflows/unit_gate.yml as its own required check)" in result.stdout
+    assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
     assert "should not run" not in result.stdout
     assert "local PR review passed" in result.stdout
 
@@ -807,12 +751,8 @@ def test_local_pr_review_skips_plans_advisory_when_absent(tmp_path: Path) -> Non
     assert "SKIP (scripts/archive_plans.py not found)" in result.stdout
 
 
-def test_local_pr_review_unit_gate_mirror_sets_recursion_guard(tmp_path: Path) -> None:
-    """The unit gate must run with ATLAS_SKIP_LOCAL_PR_REVIEW=1.
-
-    Without it, a push performed by a test inside the gated suite re-enters
-    the pre-push hook, which re-runs this script, which pushes again.
-    """
+def test_local_pr_review_does_not_launch_unit_gate_with_ambient_guard(tmp_path: Path) -> None:
+    """The hosted-only boundary must hold regardless of ambient guard state."""
     repo = tmp_path / "repo"
     _write_fixture_repo(repo)
     _write_unit_gate_fixture(
@@ -834,14 +774,15 @@ def test_local_pr_review_unit_gate_mirror_sets_recursion_guard(tmp_path: Path) -
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "skip local pr review env=1" in result.stdout.splitlines()
+    assert "GitHub Actions owns .github/workflows/unit_gate.yml" in result.stdout
+    assert "skip local pr review env=" not in result.stdout
 
 
 def test_conftest_preserves_the_recursion_guard() -> None:
     """conftest must keep ATLAS_SKIP_LOCAL_PR_REVIEW set for the suite.
 
     Dropping it would let a test that pushes into a repo with a managed
-    pre-push hook re-enter review -> unit gate -> pytest.
+    pre-push hook re-enter the local mechanical review path.
     """
     assert os.environ.get("ATLAS_SKIP_LOCAL_PR_REVIEW") == "1"
 
@@ -849,9 +790,9 @@ def test_conftest_preserves_the_recursion_guard() -> None:
 def test_recursion_guard_survives_a_real_pytest_launch() -> None:
     """Cover the checker -> pytest path, not just a stub that prints its env.
 
-    scripts/check_unit_gate.py launches pytest, which imports conftest. This
-    asserts the guard supplied by scripts/local_pr_review.sh is still set once
-    that import has happened -- the step a stub checker cannot exercise.
+    A focused pytest process imports conftest. This asserts the push-recursion
+    guard remains set there even though local review no longer launches the
+    unit checker.
     """
     result = subprocess.run(
         [

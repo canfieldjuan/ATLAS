@@ -45,6 +45,11 @@ active issue/accepted plan says so.
 
 ### Local Development (Recommended for fast iteration)
 
+Begin with `./ops doctor`, then read `.agent/capabilities.yaml` and the matching
+runbook under `.agent/runbooks/`. A full app start is mutating: the lifespan
+checks/applies database migrations and can start enabled background work. Use a
+deliberately prepared development environment, never the shared production env.
+
 ```bash
 # Activate virtual environment
 source .venv/bin/activate
@@ -94,10 +99,16 @@ ollama pull minimax-m2:cloud
 ollama run qwen3:14b "Hello"
 ```
 
-### Docker (Production)
+### Docker packaging (alternate/local)
+
+The current production-shaped Brain is `atlas-api.service` on a detached local
+runtime worktree, not this Compose project. Root Compose contains Brain and
+NocoDB only, expects native PostgreSQL on host port `5433`, and parses the
+required NocoDB password even for status/service selection.
 
 ```bash
-# Build and start the server (requires NVIDIA Container Toolkit)
+# Set ATLAS_NOCODB_DB_PASSWORD through an approved secret source first.
+# Build and start the containers (requires NVIDIA Container Toolkit)
 docker compose up --build -d
 
 # Restart after code changes (volumes mount atlas_brain/, so rebuild not always needed)
@@ -411,14 +422,15 @@ contact_interactions, appointments).  Atlas itself uses DatabaseCRMProvider
 (direct asyncpg) — NocoDB is purely a human-facing admin interface.
 
 ```bash
-# 1. Start Postgres + NocoDB
-docker compose up -d postgres nocodb
+# 1. Confirm native Postgres, then start NocoDB with its approved DB credential.
+./ops db status
+docker compose up -d nocodb
 
 # 2. Open the NocoDB UI
 open http://localhost:8090
 
-# 3. On first launch, create an account, then connect to the existing DB:
-#    Source: Postgres | Host: postgres | Port: 5432 | DB: atlas | User: atlas
+# 3. On first launch, create an account. Compose's NC_DB already targets:
+#    Host: host.docker.internal | Port: 5433 | DB: atlas | unprivileged NocoDB role
 ```
 
 The `contacts` table (created by migration `035_contacts.sql`) is the CRM schema.
@@ -1291,9 +1303,9 @@ pytest -m "not integration and not e2e"
 # Just one test file
 pytest tests/test_blog_post_postgres.py -v
 
-# Run integration tests (requires Postgres + Neo4j up)
-docker compose up -d postgres
-pytest -m integration
+# Run a focused integration test only against an explicit disposable DB.
+# See .agent/runbooks/database.md for the test URL and confirmation boundary.
+./ops test integration tests/<integration_test>.py -q
 
 # Single keyword filter
 pytest -k "campaign and not slow"
@@ -1434,7 +1446,7 @@ inside the directory. Python sub-services have their own `requirements*.txt`
 and Dockerfiles (`Dockerfile.graphiti`, `Dockerfile`).
 
 Compose files for sub-services:
-- `docker-compose.yml` — main brain + Postgres + NocoDB
+- `docker-compose.yml` — main brain + NocoDB; native Postgres is external on host port 5433
 - `docker-compose.graphiti.yml` — Neo4j + Graphiti wrapper (use `start-graphiti.sh`)
 - `docker-compose.ha.yml` / `docker-compose.homeassistant.yml` — Home Assistant
 - `docker-compose.wyze.yml` — Wyze cam bridge

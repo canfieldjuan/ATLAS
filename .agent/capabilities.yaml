@@ -1,0 +1,302 @@
+schema_version: 1
+
+project:
+  name: Atlas
+  repository: canfieldjuan/ATLAS
+  verified_at: "2026-08-25"
+  operational_entrypoint: ./ops doctor
+  source_of_truth:
+    - ./ops doctor
+    - executable configuration and current code
+    - .agent/runbooks
+    - README.md and CLAUDE.md only where they agree with the above
+
+workspace:
+  normal_worktree:
+    status: verified
+    inspect: git status --short --branch
+    authentication: none
+    mutation: read-only
+    safe_verify: ./ops doctor
+  shared_root:
+    status: verified
+    path_hint: the parent for a conventional .git common directory; otherwise the direct bare common directory
+    purpose: holds shared ignored runtime state such as .env, .venv, and .vercel
+    warning: the shared Atlas root can report as bare and reject git status
+    runbook: .agent/runbooks/environment.md
+
+runtime:
+  brain:
+    status: verified
+    implementation: FastAPI served by uvicorn
+    code_entrypoint: atlas_brain.main:app
+    local_command: python -m uvicorn atlas_brain.main:app --host 127.0.0.1 --port 8001
+    production_provider: local systemd user service
+    production_service: atlas-api.service
+    production_health: http://127.0.0.1:8012/api/v1/ping
+    authentication: local user session and systemd user bus
+    current_session_capable: true
+    mutation: startup may run database migrations and enabled background work
+    safe_verify: ./ops deploy status
+    likely_failures:
+      - running from the shared bare root instead of a worktree
+      - missing or wrong systemd EnvironmentFiles
+      - database migration or writer-fence failure during startup
+      - optional LLM, ASR, or external provider unavailable
+    runbook: .agent/runbooks/environment.md
+  frontend_packages:
+    status: verified
+    provider: npm and Vite, with Expo for atlas-mobile
+    packages:
+      - atlas-ui
+      - atlas-intel-ui
+      - atlas-churn-ui
+      - atlas-admin-ui
+      - atlas-mobile
+      - portfolio-ui
+    safe_verify: ./ops test frontend atlas-churn-ui test
+    runbook: .agent/runbooks/testing.md
+
+testing:
+  unit:
+    status: hosted-only
+    provider: GitHub Actions running pytest
+    command: .github/workflows/unit_gate.yml
+    authentication: none
+    current_session_capable: inspect-only; local execution is intentionally disabled
+    mutation: hosted test artifacts only
+    safe_verify: ./ops ci status
+    likely_failures:
+      - optional dependencies can cause collection errors
+      - the full suite uses a committed known-failure baseline in CI
+      - a local invocation is rejected by policy; use focused mode for narrow proof
+  focused:
+    status: verified
+    command: ./ops test focused <pytest-target-and-args>
+    credential_isolation: removes canonical, URL-shaped, Atlas application, libpq PG*, and disposable-confirmation database authority before pytest
+    mutation: depends on the selected test
+    likely_failures:
+      - database-backed tests skip or fail without credentials; use guarded integration mode with an explicitly disposable database
+  integration:
+    status: available-with-explicit-disposable-database
+    provider: pytest plus PostgreSQL 16
+    command: ./ops test integration <tests/test_file.py[::node]> [pytest-options]
+    authentication: exactly one of ATLAS_MIGRATION_TEST_DATABASE_URL, ATLAS_RECEIVABLES_TEST_DATABASE_URL, or ATLAS_LEGACY_MONTHLY_AUTOINVOICE_WRITER_TEST_DATABASE_URL
+    credential_isolation: pytest receives only the confirmed DSN, adapted to the selected canonical key, DATABASE_URL, EXTRACTED_DATABASE_URL, and ATLAS_DB_CONNECTION_STRING; inherited URL-shaped, Atlas application, and libpq PG* credentials are removed
+    current_session_capable: false-until-a-disposable-url-is-exported
+    mutation: destructive within the explicitly confirmed disposable database
+    safe_verify: use the matching GitHub Actions workflow when no disposable local database is prepared
+    likely_failures:
+      - pointing tests at the live atlas database
+      - exporting multiple canonical test database URLs at once
+      - assuming an ambient generic, Atlas application, or libpq PG* database credential is passed through unchanged
+      - omitting ATLAS_CONFIRM_DISPOSABLE_TEST_DB=1
+      - omitting a concrete existing test file or passing a directory-wide target
+      - running multiple DB-backed suites against one shared database
+    runbook: .agent/runbooks/testing.md
+
+ci:
+  status: verified
+  provider: GitHub Actions
+  repository: canfieldjuan/ATLAS
+  authentication: GitHub CLI keyring login with repo and workflow scopes
+  current_session_capable: true
+  mutation: inspection commands are read-only; rerun and dispatch are mutating
+  inspect: ./ops ci status
+  inspect_run: ./ops ci run <run-id> --log-failed
+  required_gate_registry: ci/gates.yml
+  safe_verify: gh workflow list --repo canfieldjuan/ATLAS
+  likely_failures:
+    - inspecting a stale run or a run for a different head SHA
+    - confusing advisory workflows with branch-required contexts
+    - assuming a skipped or runnerless job proves source failure
+  runbook: .agent/runbooks/ci.md
+
+deployment:
+  brain:
+    status: verified
+    provider: local systemd user service
+    service: atlas-api.service
+    source: detached runtime worktree
+    inspect: ./ops deploy status
+    deploy: manual guarded runtime-worktree cutover and systemd restart
+    current_session_capable: inspect-only
+    mutation: production-mutating; restart also invokes migration checks
+    staging: unavailable-no-service-discovered
+  frontend:
+    status: verified
+    provider: Vercel
+    project: atlas-churn-ui
+    build_config: vercel.json
+    build_source: atlas-churn-ui
+    inspect: ./ops deploy status
+    logs: ./ops logs frontend --since 1h
+    environment_inspect: ./ops env vercel
+    authentication: Vercel CLI login and ignored shared-root .vercel linkage
+    current_session_capable: true
+    mutation: inspect commands are read-only; vercel --prod is production-mutating
+    production: verified-ready-deployment-exists
+    preview: available-through-Vercel
+    staging: no-separate-named-environment-discovered
+    trigger: could-not-determine-no-tracked-GitHub-deploy-job-and-live-deployment-had-no-Git-metadata
+  render:
+    status: not-an-Atlas-deployment
+    provider: Render
+    authentication: CLI authenticated in the current session
+    current_session_capable: true
+    safe_verify: render services --output json
+    note: other workspace services exist, but no Atlas Brain service was identified
+  runbook: .agent/runbooks/deployment.md
+
+database:
+  status: verified
+  engine: PostgreSQL 16
+  provider: native local system service
+  host: 127.0.0.1
+  port: 5433
+  database: atlas
+  role: atlas
+  authentication: local PostgreSQL rules or ATLAS_DB_* environment variables
+  current_session_capable: true
+  access: ./ops db status
+  configuration_selection: explicit ATLAS_OPS_ENV_FILES context, else worktree .env/.env.local, else shared-root .env/.env.local, else systemd EnvironmentFiles; exported process values win last
+  safe_inspection: ./ops db inspect connectivity
+  arbitrary_query: unavailable-until-a-privilege-restricted-inspection-role-exists
+  migration_status: ./ops db migrations
+  migrations:
+    provider: custom SQL runner
+    path: atlas_brain/storage/migrations
+    invocation: automatic during full application startup
+    warning: the full chain is not fresh-database applicable because later migrations depend on out-of-band product_metadata
+  mutation: fixed inspections are read-only; app startup and integration tests can mutate
+  likely_failures:
+    - assuming root Docker Compose provides PostgreSQL
+    - using Alembic even though Atlas uses its custom SQL runner
+    - treating app startup as a read-only health check
+    - using the live atlas database for integration tests
+    - merging inventory-only examples or an unrelated shared/systemd context into a deliberately provisioned worktree context
+    - assuming a READ ONLY transaction makes arbitrary SELECT functions non-mutating
+  runbook: .agent/runbooks/database.md
+
+logs:
+  brain:
+    status: verified
+    provider: journald
+    inspect: ./ops logs brain
+    authentication: local user journal access
+    current_session_capable: true
+    mutation: read-only
+  containers:
+    status: verified
+    provider: Docker
+    inspect: ./ops logs container <container-name>
+    authentication: Docker daemon access
+    current_session_capable: true
+    mutation: read-only
+  frontend:
+    status: verified
+    provider: Vercel runtime logs
+    inspect: ./ops logs frontend --since 1h
+    authentication: Vercel CLI login
+    current_session_capable: true
+    mutation: read-only
+    note: a static deployment can legitimately return no runtime log records
+  runbook: .agent/runbooks/logs.md
+
+environment:
+  status: verified
+  local_sources:
+    - worktree .env and .env.local when deliberately provisioned
+    - shared-root .env, .env.local, and .env.tailscale
+    - systemd EnvironmentFiles for atlas-api.service
+    - tracked subsystem .env.example files
+  inspect_keys_only: ./ops env keys
+  inspect_systemd_sources: ./ops env systemd
+  inspect_vercel_names: ./ops env vercel
+  authentication: filesystem permissions, systemd user bus, or Vercel login
+  mutation: read-only
+  warning: no root .env.example exists; never print, commit, or copy live values into a worktree
+  runbook: .agent/runbooks/environment.md
+
+containers:
+  status: verified
+  provider: Docker Engine with docker compose plugin
+  current_session_capable: true
+  inspect: ./ops status
+  safe_verify: docker info
+  compose_files:
+    root: docker-compose.yml
+    graph: docker-compose.graphiti.yml
+    home_assistant:
+      - docker-compose.ha.yml
+      - docker-compose.homeassistant.yml
+    cameras: docker-compose.wyze.yml
+  warning: root Compose has no postgres service and even status parsing requires ATLAS_NOCODB_DB_PASSWORD
+  likely_failures:
+    - Docker CLI installed but daemon stopped, unreachable, or denied
+    - a known container genuinely absent after daemon access succeeds
+
+external_services:
+  required_or_active:
+    - PostgreSQL
+    - GitHub Actions
+    - Vercel for atlas-churn-ui
+    - Neo4j and Graphiti for graph memory
+    - NocoDB for the optional CRM admin UI
+  configured_or_optional:
+    - Ollama and vLLM
+    - Anthropic, OpenRouter, Groq, and Together AI
+    - Google Gmail and Calendar
+    - Stripe
+    - Resend and Amazon SES
+    - SignalWire and Twilio
+    - Home Assistant and MQTT
+    - Zendesk, Firecrawl, Apollo, and ntfy
+  rule: provider availability must be verified per operation; a config class or secret name is not proof of a live integration
+
+tools:
+  verified_at: "2026-08-24"
+  canonical:
+    git: available
+    gh: authenticated
+    python_project_venv: "3.12.3"
+    node: "26.7.0"
+    npm: "11.19.0"
+    docker: "29.7.2 daemon reachable"
+    docker_compose_plugin: available
+    psql: "16.15"
+    vercel: "50.26.1 authenticated"
+    render: "2.15.0 authenticated but not used for Atlas deployment"
+    systemctl: available
+    journalctl: available
+  available_not_canonical:
+    - uv
+    - pnpm
+    - yarn
+    - alembic
+  unavailable:
+    - docker-compose legacy binary
+    - flyctl
+    - railway
+    - gcloud
+    - aws
+    - az
+    - terraform
+    - kubectl
+  degraded:
+    ollama: CLI available but local server was unreachable
+
+repository_operations:
+  status: verified
+  provider: git and GitHub CLI
+  inspect: git status --short --branch
+  pr_status: gh pr list --state open
+  safe_verify: gh auth status
+  authentication: GitHub CLI keyring login
+  mutation: commits, pushes, comments, reviews, PR edits, and merges mutate state
+  required_process:
+    - AGENTS.md
+    - docs/SESSION_BOOTSTRAP.md
+    - session-scoped SESSION_STATE.*.local.md
+    - scripts/push_pr.sh
+    - scripts/open_pr.sh

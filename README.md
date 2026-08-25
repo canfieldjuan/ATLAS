@@ -419,22 +419,34 @@ Dual-layer memory system:
 git clone https://github.com/canfieldjuan/ATLAS.git
 cd ATLAS
 
+# Inspect this machine, current services, provider auth, and safe next commands.
+./ops doctor
+
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-cp .env.example .env   # Configure credentials
+# There is no root .env.example. Inspect names and follow the environment runbook.
+./ops env keys
 
 ollama pull qwen3:14b
-docker compose up -d postgres
+
+# Atlas expects native PostgreSQL on port 5433; Compose does not provide it.
+./ops db status
 
 # Dev server with hot reload
+# Warning: full app startup runs migration checks and configured background work.
 uvicorn atlas_brain.main:app \
   --host 0.0.0.0 --port 8001 \
   --reload --reload-dir atlas_brain \
   --reload-exclude 'data/postgres/**' \
   --ws-ping-interval 60 --ws-ping-timeout 120
 ```
+
+Read `.agent/runbooks/environment.md` and `.agent/runbooks/database.md` before
+loading configuration or starting the full app. The live production-shaped
+Brain uses `atlas-api.service`; inspect it with `./ops deploy status` rather
+than assuming Docker or a cloud provider owns it.
 
 ### ASR Server (for voice pipeline)
 
