@@ -42,6 +42,7 @@ exceeds the normal diff target.
 
 Ownership lane: eom-provider-liveness
 Slice phase: Production hardening
+Max files: 6
 
 1. Replace the untracked alert-only health-check logic with a canonical
    installed-outside-the-runtime monitor that auto-recovers only an unexpected
@@ -96,7 +97,7 @@ Slice phase: Production hardening
 ### Contract revision: current-head review findings
 
 - New evidence: the enabled user timer still executes the legacy
-  `~/.local/bin/atlas-api-healthcheck.sh`; neither the new Python monitor nor
+  atlas-api-healthcheck.sh; neither the new Python monitor nor
   its notification environment file is installed. The current template only
   names an `install` command, so the source change has no deployment path.
   Separately, the monitor persists `next_state` after an undelivered transition
@@ -155,6 +156,22 @@ The recovery decision is a system state boundary, not an open-input guard.
   to enable an alerting timer until it can preserve a private topic.
 - Side-effect ordering: decide maintenance before any start; issue a start only
   after inactive evidence; record success only after the post-start probe.
+
+### Guard-closure declaration
+
+- `TOPIC_RE` is a CLOSED, DERIVED topic grammar: membership is evaluated from
+  the bounded ASCII grammar at `scripts/install_atlas_api_healthcheck.py:27,83-87`,
+  rather than copied from an operator-maintained list. The installer accepts only
+  a normalized string in that grammar; a missing or nonmatching value fails
+  before it writes copies or enables systemd, which is safer than directing an
+  alert to an unknown destination. The focused grammar-product test exercises
+  leading-token, body-family, length, and whitespace-wrapper boundaries against
+  an independent oracle.
+- `PENDING_ALERTS` is CLOSED and ENUMERATED by the three alert events that this
+  monitor can emit (`down`, `recovered`, and `auto-recovered`). An unrecognized
+  persisted notification record is not replayed; `pending_notification()`
+  discards it and the monitor recomputes the next state from the current
+  observation, so arbitrary stored values cannot choose a notification path.
 
 ### Files touched
 
@@ -219,8 +236,8 @@ Parked hardening: none.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 226 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 243 |
 | `scripts/atlas_api_healthcheck.py` | 345 |
 | `scripts/install_atlas_api_healthcheck.py` | 264 |
-| `tests/test_atlas_api_healthcheck.py` | 430 |
-| **Total** | **1293** |
+| `tests/test_atlas_api_healthcheck.py` | 473 |
+| **Total** | **1353** |

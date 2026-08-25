@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import importlib.util
+import itertools
 import json
 import os
+import string
 import subprocess
 import sys
 from pathlib import Path
@@ -127,6 +129,47 @@ def _install_paths(tmp_path: Path) -> installer.InstallPaths:
         config_dir=tmp_path / "config",
         legacy_monitor=bin_dir / installer.LEGACY_MONITOR_NAME,
     )
+
+
+def _topic_grammar_oracle(value: str) -> bool:
+    normalized = value.strip()
+    allowed_leading = set(string.ascii_letters + string.digits)
+    allowed_body = allowed_leading | {".", "_", "-"}
+    return bool(
+        1 <= len(normalized) <= 200
+        and normalized[0] in allowed_leading
+        and all(character in allowed_body for character in normalized)
+    )
+
+
+def _topic_leading_tokens() -> str:
+    return string.ascii_letters + string.digits + "._-/ \u00e9"
+
+
+def _topic_body_families() -> str:
+    return string.ascii_letters + string.digits + "._-/ \u00e9"
+
+
+def _topic_wrappers() -> tuple[str, ...]:
+    return "", " ", "\n"
+
+
+def test_notification_topic_grammar_class_closure():
+    """Check the bounded topic grammar across token, family, and wrapper axes."""
+    for leading_token, body_family, length, wrapper in itertools.product(
+        _topic_leading_tokens(),
+        _topic_body_families(),
+        (0, 1, 2, 200, 201),
+        _topic_wrappers(),
+    ):
+        base = "" if length == 0 else leading_token + body_family * (length - 1)
+        candidate = f"{wrapper}{base}{wrapper}"
+        expected = _topic_grammar_oracle(candidate)
+        if expected:
+            assert installer._validated_topic(candidate, source="grammar property") == candidate.strip()
+        else:
+            with pytest.raises(RuntimeError):
+                installer._validated_topic(candidate, source="grammar property")
 
 
 def test_inactive_service_is_started_and_reprobed(tmp_path):
