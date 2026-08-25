@@ -602,6 +602,36 @@ async def _provision_privilege_repair_roles(connection: Any) -> None:
 
 
 @asynccontextmanager
+async def _configured_unprivileged_runtime_probe_role(connection: Any, *, schema: str):
+    """Bind a disposable runtime login so migration 393 reaches its body checks."""
+
+    runtime_role = f"eom_mc_tamper_runtime_{uuid4().hex[:16]}"
+    runtime_role_ident = _quote_ident(runtime_role)
+    role_created = False
+    try:
+        database_name = await connection.fetchval("SELECT current_database()")
+        await connection.execute(f"CREATE ROLE {runtime_role_ident} LOGIN NOINHERIT")
+        role_created = True
+        await connection.execute(
+            f"GRANT CONNECT ON DATABASE {_quote_ident(database_name)} "
+            f"TO {runtime_role_ident}"
+        )
+        await connection.execute(
+            f"GRANT USAGE ON SCHEMA {_quote_ident(schema)} TO {runtime_role_ident}"
+        )
+        await connection.execute(
+            "SELECT pg_catalog.set_config("
+            "'atlas.eom_missed_call_recovery_runtime_role', $1, FALSE)",
+            runtime_role,
+        )
+        yield runtime_role
+    finally:
+        if role_created:
+            await connection.execute(f"DROP OWNED BY {runtime_role_ident}")
+            await connection.execute(f"DROP ROLE {runtime_role_ident}")
+
+
+@asynccontextmanager
 async def _test_store():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_missed_call_{uuid4().hex}"
@@ -1345,41 +1375,40 @@ async def test_privilege_repair_rejects_each_tampered_guard_body(
     async with _test_store() as (admin_pool, schema):
         connection = admin_pool._connection
         await _provision_privilege_repair_roles(connection)
-        await connection.execute(
-            "SELECT pg_catalog.set_config("
-            "'atlas.eom_missed_call_recovery_runtime_role', 'atlas', FALSE)"
-        )
-        await _tamper_guard_function(
-            connection,
-            schema=schema,
-            function_signature=function_signature,
-        )
-
-        with pytest.raises(
-            asyncpg.exceptions.RaiseError,
-            match="trusted migration-389 body",
+        async with _configured_unprivileged_runtime_probe_role(
+            connection, schema=schema
         ):
-            await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+            await _tamper_guard_function(
+                connection,
+                schema=schema,
+                function_signature=function_signature,
+            )
 
-        qualified_signature = f"{_quote_ident(schema)}.{function_signature}"
-        assert not await connection.fetchval(
-            """
-            SELECT procedure.prosecdef
-            FROM pg_catalog.pg_proc AS procedure
-            WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
-            """,
-            qualified_signature,
-        )
-        assert await connection.fetchval(
-            """
-            SELECT owner_role.rolname <> 'atlas_eom_handoff_owner'
-            FROM pg_catalog.pg_proc AS procedure
-            JOIN pg_catalog.pg_roles AS owner_role
-              ON owner_role.oid = procedure.proowner
-            WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
-            """,
-            qualified_signature,
-        )
+            with pytest.raises(
+                asyncpg.exceptions.RaiseError,
+                match="trusted migration-389 body",
+            ):
+                await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+
+            qualified_signature = f"{_quote_ident(schema)}.{function_signature}"
+            assert not await connection.fetchval(
+                """
+                SELECT procedure.prosecdef
+                FROM pg_catalog.pg_proc AS procedure
+                WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
+                """,
+                qualified_signature,
+            )
+            assert await connection.fetchval(
+                """
+                SELECT owner_role.rolname <> 'atlas_eom_handoff_owner'
+                FROM pg_catalog.pg_proc AS procedure
+                JOIN pg_catalog.pg_roles AS owner_role
+                  ON owner_role.oid = procedure.proowner
+                WHERE procedure.oid = pg_catalog.to_regprocedure($1::text)
+                """,
+                qualified_signature,
+            )
 
 
 @pytest.mark.asyncio
@@ -1395,38 +1424,38 @@ async def test_privilege_repair_rejects_each_tampered_append_only_fence_body(
     async with _test_store() as (admin_pool, schema):
         connection = admin_pool._connection
         await _provision_privilege_repair_roles(connection)
-        await connection.execute(
-            "SELECT pg_catalog.set_config("
-            "'atlas.eom_missed_call_recovery_runtime_role', 'atlas', FALSE)"
-        )
-        await _tamper_append_only_fence_function(
-            connection,
-            schema=schema,
-            function_signature=function_signature,
-        )
-
-        with pytest.raises(
-            asyncpg.exceptions.RaiseError,
-            match="append-only fence function .*trusted migration-389 body",
-        ):
-            await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
-
-        protected_table_name = (
-            "eom_missed_call_operation_receipts"
-            if "operation_receipt" in function_signature
-            else "eom_missed_call_attempts"
-        )
-        assert not await connection.fetchval(
-            """
-            SELECT has_table_privilege(
-                'atlas',
-                to_regclass(format('%I.%I', $1::text, $2::text)),
-                'UPDATE'
+        async with _configured_unprivileged_runtime_probe_role(
+            connection, schema=schema
+        ) as runtime_probe_role:
+            await _tamper_append_only_fence_function(
+                connection,
+                schema=schema,
+                function_signature=function_signature,
             )
-            """,
-            schema,
-            protected_table_name,
-        )
+
+            with pytest.raises(
+                asyncpg.exceptions.RaiseError,
+                match="append-only fence function .*trusted migration-389 body",
+            ):
+                await connection.execute(_PRIVILEGE_REPAIR_MIGRATION.read_text())
+
+            protected_table_name = (
+                "eom_missed_call_operation_receipts"
+                if "operation_receipt" in function_signature
+                else "eom_missed_call_attempts"
+            )
+            assert not await connection.fetchval(
+                """
+                SELECT has_table_privilege(
+                    $1::text,
+                    to_regclass(format('%I.%I', $2::text, $3::text)),
+                    'UPDATE'
+                )
+                """,
+                runtime_probe_role,
+                schema,
+                protected_table_name,
+            )
 
 
 @pytest.mark.asyncio

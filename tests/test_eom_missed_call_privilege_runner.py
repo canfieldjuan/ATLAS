@@ -56,6 +56,19 @@ class _Connection:
             return args[0] in self._state.recorded_migrations
         raise AssertionError(f"unexpected query: {query}")
 
+    async def fetchrow(self, query: str, *args: object) -> dict[str, bool]:
+        assert "atlas:eom-missed-call-recovery-role-admission" in query
+        assert args == ("atlas_funnel",)
+        self._state.role_admission_calls = getattr(
+            self._state, "role_admission_calls", []
+        )
+        self._state.role_admission_calls.append(args)
+        return {
+            "guard_role_ready": getattr(self._state, "guard_role_ready", True),
+            "runtime_role_ready": getattr(self._state, "runtime_role_ready", True),
+            "nocodb_role_ready": getattr(self._state, "nocodb_role_ready", True),
+        }
+
     async def execute(self, query: str, *args: object) -> None:
         self._state.executed = getattr(self._state, "executed", [])
         self._state.executed.append((query, args))
@@ -390,6 +403,48 @@ def test_privilege_runner_provisions_pgcrypto_before_historical_preludes(
         "migration",
         runner.HISTORICAL_PRELUDE_MIGRATION_NAMES,
     )
+    assert state.role_admission_calls == [("atlas_funnel",)]
+
+
+@pytest.mark.parametrize(
+    "invalid_admission",
+    ("guard_role_ready", "runtime_role_ready", "nocodb_role_ready"),
+)
+def test_privilege_runner_rejects_invalid_role_admission_before_pgcrypto(
+    monkeypatch,
+    invalid_admission: str,
+) -> None:
+    runner = _load_runner_module()
+    monkeypatch.setenv("TEST_EOM_DBA_DSN", "postgresql://example.test/atlas")
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        recorded_migrations={runner.PREREQUISITE_MIGRATION_NAME},
+    )
+    setattr(state, invalid_admission, False)
+    pool = _Pool(state)
+    calls: list[tuple[str, ...]] = []
+
+    async def create_pool(_database_url: str) -> _Pool:
+        return pool
+
+    async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
+        calls.append(only)
+
+    args = runner._parse_args(["--database-url-env", "TEST_EOM_DBA_DSN", "--apply"])
+    with pytest.raises(RuntimeError, match="role admission failed"):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+            )
+        )
+
+    assert state.role_admission_calls == [("atlas_funnel",)]
+    assert getattr(state, "executed", []) == []
+    assert calls == []
+    assert pool.closed is True
 
 
 def test_privilege_runner_continues_after_committed_historical_progress_stop(

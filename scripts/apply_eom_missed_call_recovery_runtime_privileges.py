@@ -148,6 +148,94 @@ async def _ensure_pgcrypto(pool: Any) -> None:
         await connection.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto")
 
 
+async def _require_role_admission_before_mutation(pool: Any, runtime_role: str) -> None:
+    """Fail closed before extension or prelude writes on an invalid role boundary.
+
+    Migration 393 repeats these admissions authoritatively inside its own
+    transaction. The runner needs the same read-only boundary before it creates
+    ``pgcrypto`` for a historical prelude that runs before 393.
+    """
+
+    async with pool.acquire() as connection:
+        admissions = await connection.fetchrow(
+            """
+            -- atlas:eom-missed-call-recovery-role-admission
+            SELECT
+                EXISTS (
+                    SELECT 1
+                      FROM pg_catalog.pg_roles AS guard_role
+                     WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+                       AND NOT guard_role.rolcanlogin
+                       AND NOT guard_role.rolinherit
+                       AND NOT guard_role.rolsuper
+                       AND NOT guard_role.rolcreaterole
+                       AND NOT guard_role.rolcreatedb
+                       AND NOT guard_role.rolreplication
+                       AND NOT guard_role.rolbypassrls
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_roles AS member_role
+                            WHERE member_role.rolcanlogin
+                              AND NOT member_role.rolsuper
+                              AND pg_catalog.pg_has_role(
+                                  member_role.oid, guard_role.oid, 'MEMBER'
+                              )
+                       )
+                ) AS guard_role_ready,
+                EXISTS (
+                    SELECT 1
+                      FROM pg_catalog.pg_roles AS runtime_role_state
+                     WHERE runtime_role_state.rolname = $1
+                       AND runtime_role_state.rolcanlogin
+                       AND runtime_role_state.rolname <> 'atlas_nocodb'
+                       AND NOT runtime_role_state.rolsuper
+                       AND NOT runtime_role_state.rolcreaterole
+                       AND NOT runtime_role_state.rolcreatedb
+                       AND NOT runtime_role_state.rolreplication
+                       AND NOT runtime_role_state.rolbypassrls
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_auth_members AS membership
+                             JOIN pg_catalog.pg_roles AS guard_role
+                               ON guard_role.oid = membership.roleid
+                            WHERE membership.member = runtime_role_state.oid
+                              AND guard_role.rolname = 'atlas_eom_handoff_owner'
+                       )
+                ) AS runtime_role_ready,
+                EXISTS (
+                    SELECT 1
+                      FROM pg_catalog.pg_roles AS nocodb_role
+                     WHERE nocodb_role.rolname = 'atlas_nocodb'
+                       AND nocodb_role.rolcanlogin
+                       AND NOT nocodb_role.rolsuper
+                       AND NOT nocodb_role.rolcreaterole
+                       AND NOT nocodb_role.rolcreatedb
+                       AND NOT nocodb_role.rolreplication
+                       AND NOT nocodb_role.rolbypassrls
+                       AND NOT nocodb_role.rolinherit
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM pg_catalog.pg_auth_members AS membership
+                            WHERE membership.member = nocodb_role.oid
+                       )
+                ) AS nocodb_role_ready
+            """,
+            runtime_role,
+        )
+    if admissions is None or not all(
+        bool(admissions[name])
+        for name in (
+            "guard_role_ready",
+            "runtime_role_ready",
+            "nocodb_role_ready",
+        )
+    ):
+        raise RuntimeError(
+            "Guard/runtime/NocoDB role admission failed; refusing to create "
+            "pgcrypto or run historical recovery"
+        )
+
+
 async def _migration_state(
     pool: Any,
 ) -> tuple[bool, bool, bool, bool, dict[str, bool]]:
@@ -291,6 +379,7 @@ async def _run(
                 "refusing to run the privilege repair"
             )
         if args.apply and migrations_table_exists and not migration_recorded:
+            await _require_role_admission_before_mutation(pool, runtime_role)
             await _ensure_pgcrypto(pool)
             await _apply_required_historical_prelude(
                 pool,

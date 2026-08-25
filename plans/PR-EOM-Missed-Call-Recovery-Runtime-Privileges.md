@@ -160,6 +160,33 @@ Max files: 10
   `eom-lead-pipeline` exercise the real PostgreSQL extension provisioning,
   bridge/fence tamper rejection, and controlled-runner test enrollment.
 
+### Follow-up repair contract (current review round)
+
+- Root cause: the controlled runner checks only that its executor is a
+  superuser before calling `_ensure_pgcrypto()`. The authoritative role
+  admissions live later in migration 393, so an invalid guard, runtime, or
+  NocoDB role can cause a permanent extension write before the migration
+  rejects. Separately, the body-tamper tests configure `atlas` as the runtime
+  role even though the disposable CI service makes `atlas` a PostgreSQL
+  superuser; migration 393 therefore stops at role admission before either
+  trusted-body assertion is exercised.
+- Correct fix must touch/change: add a read-only runner preflight that mirrors
+  migration 393's guard/runtime/NocoDB role admissions before `pgcrypto` or an
+  authorized historical prelude can run, with unit proof for each rejected
+  admission and the valid ordering. Change only the disposable tamper-test
+  setup to bind a unique `LOGIN NOINHERIT` probe role and clean it up, so each
+  case reaches its expected bridge/fence body rejection.
+- Must not change: migration 393 remains the authoritative, in-transaction
+  role-enforcement point; do not change its SQL, the PostgreSQL CI service's
+  `atlas` superuser identity, role memberships, normal startup migration tuple,
+  historical selector, runtime connection configuration, routes, providers,
+  delivery behavior, billing, or production state.
+- Acceptance criteria: an invalid guard, runtime, or NocoDB admission rejects
+  before extension creation and before any migration runner call; the valid
+  path still establishes `pgcrypto` before an allowed historical prelude; and
+  every bridge/fence tamper case fails for its trusted-body message rather than
+  for a superuser-runtime admission failure.
+
 ### Review Contract
 
 - Acceptance criteria:
@@ -393,12 +420,12 @@ Parked hardening: none.
 | `atlas_brain/services/eom_missed_call_recovery.py` | 253 |
 | `atlas_brain/storage/migrations/393_eom_missed_call_recovery_runtime_privileges.sql` | 753 |
 | `docs/EOM_MISSED_CALL_RECOVERY_RUNBOOK.md` | 76 |
-| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 409 |
-| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 356 |
-| `tests/test_eom_missed_call_privilege_runner.py` | 492 |
-| `tests/test_eom_missed_call_recovery.py` | 1187 |
+| `plans/PR-EOM-Missed-Call-Recovery-Runtime-Privileges.md` | 436 |
+| `scripts/apply_eom_missed_call_recovery_runtime_privileges.py` | 445 |
+| `tests/test_eom_missed_call_privilege_runner.py` | 547 |
+| `tests/test_eom_missed_call_recovery.py` | 1216 |
 | `tests/test_eom_render_profile.py` | 7 |
-| **Total** | **3551** |
+| **Total** | **3751** |
 
 ## Diff size rationale
 
