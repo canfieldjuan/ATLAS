@@ -1211,25 +1211,29 @@ def test_installer_requires_private_topic_before_writing_or_enabling(tmp_path):
         installer.install(paths, runner=runner, environment={})
 
     assert not paths.installed_monitor.exists()
-    assert runner.commands == [
-        (
-            "systemctl",
-            "--user",
-            "show",
-            "--property=LoadState",
-            "--property=ActiveState",
-            installer.TIMER_NAME,
-        ),
-        (
-            "systemctl",
-            "--user",
-            "show",
-            "--property=UnitFileState",
-            "--value",
-            installer.TIMER_NAME,
-        ),
-        ("systemctl", "--user", "daemon-reload"),
-    ]
+    assert runner.commands == []
+
+
+@pytest.mark.parametrize("configuration_source", ["notification", "legacy"])
+def test_installer_rejects_malformed_utf8_before_systemd_or_mutation(
+    tmp_path, configuration_source
+):
+    paths = _install_paths(tmp_path)
+    target = (
+        paths.notification_env
+        if configuration_source == "notification"
+        else paths.legacy_monitor
+    )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"\xff\xfe")
+    runner = _InstallerRunner(timer_active=True)
+
+    with pytest.raises(RuntimeError, match="UnicodeDecodeError"):
+        installer.install(paths, runner=runner, environment={})
+
+    assert runner.commands == []
+    assert runner.timer_active
+    assert target.read_bytes() == b"\xff\xfe"
 
 
 def test_clean_install_allows_an_absent_old_health_service(tmp_path):
@@ -1340,6 +1344,31 @@ def test_install_check_rejects_stale_loaded_unit_definitions(tmp_path):
     assert f"systemd requires daemon-reload for {installer.SERVICE_NAME}" in messages
 
 
+@pytest.mark.parametrize("link_kind", ["symlink", "hardlink"])
+def test_install_check_rejects_monitor_alias_to_checkout_source(tmp_path, link_kind):
+    paths = _install_paths(tmp_path)
+    installer.install(
+        paths,
+        runner=_InstallerRunner(
+            timer_load_state="not-found", health_service_load_state="not-found"
+        ),
+        environment={installer.TOPIC_ENV: "test-private-topic"},
+    )
+    source = REPO_ROOT / "scripts" / "atlas_api_healthcheck.py"
+    paths.installed_monitor.unlink()
+    if link_kind == "symlink":
+        paths.installed_monitor.symlink_to(source)
+    else:
+        os.link(source, paths.installed_monitor)
+
+    ok, messages = installer.check_install(
+        paths, runner=_InstallerRunner(timer_enabled=True, timer_active=True)
+    )
+
+    assert not ok
+    assert f"not an independent regular-file copy: {paths.installed_monitor}" in messages
+
+
 def test_installer_quiesces_old_service_before_replacing_files(tmp_path, monkeypatch):
     paths = _install_paths(tmp_path)
     events: list[tuple[str, ...]] = []
@@ -1381,7 +1410,8 @@ def test_installer_quiesces_old_service_before_replacing_files(tmp_path, monkeyp
 
 
 def test_topic_file_is_private_before_atomic_publish(tmp_path, monkeypatch):
-    destination = tmp_path / "config" / "atlas-api-healthcheck.env"
+    paths = _install_paths(tmp_path)
+    destination = paths.notification_env
     observed_modes: list[int] = []
     real_replace = installer.os.replace
 
@@ -1392,7 +1422,10 @@ def test_topic_file_is_private_before_atomic_publish(tmp_path, monkeypatch):
 
     monkeypatch.setattr(installer.os, "replace", inspect_replace)
 
-    installer._append_topic(destination, "test-private-topic")
+    plan = installer._notification_topic_plan(
+        paths, {installer.TOPIC_ENV: "test-private-topic"}
+    )
+    installer.ensure_notification_topic(paths, plan)
 
     assert observed_modes == [0o600]
     assert destination.stat().st_mode & 0o777 == 0o600
@@ -1543,7 +1576,9 @@ def test_installer_preserves_private_notification_symlink_without_chmod(
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
 
-def test_failed_install_restores_missing_topic_symlink_without_changing_target(tmp_path):
+def test_installer_rejects_private_missing_topic_symlink_before_systemd_or_mutation(
+    tmp_path,
+):
     paths = _install_paths(tmp_path)
     paths.config_dir.mkdir(parents=True, exist_ok=True)
     target = paths.config_dir / "managed-healthcheck.env"
@@ -1551,11 +1586,9 @@ def test_failed_install_restores_missing_topic_symlink_without_changing_target(t
     target.write_text(original_payload, encoding="utf-8")
     target.chmod(0o600)
     paths.notification_env.symlink_to(target.name)
-    runner = _InstallerRunner(
-        failing_command=("systemctl", "--user", "start", "--wait", installer.SERVICE_NAME)
-    )
+    runner = _InstallerRunner(timer_active=True)
 
-    with pytest.raises(RuntimeError, match="initial installed-monitor invocation failed"):
+    with pytest.raises(RuntimeError, match="symlink must already contain"):
         installer.install(
             paths,
             runner=runner,
@@ -1566,6 +1599,7 @@ def test_failed_install_restores_missing_topic_symlink_without_changing_target(t
     assert os.readlink(paths.notification_env) == target.name
     assert target.read_text(encoding="utf-8") == original_payload
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert runner.commands == []
 
 
 def test_installer_rolls_back_before_reraising_operator_cancellation(tmp_path):

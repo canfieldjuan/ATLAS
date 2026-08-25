@@ -68,6 +68,13 @@ class TimerState:
         return self.enablement in {"enabled", "enabled-runtime"}
 
 
+@dataclass(frozen=True)
+class NotificationTopicPlan:
+    payload: bytes | None
+    chmod_existing: bool
+    message: str
+
+
 Runner = Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
 
 
@@ -108,17 +115,21 @@ def _validated_topic(value: str, *, source: str) -> str:
     return topic
 
 
-def _topic_from_env_file(path: Path) -> str | None:
+def _read_optional_utf8(path: Path, *, label: str) -> str:
     if not path.exists():
-        return None
+        return ""
     try:
-        values = [
-            line.partition("=")[2]
-            for line in path.read_text(encoding="utf-8").splitlines()
-            if line.partition("=")[0] == TOPIC_ENV
-        ]
-    except OSError as exc:
-        raise RuntimeError(f"cannot read notification environment file: {exc}") from exc
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"cannot read {label}: {type(exc).__name__}") from exc
+
+
+def _topic_from_env_text(text: str) -> str | None:
+    values = [
+        line.partition("=")[2]
+        for line in text.splitlines()
+        if line.partition("=")[0] == TOPIC_ENV
+    ]
     if not values:
         return None
     if len(values) != 1:
@@ -126,14 +137,17 @@ def _topic_from_env_file(path: Path) -> str | None:
     return _validated_topic(values[0], source="notification environment file")
 
 
+def _topic_from_env_file(path: Path) -> str | None:
+    return _topic_from_env_text(
+        _read_optional_utf8(path, label="notification environment file")
+    )
+
+
 def _topic_from_legacy_monitor(path: Path) -> str | None:
     if not path.is_file():
         return None
-    try:
-        lines = path.read_text(encoding="utf-8").splitlines()
-    except OSError as exc:
-        raise RuntimeError(f"cannot read legacy monitor for topic migration: {exc}") from exc
-    for line in lines:
+    text = _read_optional_utf8(path, label="legacy monitor for topic migration")
+    for line in text.splitlines():
         match = LEGACY_TOPIC_RE.fullmatch(line.strip())
         if match:
             return match.group("topic")
@@ -152,23 +166,28 @@ def _private_notification_symlink(path: Path) -> bool:
     return True
 
 
-def _append_topic(path: Path, topic: str) -> None:
-    try:
-        existing = path.read_text(encoding="utf-8") if path.exists() else ""
-    except OSError as exc:
-        raise RuntimeError(f"cannot read notification environment file: {exc}") from exc
+def _topic_payload(existing: str, topic: str) -> bytes:
     separator = "" if not existing or existing.endswith("\n") else "\n"
-    payload = f"{existing}{separator}{TOPIC_ENV}={topic}\n".encode("utf-8")
-    _atomic_write(path, payload, mode=0o600)
+    return f"{existing}{separator}{TOPIC_ENV}={topic}\n".encode("utf-8")
 
 
-def ensure_notification_topic(paths: InstallPaths, environment: Mapping[str, str]) -> str:
+def _notification_topic_plan(
+    paths: InstallPaths, environment: Mapping[str, str]
+) -> NotificationTopicPlan:
     private_symlink = _private_notification_symlink(paths.notification_env)
-    existing = _topic_from_env_file(paths.notification_env)
-    if existing is not None:
-        if not private_symlink:
-            paths.notification_env.chmod(0o600)
-        return "preserved private notification topic"
+    existing_text = _read_optional_utf8(
+        paths.notification_env, label="notification environment file"
+    )
+    if _topic_from_env_text(existing_text) is not None:
+        return NotificationTopicPlan(
+            payload=None,
+            chmod_existing=not private_symlink,
+            message="preserved private notification topic",
+        )
+    if private_symlink:
+        raise RuntimeError(
+            f"notification environment symlink must already contain {TOPIC_ENV}"
+        )
 
     candidate = environment.get(TOPIC_ENV, "")
     source = "environment"
@@ -179,8 +198,25 @@ def ensure_notification_topic(paths: InstallPaths, environment: Mapping[str, str
         raise RuntimeError(
             f"{TOPIC_ENV} is not configured; set it or retain a parseable legacy monitor before installation"
         )
-    _append_topic(paths.notification_env, _validated_topic(candidate, source=source))
-    return "migrated private notification topic" if source == "legacy monitor" else "wrote private notification topic"
+    topic = _validated_topic(candidate, source=source)
+    message = (
+        "migrated private notification topic"
+        if source == "legacy monitor"
+        else "wrote private notification topic"
+    )
+    return NotificationTopicPlan(
+        payload=_topic_payload(existing_text, topic),
+        chmod_existing=False,
+        message=message,
+    )
+
+
+def ensure_notification_topic(paths: InstallPaths, plan: NotificationTopicPlan) -> str:
+    if plan.payload is not None:
+        _atomic_write(paths.notification_env, plan.payload, mode=0o600)
+    elif plan.chmod_existing:
+        paths.notification_env.chmod(0o600)
+    return plan.message
 
 
 def _atomic_write(destination: Path, payload: bytes, *, mode: int) -> None:
@@ -408,7 +444,7 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
     sources = _source_files(paths)
     destinations = [destination for _source, destination, _executable in sources]
     snapshots = [_snapshot_file(path) for path in (*destinations, paths.notification_env)]
-    _private_notification_symlink(paths.notification_env)
+    topic_plan = _notification_topic_plan(paths, environment)
     previous_timer = _timer_state(runner)
     enrollment_attempted = False
     try:
@@ -418,7 +454,7 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
                 ("systemctl", "--user", "stop", TIMER_NAME),
                 action="existing timer stop",
             )
-        topic_message = ensure_notification_topic(paths, environment)
+        topic_message = ensure_notification_topic(paths, topic_plan)
         messages = [topic_message]
         if _existing_health_service_is_loaded(runner):
             _run_required(
@@ -468,9 +504,13 @@ def install(paths: InstallPaths, *, runner: Runner = _run, environment: Mapping[
 
 
 def _matches(source: Path, destination: Path, *, executable: bool) -> tuple[bool, str]:
+    if destination.is_symlink():
+        return False, f"not an independent regular-file copy: {destination}"
     if not destination.is_file():
         return False, f"missing: {destination}"
     try:
+        if source.samefile(destination):
+            return False, f"not an independent regular-file copy: {destination}"
         matches = source.read_bytes() == destination.read_bytes()
     except OSError as exc:
         return False, f"unreadable {destination}: {exc}"

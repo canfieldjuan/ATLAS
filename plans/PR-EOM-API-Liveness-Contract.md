@@ -359,6 +359,34 @@ Notification delivery is at-least-once, not exactly-once.
   the existing 67 focused cases, syntax/systemd/maturity/plan/diff checks, and
   the managed full Unit Gate before push.
 
+### Contract revision: installer preflight and deployed-copy identity closure
+
+- New evidence: notification-file decoding and missing-topic resolution still
+  happen after the prior timer may be stopped; a private symlink without a topic
+  is accepted and then replaced by a regular file; and read-only verification
+  treats a symlink or hard link to the checkout source as an installed copy when
+  its bytes match.
+- Revised root cause: installer admission is split across pre-mutation and
+  post-mutation phases, and deployment proof compares content without proving
+  namespace/inode independence. These are one transaction-boundary defect:
+  shapes that cannot be safely mutated or independently deployed are admitted
+  too late or accepted as proof.
+- Revised required change surface: build and validate the complete notification
+  update plan before any systemd query or mutation; convert malformed UTF-8 into
+  a fail-closed installer error; require an accepted notification symlink to be
+  private and already contain its valid topic; apply a precomputed payload only
+  to a regular destination; and make `--check` reject symlink destinations and
+  same-inode aliases even when bytes and executable mode match.
+- Revised explicit non-scope: do not change monitor recovery logic, systemd
+  commands or unit templates, topic grammar/value, regular-file migration
+  semantics, notification delivery, funnel routes, schemas, dependencies, or
+  live deployment.
+- Revised verification plan: focused malformed-UTF-8 preflight tests for both
+  configuration sources, private missing-topic symlink rejection, private
+  existing-topic preservation, symlink/hard-link deployment-proof rejection,
+  the full focused file, syntax/systemd/maturity/plan/diff checks, and the single
+  managed full Unit Gate before push.
+
 ### Boundary-change enumeration
 
 The recovery decision is a system state boundary, not an open-input guard.
@@ -508,8 +536,8 @@ notification exit diagnostics, as listed above.
 |---|---:|
 | `config/atlas-api-healthcheck.service` | 18 |
 | `config/atlas-api-healthcheck.timer` | 10 |
-| `plans/PR-EOM-API-Liveness-Contract.md` | 515 |
+| `plans/PR-EOM-API-Liveness-Contract.md` | 543 |
 | `scripts/atlas_api_healthcheck.py` | 675 |
-| `scripts/install_atlas_api_healthcheck.py` | 539 |
-| `tests/test_atlas_api_healthcheck.py` | 1646 |
-| **Total** | **3403** |
+| `scripts/install_atlas_api_healthcheck.py` | 579 |
+| `tests/test_atlas_api_healthcheck.py` | 1680 |
+| **Total** | **3505** |
