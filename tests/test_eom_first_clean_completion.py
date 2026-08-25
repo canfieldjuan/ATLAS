@@ -61,6 +61,9 @@ _PREREQUISITE_HANDOFF_GUARD_FUNCTIONS = (
     "require_eom_customer_handoff_finalization",
     "prevent_eom_customer_handoff_mutation",
 )
+_PREREQUISITE_HANDOFF_ADMISSION_FUNCTIONS = (
+    "require_eom_customer_handoff_finalization",
+)
 _LIFECYCLE_GUARD_FUNCTION = "prevent_eom_lead_lifecycle_event_mutation"
 _LIFECYCLE_GUARD_TRIGGERS = (
     "trg_prevent_eom_lead_lifecycle_event_mutation",
@@ -791,6 +794,127 @@ async def test_dba_migration_uses_guard_ownership_and_minimal_runtime_acl() -> N
 
 
 @pytest.mark.asyncio
+async def test_runtime_and_dba_connections_share_advisory_lock_namespace() -> None:
+    """The controlled runner's live target proof holds across real connections."""
+
+    async with _test_store() as (pool, _schema):
+        runtime_connection = pool._runtime_connection
+        dba_connection = pool._connection
+        lock_key = uuid4().int & ((1 << 63) - 1)
+        async with runtime_connection.transaction():
+            assert await runtime_connection.fetchval(
+                "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                lock_key,
+            )
+            dba_acquired = bool(
+                await dba_connection.fetchval(
+                    "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                    lock_key,
+                )
+            )
+            assert dba_acquired is False
+
+
+@pytest.mark.asyncio
+async def test_handoff_finalization_trigger_rejects_runtime_temp_shadowing() -> None:
+    """Runtime TEMP relations cannot fabricate an approved customer handoff."""
+
+    async with _test_store() as (pool, schema):
+        contact_id, customer_id, site_id = await _insert_customer(
+            pool,
+            with_handoff=False,
+        )
+        assert customer_id is None and site_id is None
+        runtime_connection = pool._runtime_connection
+        approval_key = _operation_key("handoff-temp-shadow")
+        tracker_customer_id = next(_TRACKER_IDS)
+        tracker_site_id = next(_TRACKER_IDS)
+        await runtime_connection.execute(
+            """
+            CREATE TEMP TABLE contacts (
+                id UUID,
+                business_context_id TEXT,
+                contact_type TEXT,
+                lead_stage TEXT,
+                status TEXT
+            );
+            CREATE TEMP TABLE eom_lead_lifecycle_events (
+                contact_id UUID,
+                event_type VARCHAR(64),
+                source VARCHAR(32),
+                operation_key VARCHAR(128),
+                actor VARCHAR(128),
+                metadata JSONB
+            )
+            """
+        )
+        await runtime_connection.execute(
+            """
+            INSERT INTO contacts VALUES (
+                $1, 'effingham_maids', 'customer', NULL, 'active'
+            )
+            """,
+            contact_id,
+        )
+        await runtime_connection.execute(
+            """
+            INSERT INTO eom_lead_lifecycle_events VALUES (
+                $1, 'customer_approved', 'eom_office', $2, 'employee:7:Juan',
+                jsonb_build_object(
+                    'tracker_customer_id', $3::bigint,
+                    'tracker_site_id', $4::bigint,
+                    'approved_by_employee_id', 7::bigint
+                )
+            )
+            """,
+            contact_id,
+            approval_key,
+            tracker_customer_id,
+            tracker_site_id,
+        )
+        handoff_insert = """
+            INSERT INTO eom_customer_handoffs (
+                contact_id, approval_key, tracker_customer_id, tracker_site_id,
+                approved_by_employee_id, approved_by_name
+            ) VALUES ($1, $2, $3, $4, 7, 'Juan')
+        """
+        handoff_args = (
+            contact_id,
+            approval_key,
+            tracker_customer_id,
+            tracker_site_id,
+        )
+        function_ident = _quote_ident("require_eom_customer_handoff_finalization")
+        schema_ident = _quote_ident(schema)
+        try:
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match="matching customer transition and lifecycle evidence",
+            ):
+                await runtime_connection.execute(handoff_insert, *handoff_args)
+
+            # The negative control proves the test exercises relation lookup:
+            # a temp-first trigger path admits the deliberately fabricated
+            # lifecycle evidence, while the deployed catalog-first path does not.
+            await pool._connection.execute(
+                f"ALTER FUNCTION {function_ident}() "
+                f"SET search_path TO pg_temp, {schema_ident}, pg_catalog"
+            )
+            assert await first_clean_completion_schema_ready(pool) is False
+            await runtime_connection.execute(handoff_insert, *handoff_args)
+            assert await pool.fetchval(
+                "SELECT COUNT(*) FROM eom_customer_handoffs WHERE contact_id = $1",
+                contact_id,
+            ) == 1
+        finally:
+            await pool._connection.execute(
+                f"ALTER FUNCTION {function_ident}() "
+                f"SET search_path TO pg_catalog, {schema_ident}, pg_temp"
+            )
+        assert await first_clean_completion_schema_ready(pool) is True
+
+
+@pytest.mark.asyncio
 async def test_receipt_trigger_rejects_temp_relation_shadowing() -> None:
     """Runtime TEMP objects cannot fabricate guarded handoff/lifecycle evidence."""
 
@@ -1109,7 +1233,10 @@ async def test_schema_readiness_reattests_receipt_guard_owners_and_paths() -> No
             assert await first_clean_completion_schema_ready(pool) is True
 
         schema_ident = _quote_ident(schema)
-        for function_name in _RECEIPT_ADMISSION_FUNCTIONS:
+        for function_name in (
+            *_PREREQUISITE_HANDOFF_ADMISSION_FUNCTIONS,
+            *_RECEIPT_ADMISSION_FUNCTIONS,
+        ):
             function_ident = _quote_ident(function_name)
             try:
                 await pool._connection.execute(

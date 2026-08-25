@@ -14,6 +14,7 @@ import argparse
 import asyncio
 from dataclasses import dataclass
 import json
+import secrets
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 import sys
@@ -47,18 +48,14 @@ class _TargetIdentity:
     schema_name: str
     database_name: str
     database_oid: int
-    server_address: str | None
-    server_port: int | None
 
     @property
-    def database_identity(self) -> tuple[str, int, str | None, int | None]:
+    def database_identity(self) -> tuple[str, int]:
         """Return only fields that must match across runtime and DBA pools."""
 
         return (
             self.database_name,
             self.database_oid,
-            self.server_address,
-            self.server_port,
         )
 
 
@@ -150,29 +147,8 @@ def _require_database_oid(value: object, *, source: str) -> int:
     return value
 
 
-def _require_server_endpoint(
-    address: object,
-    port: object,
-    *,
-    source: str,
-) -> tuple[str | None, int | None]:
-    """Preserve Unix-socket targets, but reject malformed network endpoints."""
-
-    if address is None and port is None:
-        return None, None
-    if (
-        not isinstance(address, str)
-        or not address.strip()
-        or isinstance(port, bool)
-        or not isinstance(port, int)
-        or not 1 <= port <= 65535
-    ):
-        raise RuntimeError(f"Missing or invalid database identity from {source}")
-    return address, port
-
-
 async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
-    """Read the current schema and stable database/server identity without DDL."""
+    """Read the current schema and database identity without DDL."""
 
     async with pool.acquire() as connection:
         row = await connection.fetchrow(
@@ -183,9 +159,7 @@ async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
                        SELECT oid
                          FROM pg_catalog.pg_database
                         WHERE datname = pg_catalog.current_database()
-                   ) AS database_oid,
-                   pg_catalog.inet_server_addr()::text AS server_address,
-                   pg_catalog.inet_server_port() AS server_port
+                   ) AS database_oid
             """
         )
     if row is None:
@@ -196,17 +170,54 @@ async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
     )
     database_name = _require_database_name(row["database_name"], source=source)
     database_oid = _require_database_oid(row["database_oid"], source=source)
-    server_address, server_port = _require_server_endpoint(
-        row["server_address"],
-        row["server_port"],
-        source=source,
-    )
     return _TargetIdentity(
         schema_name=schema_name,
         database_name=database_name,
         database_oid=database_oid,
-        server_address=server_address,
-        server_port=server_port,
+    )
+
+
+async def _attest_shared_database_lock(runtime_pool: Any, dba_pool: Any) -> None:
+    """Require both pools to contend on one unpredictable advisory lock.
+
+    A database name and OID identify a database inside one cluster but can be
+    duplicated in a clone. A transaction-scoped advisory lock is held in the
+    shared memory of exactly one live PostgreSQL cluster, so a DBA connection
+    can only see the runtime connection's randomly selected key as busy when
+    both pools reach that same database. Holding the explicit transaction keeps
+    the proof valid through a transaction-pooling proxy and releases the key
+    automatically before this preflight returns or raises.
+    """
+
+    for _attempt in range(3):
+        lock_key = secrets.randbits(63)
+        async with runtime_pool.acquire() as runtime_connection:
+            async with runtime_connection.transaction():
+                runtime_acquired = bool(
+                    await runtime_connection.fetchval(
+                        "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                        lock_key,
+                    )
+                )
+                if not runtime_acquired:
+                    # An unrelated process could have selected this key. Pick a
+                    # fresh one rather than treating that rare collision as proof.
+                    continue
+                async with dba_pool.acquire() as dba_connection:
+                    dba_acquired = bool(
+                        await dba_connection.fetchval(
+                            "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                            lock_key,
+                        )
+                    )
+                    if dba_acquired:
+                        raise RuntimeError(
+                            "Controlled DBA pool does not share the EOM "
+                            "funnel runtime database"
+                        )
+                return
+    raise RuntimeError(
+        "Could not reserve a fresh EOM funnel target-attestation lock"
     )
 
 
@@ -285,48 +296,49 @@ async def _run(
             runtime_pool,
             source="EOM funnel runtime",
         )
-    finally:
-        await runtime_pool.close()
-    if runtime_target.schema_name != schema_name:
-        raise RuntimeError(
-            "Configured controlled DBA schema does not match the EOM funnel "
-            "runtime schema"
-        )
-
-    pool = await create_pool(database_url, schema_name=schema_name)
-    try:
-        executor_is_superuser, migration_recorded = await _migration_state(
-            pool,
-            expected_target=runtime_target,
-        )
-        result: dict[str, object] = {
-            "target": _safe_target_label(database_url, schema_name=schema_name),
-            "executor_is_superuser": executor_is_superuser,
-            "migration": MIGRATION_NAME,
-            "migration_recorded": migration_recorded,
-            "applied": False,
-        }
-        if not executor_is_superuser:
+        if runtime_target.schema_name != schema_name:
             raise RuntimeError(
-                "Configured DBA connection is not a PostgreSQL superuser; "
-                "refusing to run the first-clean completion schema migration"
+                "Configured controlled DBA schema does not match the EOM funnel "
+                "runtime schema"
             )
-        if args.apply and not migration_recorded:
-            await run_migrations_fn(pool, only=(MIGRATION_NAME,))
-            _executor_is_superuser, migration_recorded = await _migration_state(
+        pool = await create_pool(database_url, schema_name=schema_name)
+        try:
+            await _attest_shared_database_lock(runtime_pool, pool)
+            executor_is_superuser, migration_recorded = await _migration_state(
                 pool,
                 expected_target=runtime_target,
             )
-            if not migration_recorded:
+            result: dict[str, object] = {
+                "target": _safe_target_label(database_url, schema_name=schema_name),
+                "executor_is_superuser": executor_is_superuser,
+                "migration": MIGRATION_NAME,
+                "migration_recorded": migration_recorded,
+                "applied": False,
+            }
+            if not executor_is_superuser:
                 raise RuntimeError(
-                    "Migration runner returned without recording the EOM "
-                    "first-clean completion schema"
+                    "Configured DBA connection is not a PostgreSQL superuser; "
+                    "refusing to run the first-clean completion schema migration"
                 )
-            result["migration_recorded"] = True
-            result["applied"] = True
-        return result
+            if args.apply and not migration_recorded:
+                await run_migrations_fn(pool, only=(MIGRATION_NAME,))
+                await _attest_shared_database_lock(runtime_pool, pool)
+                _executor_is_superuser, migration_recorded = await _migration_state(
+                    pool,
+                    expected_target=runtime_target,
+                )
+                if not migration_recorded:
+                    raise RuntimeError(
+                        "Migration runner returned without recording the EOM "
+                        "first-clean completion schema"
+                    )
+                result["migration_recorded"] = True
+                result["applied"] = True
+            return result
+        finally:
+            await pool.close()
     finally:
-        await pool.close()
+        await runtime_pool.close()
 
 
 async def _main(argv: list[str] | None = None) -> int:

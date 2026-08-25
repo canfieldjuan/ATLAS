@@ -48,10 +48,12 @@ python scripts/apply_eom_first_clean_completion_schema.py --json
 The result redacts credentials and reports only the target host/database/schema
 label, executor status, named migration, and whether it is already recorded.
 Before any DDL, the command compares the runtime and DBA connections' canonical
-schema, database name/OID, and connected server endpoint; it refuses a
-similarly named database or cluster target. Confirm the executor is a
-superuser and the target is the intended canonical EOM database and runtime
-schema.
+schema and database name/OID, then holds an unpredictable transaction-scoped
+advisory lock in an explicit runtime transaction and requires the DBA connection
+to observe that same lock as busy. This live cross-connection proof works for
+TCP, Unix-socket, and transaction-pooling DSNs and refuses a similarly named
+database or cluster target. Confirm the executor is a superuser and the target
+is the intended canonical EOM database and runtime schema.
 
 Then apply only migration 394:
 
@@ -66,11 +68,13 @@ sequence, and their trigger functions to `atlas_eom_handoff_owner`, rejects any
 direct or inherited guard path held by a non-superuser login, and grants the
 Atlas runtime only schema `USAGE, CREATE`, table `SELECT, INSERT, UPDATE` for
 row locking and receipt creation, plus sequence `USAGE` needed by the lifecycle
-default. The two evidence-reading trigger functions pin `pg_catalog` before
-that mutable application schema and `pg_temp` last, so runtime-created
-operators/functions cannot shadow built-in admission predicates. The migration
-does not grant `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`, sequence `SELECT`
-or `UPDATE`, schema ownership, or customer delivery authority.
+default. The prerequisite handoff-finalization function and the two
+evidence-reading receipt functions pin `pg_catalog` before that mutable
+application schema and `pg_temp` last, so runtime-created temporary relations,
+operators, or functions cannot shadow canonical evidence or built-in admission
+predicates. The migration does not grant `DELETE`, `TRUNCATE`, `REFERENCES`,
+`TRIGGER`, sequence `SELECT` or `UPDATE`, schema ownership, or customer
+delivery authority.
 
 Remove the temporary DBA DSN injection after the result reports
 `"migration_recorded": true`.
@@ -84,6 +88,7 @@ Remove the temporary DBA DSN injection after the result reports
    a real customer or use a production customer/service identity as a probe.
    The readiness fence also requires guard ownership of the canonical schema,
    canonical-handoff table and its protected functions, existing
+   canonical-handoff finalization function's fixed trusted search path,
    canonical-handoff finalization/append-only triggers, lifecycle append-only
    triggers, and the
    guard-owned lifecycle ordering sequence with its exact runtime `USAGE` ACL.
@@ -100,9 +105,9 @@ If the DBA preflight or apply fails, leave the route unavailable and correct
 the database prerequisites or guard-role configuration before retrying. The
 normal runtime must not be granted temporary guard membership or `REFERENCES`
 as a workaround. If the configured and observed runtime/DBA schema, database
-identity, or server endpoint differ, correct the typed schema configuration or
-the funnel/DBA DSN deployment setting; do not override `search_path` ad hoc on
-a command line.
+identity, or live cross-connection attestation fails, correct the typed schema
+configuration or the funnel/DBA DSN deployment setting; do not override
+`search_path` ad hoc on a command line.
 
 If application code must be rolled back after a successful apply, remove or
 disable the completion consumer/route first and retain the append-only receipt

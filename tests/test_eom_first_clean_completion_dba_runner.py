@@ -42,7 +42,19 @@ class _Connection:
     def __init__(self, state: SimpleNamespace) -> None:
         self._state = state
 
+    def transaction(self) -> _Acquire:
+        return _Acquire(self)
+
     async def fetchval(self, query: str, *_args: object) -> object:
+        if "pg_try_advisory_xact_lock" in query:
+            self._state.advisory_lock_attempts = (
+                getattr(self._state, "advisory_lock_attempts", 0) + 1
+            )
+            return getattr(
+                self._state,
+                "advisory_lock_available",
+                not hasattr(self._state, "executor_is_superuser"),
+            )
         if "rolsuper" in query:
             return self._state.executor_is_superuser
         if "to_regclass" in query:
@@ -57,12 +69,6 @@ class _Connection:
                 "schema_name": self._state.schema_name,
                 "database_name": getattr(self._state, "database_name", "atlas"),
                 "database_oid": getattr(self._state, "database_oid", 16_384),
-                "server_address": getattr(
-                    self._state,
-                    "server_address",
-                    "127.0.0.1",
-                ),
-                "server_port": getattr(self._state, "server_port", 5432),
             }
         raise AssertionError(f"unexpected query: {query}")
 
@@ -143,6 +149,8 @@ def test_runner_defaults_to_read_only_and_redacts_dsn(monkeypatch) -> None:
     ]
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
+    assert runtime_pool._connection._state.advisory_lock_attempts == 1
+    assert dba_pool._connection._state.advisory_lock_attempts == 1
 
 
 def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
@@ -236,6 +244,8 @@ def test_runner_applies_only_its_named_migration(monkeypatch) -> None:
     assert result["applied"] is True
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
+    assert runtime_pool._connection._state.advisory_lock_attempts == 2
+    assert dba_pool._connection._state.advisory_lock_attempts == 2
 
 
 def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:
@@ -381,8 +391,6 @@ def test_runner_rejects_runtime_schema_mismatch_before_opening_dba_pool(
     (
         ("database_name", "other_atlas"),
         ("database_oid", 16_385),
-        ("server_address", "192.0.2.55"),
-        ("server_port", 5544),
     ),
 )
 def test_runner_rejects_dba_database_identity_mismatch_before_migration(
@@ -401,16 +409,12 @@ def test_runner_rejects_dba_database_identity_mismatch_before_migration(
             schema_name="eom_canonical",
             database_name="atlas",
             database_oid=16_384,
-            server_address="127.0.0.1",
-            server_port=5432,
         )
     )
     dba_target = {
         "schema_name": "eom_canonical",
         "database_name": "atlas",
         "database_oid": 16_384,
-        "server_address": "127.0.0.1",
-        "server_port": 5432,
         "executor_is_superuser": True,
         "migrations_table_exists": True,
         "migration_recorded": False,
@@ -456,6 +460,71 @@ def test_runner_rejects_dba_database_identity_mismatch_before_migration(
         ("postgresql://example.test/atlas", "eom_canonical"),
     ]
     assert migration_calls == []
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
+def test_runner_rejects_same_named_socket_clone_without_shared_lock(
+    monkeypatch,
+) -> None:
+    """A Unix-socket target needs live cross-connection, not endpoint, proof."""
+
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, "eom_canonical")
+    runtime_state = SimpleNamespace(
+        schema_name="eom_canonical",
+        database_name="atlas",
+        database_oid=16_384,
+        advisory_lock_available=True,
+    )
+    dba_state = SimpleNamespace(
+        schema_name="eom_canonical",
+        database_name="atlas",
+        database_oid=16_384,
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        migration_recorded=False,
+        advisory_lock_available=True,
+    )
+    runtime_pool = _Pool(runtime_state)
+    dba_pool = _Pool(dba_state)
+    migration_calls: list[object] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    async def run_migrations(*args: object, **_kwargs: object) -> None:
+        migration_calls.append(args)
+
+    with pytest.raises(
+        RuntimeError,
+        match="does not share the EOM funnel runtime database",
+    ):
+        asyncio.run(
+            runner._run(
+                runner._parse_args(["--apply"]),
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+
+    assert migration_calls == []
+    assert runtime_state.advisory_lock_attempts == 1
+    assert dba_state.advisory_lock_attempts == 1
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
 

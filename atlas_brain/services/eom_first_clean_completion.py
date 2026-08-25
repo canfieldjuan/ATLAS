@@ -352,6 +352,22 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                           )
                    )
                    AND (
+                       SELECT COUNT(*) = 1
+                         FROM pg_proc AS protected_function
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = protected_function.pronamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND protected_function.proname =
+                              'require_eom_customer_handoff_finalization'
+                          AND protected_function.pronargs = 0
+                          AND protected_function.proconfig @> ARRAY[
+                              format(
+                                  'search_path=pg_catalog, %I, pg_temp',
+                                  current_schema()
+                              )
+                          ]
+                   )
+                   AND (
                        SELECT COUNT(*) = 3
                          FROM pg_proc AS protected_function
                          JOIN pg_namespace AS namespace
