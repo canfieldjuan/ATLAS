@@ -33,9 +33,9 @@ leave its restart procedure with contradictory integrity instructions.
 - A bare fixed inspection can select a worktree `.env` instead of the
   service's `EnvironmentFiles`, even when the worktree omits database keys.
 - `DatabaseConfig` resolves environment names case-insensitively, but `ops`
-  previously removed only canonical uppercase database keys. A lower- or
-  mixed-case inherited alias could therefore override the selected service
-  configuration in the inspector subprocess.
+  previously removed only a subset of canonical uppercase database keys. A
+  lower- or mixed-case inherited alias for any setting the inspector consumes
+  could therefore override the selected service configuration in its subprocess.
 - A socket target label omits its configured port even though the port selects
   the socket filename and the migration receipt confirms that label exactly.
 - A successful service or inspector connection is not socket proof while a
@@ -82,9 +82,9 @@ leave its restart procedure with contradictory integrity instructions.
 5. Exclude the unviable encrypted-credential experiment from this PR; it would
    require an unsupported plaintext-secret fallback.
 6. Update `ops` to admit only canonical uppercase runtime database overrides,
-   remove every case-insensitive known-database-key alias before its inspection
-   child constructs `DatabaseConfig`, and add a regression that proves the
-   selected service file wins in that child.
+   remove every case-insensitive alias for every `DatabaseConfig` setting before
+   its inspection child constructs that configuration, and add a regression that
+   proves the selected service file wins for both target and timeout settings.
 
 #### Explicit non-scope
 
@@ -114,7 +114,8 @@ leave its restart procedure with contradictory integrity instructions.
 - Adjacent configuration-context regression: a worktree file remains the
   default inspector context, while an ordered `ATLAS_OPS_ENV_FILES` override
   selects the intended service configuration and lower/mixed-case inherited
-  database aliases cannot supersede it in the inspection child.
+  aliases for every consumed database setting cannot supersede it in the
+  inspection child.
 - Cheap local gates: focused test target, `bash scripts/check_ascii_python.sh`,
   `git diff --check`, and `python scripts/sync_pr_plan.py ... --check`.
 - GitHub remains the complete unit gate.
@@ -185,9 +186,9 @@ Max files: 7
   - The socket target label includes that port, so confirmation cannot conflate
     same-directory, same-database clusters on distinct ports.
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
-    order, and removes every case variant of known `ATLAS_DB_*` values before
-    it constructs `DatabaseConfig`; exact-uppercase runtime keys preserve the
-    documented override behavior.
+    order, and removes every case variant of every consumed `ATLAS_DB_*` value
+    before it constructs `DatabaseConfig`; exact-uppercase runtime keys preserve
+    the documented override behavior.
   - The cutover reconciles every client observed in both initial and final
     loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
     receipt, requires no remaining final client, and requires an exact loaded
@@ -237,12 +238,13 @@ Max files: 7
   stops fixed inspection and HBA mutation, the safer side over inspecting or
   changing a guessed database target.
 - **Database environment-key aliases — CLOSED / DERIVED for fixed inspection.**
-  Membership is the canonical `DATABASE_CONFIG_KEYS` set in `ops`; its
-  case-folded form is derived from that set. An exact-uppercase environment key
-  is the only inherited database override admitted. Every lower- or mixed-case
-  matching alias is removed before `DatabaseConfig` loads the child environment,
-  while unrelated keys remain unchanged; this fails closed against inspecting a
-  shadowed target.
+  Membership is every canonical `ATLAS_DB_*` setting consumed by
+  `DatabaseConfig`, listed as `DATABASE_CONFIG_KEYS` in `ops`; its case-folded
+  form is derived from that set. An exact-uppercase environment key is the only
+  inherited database override admitted. Every lower- or mixed-case matching
+  alias is removed before `DatabaseConfig` loads the child environment, while
+  unrelated keys remain unchanged; this fails closed against inspecting a
+  shadowed target or applying a shadowed timeout.
 
 ### Files touched
 
@@ -327,11 +329,11 @@ blocks the socket-peer path.
 | `.agent/runbooks/database.md` | 401 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
-| `ops` | 10 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 339 |
-| `tests/test_agent_operations_contract.py` | 36 |
+| `ops` | 15 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 341 |
+| `tests/test_agent_operations_contract.py` | 42 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **878** |
+| **Total** | **891** |
 
 ## Diff budget
 

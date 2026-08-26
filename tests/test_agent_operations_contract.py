@@ -170,12 +170,15 @@ def test_database_runtime_environment_ignores_case_variant_database_overrides(
     shadow_dsn = "postgresql://shadow.example:5433/shadow"
     env_file = tmp_path / ".env"
     env_file.write_text(
-        f"ATLAS_DB_CONNECTION_STRING={file_dsn}\nATLAS_DB_HOST=file.example\n",
+        f"ATLAS_DB_CONNECTION_STRING={file_dsn}\n"
+        "ATLAS_DB_HOST=file.example\n"
+        "ATLAS_DB_CONNECT_TIMEOUT=7.5\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("ATLAS_OPS_ENV_FILES", str(env_file))
     monkeypatch.setenv("atlas_db_connection_string", shadow_dsn)
     monkeypatch.setenv("AtLaS_Db_HoSt", "shadow.example")
+    monkeypatch.setenv("AtLaS_Db_Connect_Timeout", "0.01")
     for key in DATABASE_CONFIG_KEYS:
         monkeypatch.delenv(key, raising=False)
 
@@ -183,8 +186,10 @@ def test_database_runtime_environment_ignores_case_variant_database_overrides(
 
     assert child_env["ATLAS_DB_CONNECTION_STRING"] == file_dsn
     assert child_env["ATLAS_DB_HOST"] == "file.example"
+    assert child_env["ATLAS_DB_CONNECT_TIMEOUT"] == "7.5"
     assert "atlas_db_connection_string" not in child_env
     assert "AtLaS_Db_HoSt" not in child_env
+    assert "AtLaS_Db_Connect_Timeout" not in child_env
     with monkeypatch.context() as child_process:
         for key in tuple(os.environ):
             child_process.delenv(key, raising=False)
@@ -194,6 +199,7 @@ def test_database_runtime_environment_ignores_case_variant_database_overrides(
 
     assert application_config.connection_string == file_dsn
     assert application_config.host == "file.example"
+    assert application_config.connect_timeout == 7.5
 
 
 def test_database_file_context_prefers_worktree_over_shared_and_systemd(
