@@ -27,8 +27,9 @@ incorrectly said that admissible state could contain no `missing_source`.
   the socket filename and the migration receipt confirms that label exactly.
 - A successful service or inspector connection is not socket proof while a
   complete DSN retains deliberate precedence over split configuration.
-- A manual four-rule HBA conversion needs a loaded-rule postcondition; one
-  IPv4 application probe cannot prove the IPv6 and replication channels.
+- A manual four-rule HBA conversion needs an exact loaded-tuple postcondition
+  and active-file rollback; aggregate counts can mask duplicated/missing
+  channels, and a disk-only restore leaves partial HBA rules active.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
@@ -49,10 +50,11 @@ incorrectly said that admissible state could contain no `missing_source`.
 3. Replace the provisional credential/SCRAM procedure with non-secret socket
    configuration, an exact `atlas-api` OS-user → `atlas` peer map, staged
    service/CRM/backend-transport/inspection proof, loopback-SCRAM replacement,
-   a loaded-HBA assertion for all four loopback rules, and a rollback that
-   restores TCP settings before restarting the service. The fixed inspection
-   must explicitly select the ordered `atlas-api.service` `EnvironmentFiles`
-   while excluding ad hoc `ATLAS_DB_*` overrides.
+   an exact loaded-HBA assertion for all four loopback tuples, and a rollback
+   that restores TCP settings and reloads the restored HBA before restarting
+   the service. The fixed inspection must explicitly select the ordered
+   `atlas-api.service` `EnvironmentFiles` while excluding ad hoc `ATLAS_DB_*`
+   overrides.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
@@ -96,8 +98,9 @@ incorrectly said that admissible state could contain no `missing_source`.
   health, an authenticated EOM CRM read, the application's Unix-socket backend,
   and fixed inspection selected from the service `EnvironmentFiles`.
 - Only then replace every loopback TCP `trust` rule with `scram-sha-256`,
-  reload PostgreSQL, prove the loaded HBA result is `2|2|0|0` (two application
-  and two replication loopback SCRAM rows, zero trust rows, zero parser
+  reload PostgreSQL, prove the loaded HBA result is `1|1|1|1|0|0|0` (one exact
+  application IPv4, application IPv6, replication IPv4, and replication IPv6
+  SCRAM tuple; zero unexpected loopback host rules, trust rows, and parser
   errors), repeat the proofs, prove passwordless TCP rejection, and prove
   `sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc 'SELECT
   current_user'` succeeds.
@@ -120,8 +123,9 @@ Max files: 5
      because both already call `connection_kwargs()`.
   4. The operational procedure rejects an overriding complete DSN, authenticates
      the specific service OS account as `atlas` over the Unix socket before
-     removing loopback `trust`, retains `postgres` peer recovery, and restores
-     TCP settings before a rollback restart.
+     removing loopback `trust`, proves every exact loopback HBA tuple, retains
+     `postgres` peer recovery, and reloads restored TCP authentication before a
+     rollback restart.
   5. The migration runbook accurately distinguishes raw forensic output from
      attested admission without changing runner behavior.
 - Reachability proof: `atlas_brain/storage/database.py` initializes the pool
@@ -135,8 +139,8 @@ Max files: 5
   confirmation; and the authenticated EOM CRM read used as production proof.
 - Risk areas: local role impersonation over loopback TCP, wrong-cluster
   inspection, service/inspector configuration skew, HBA parser failure,
-  IPv6/replication trust left behind, startup-migration availability, and
-  rollback recovery.
+  duplicated/missing IPv4/IPv6/replication tuples, unreloaded failed HBA
+  restoration, startup-migration availability, and rollback recovery.
 - Reviewer rules triggered: R1, R2, R3, R11, R12, R14.
 - Boundary-change enumeration:
   - `socket_path=None` continues to produce TCP host/port kwargs.
@@ -148,11 +152,12 @@ Max files: 5
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
     order, and removes ad hoc `ATLAS_DB_*` values before it constructs
     `DatabaseConfig`.
-  - The post-conversion HBA receipt requires two application and two
-    replication loopback SCRAM rows, no remaining trust row, and no parser
-    error before an IPv4-only negative probe can be treated as sufficient.
+  - The post-conversion HBA receipt requires one exact SCRAM tuple for each
+    application/replication IPv4/IPv6 channel, no unexpected loopback host
+    rule, no remaining trust row, and no parser error before an IPv4-only
+    negative probe can be treated as sufficient.
   - Cutover order is peer proof before removal of any trust rule; rollback
-    restores TCP configuration before restarting the application.
+    restores and reloads TCP authentication before restarting the application.
 
 ### Files touched
 
@@ -223,12 +228,12 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 234 |
+| `.agent/runbooks/database.md` | 285 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 239 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 244 |
 | `tests/test_eom_render_profile.py` | 60 |
-| **Total** | **564** |
+| **Total** | **620** |
 
 ## Diff budget
 

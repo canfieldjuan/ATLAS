@@ -233,25 +233,74 @@ break-glass path.
      "SELECT \
         count(*) FILTER ( \
           WHERE type = 'host' \
-            AND address IN ('127.0.0.1', '::1') \
             AND database = ARRAY['all']::text[] \
+            AND user_name = ARRAY['all']::text[] \
+            AND address = '127.0.0.1' \
+            AND netmask = '255.255.255.255' \
             AND auth_method = 'scram-sha-256' \
-        ) AS application_loopback_scram_rules, \
+        ) AS application_ipv4_scram_rule, \
+        count(*) FILTER ( \
+          WHERE type = 'host' \
+            AND database = ARRAY['all']::text[] \
+            AND user_name = ARRAY['all']::text[] \
+            AND address = '::1' \
+            AND netmask = 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff' \
+            AND auth_method = 'scram-sha-256' \
+        ) AS application_ipv6_scram_rule, \
+        count(*) FILTER ( \
+          WHERE type = 'host' \
+            AND database = ARRAY['replication']::text[] \
+            AND user_name = ARRAY['all']::text[] \
+            AND address = '127.0.0.1' \
+            AND netmask = '255.255.255.255' \
+            AND auth_method = 'scram-sha-256' \
+        ) AS replication_ipv4_scram_rule, \
+        count(*) FILTER ( \
+          WHERE type = 'host' \
+            AND database = ARRAY['replication']::text[] \
+            AND user_name = ARRAY['all']::text[] \
+            AND address = '::1' \
+            AND netmask = 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff' \
+            AND auth_method = 'scram-sha-256' \
+        ) AS replication_ipv6_scram_rule, \
         count(*) FILTER ( \
           WHERE type = 'host' \
             AND address IN ('127.0.0.1', '::1') \
-            AND database = ARRAY['replication']::text[] \
-            AND auth_method = 'scram-sha-256' \
-        ) AS replication_loopback_scram_rules, \
+            AND NOT ( \
+              (database = ARRAY['all']::text[] \
+               AND user_name = ARRAY['all']::text[] \
+               AND address = '127.0.0.1' \
+               AND netmask = '255.255.255.255' \
+               AND auth_method = 'scram-sha-256') \
+              OR (database = ARRAY['all']::text[] \
+                  AND user_name = ARRAY['all']::text[] \
+                  AND address = '::1' \
+                  AND netmask = 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff' \
+                  AND auth_method = 'scram-sha-256') \
+              OR (database = ARRAY['replication']::text[] \
+                  AND user_name = ARRAY['all']::text[] \
+                  AND address = '127.0.0.1' \
+                  AND netmask = '255.255.255.255' \
+                  AND auth_method = 'scram-sha-256') \
+              OR (database = ARRAY['replication']::text[] \
+                  AND user_name = ARRAY['all']::text[] \
+                  AND address = '::1' \
+                  AND netmask = 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff' \
+                  AND auth_method = 'scram-sha-256') \
+            ) \
+        ) AS unexpected_loopback_host_rules, \
         count(*) FILTER (WHERE auth_method = 'trust') AS remaining_trust_rules, \
         count(*) FILTER (WHERE error IS NOT NULL) AS hba_errors \
       FROM pg_hba_file_rules;"
    ```
 
-   The query must return `2|2|0|0`: both application and replication channels
-   use SCRAM on IPv4 and IPv6, no trust rule remains, and PostgreSQL loaded the
-   file without errors. Otherwise restore the saved files and stop. Then repeat
-   the service, `service_db_inspect`, and authenticated CRM proofs from step 3.
+   The query must return `1|1|1|1|0|0|0`: one exact application IPv4 rule, one
+   exact application IPv6 rule, one exact replication IPv4 rule, one exact
+   replication IPv6 rule, no unexpected loopback host rule, no trust rule, and
+   no parser error. If any field differs, do not proceed: follow step 6 exactly
+   so the restored HBA/ident files are reloaded before the procedure stops. Then
+   repeat the service, `service_db_inspect`, and authenticated CRM proofs from
+   step 3.
 
 5. Verify both sides of the new boundary. The passwordless TCP probe must fail;
    the retained `postgres` socket peer probe must succeed:
@@ -270,12 +319,14 @@ break-glass path.
    authentication without prompting. Do not use an existing `.pgpass` file or
    a secret-bearing shell environment as a substitute test.
 
-6. If a step fails after the HBA conversion, first remove only the added
-   `ATLAS_DB_SOCKET_PATH` line from the effective service configuration. Then
-   restore both saved authentication files, reload PostgreSQL, and restart
-   `atlas-api.service` once. Re-run `service_db_inspect` and the CRM read before
-   declaring rollback complete. Do not edit roles, passwords, migration ledger
-   rows, or database data as part of rollback.
+6. If the loaded-HBA receipt or any later step fails after the HBA conversion,
+   first remove only the added `ATLAS_DB_SOCKET_PATH` line from the effective
+   service configuration. Then restore both saved authentication files and
+   reload PostgreSQL before stopping or restarting anything else. Restart
+   `atlas-api.service` once only after that reload. Re-run
+   `service_db_inspect` and the CRM read before declaring rollback complete. Do
+   not edit roles, passwords, migration ledger rows, or database data as part of
+   rollback.
 
 `service_db_inspect` remains fixed-query-only. It explicitly selects the same
 service configuration as the application and uses a `READ ONLY` transaction.
