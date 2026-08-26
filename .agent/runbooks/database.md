@@ -47,6 +47,61 @@ generic query command is unavailable until Atlas has a privilege-restricted
 inspection role. Do not paste customer content or identifiers into chat or
 GitHub, and do not substitute the live application role as an ad hoc read role.
 
+## Role-topology evidence preflight
+
+This is a read-only prerequisite for a later least-privilege role cutover. It
+does not create roles, grant or revoke privileges, transfer ownership, run a
+migration, or restart Atlas. Keep the protected DBA DSN out of `.env`, service
+environment files, shell history, Git, chat, and GitHub. The command accepts no
+DSN argument and has no apply mode.
+
+1. Record the live/runtime relationship first:
+
+   ```bash
+   ./ops deploy status
+   git rev-parse HEAD
+   ```
+
+   A receipt describes only the target reached by its two connections. If the
+   running `atlas-api.service` revision differs from the source revision that a
+   future cutover would deploy, record that drift and do not use the receipt to
+   authorize a role change. Converge the deployment, then collect a new receipt
+   before the cutover review.
+
+2. In a protected, operator-only environment, provide exactly one direct
+   PostgreSQL-superuser DSN under
+   `ATLAS_DATABASE_ROLE_TOPOLOGY_DBA_DATABASE_URL`. Do not reuse the normal
+   `ATLAS_DB_*` application credentials. Export this protected value in the
+   command's process environment; the command intentionally ignores `.env` and
+   `.env.local`. The normal runtime target continues to come only from
+   `DatabaseConfig`; the command pins both connections in read-only
+   repeatable-read transactions and rejects a missing DBA value, a different
+   database/schema/cluster, a DBA session that reuses the runtime authenticated
+   or effective identity, a switched `SET ROLE` session, or a non-superuser
+   session before it reads the catalog.
+
+3. From the Atlas worktree that supplies the intended runtime configuration,
+   run the fixed evidence command:
+
+   ```bash
+   python scripts/check_database_role_topology.py
+   ```
+
+   It prints a redacted JSON receipt with target labels, role attributes and
+   complete reachable membership options (including referenced predefined
+   roles), database/schema ownership, per-object owner and ACL records
+   (including PostgreSQL defaults, column grants, and security-invoker view
+   state), plus RLS policy role bindings and deparsed `USING`/`WITH CHECK`
+   expressions. It never prints a password or DSN query values, but role and
+   ownership metadata is still operationally sensitive: retain it in the
+   protected cutover record rather than pasting it into public issues.
+
+4. A nonzero exit means there is no valid receipt. Fix the configuration or
+   target-attestation problem and rerun the read-only preflight; do not work
+   around it with `./ops db inspect`, ad hoc SQL, or a role mutation. A later
+   reviewed DBA-only slice owns any actual role, grant, ownership, migration,
+   or service-credential change.
+
 ## Unix-socket peer and loopback SCRAM cutover
 
 This is a production-mutating operation. Perform it only from an owned,
