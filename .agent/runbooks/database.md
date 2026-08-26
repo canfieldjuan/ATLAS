@@ -137,14 +137,16 @@ break-glass path.
    `eom-write-boundary-audit.timer` is a repository-owned hourly one-shot
    database client. It is normally absent from both live inventory queries, so
    its absence is not evidence that it has no TCP dependency. Before any HBA
-   backup or authentication edit, require its installed script to match this
-   deployed source, its timer/service identity to be live, and its unit or
-   user-manager environment to contain no `ATLAS_EOM_AUDIT_ATLAS_DSN` override
-   or `EnvironmentFile`. The source default is the passwordless
-   `/var/run/postgresql` socket route and clears inherited libpq target
-   selectors before invoking `psql`; an override needs its own owner-verified
-   socket or SCRAM migration rather than being silently accepted here. The
-   checks retain environment text only in shell variables and never print it.
+   backup or authentication edit, admit its exact target-free timer command,
+   active timer/service identity, and no unit/user-manager
+   `ATLAS_EOM_AUDIT_ATLAS_DSN` override or `EnvironmentFile`. Do **not** require
+   the installed source to be the new socket default yet: it would run before
+   the peer map is loaded. After the map/rule succeeds, this procedure stages
+   the current source atomically, retains the old installed copy for rollback,
+   then obtains the socket receipt. The source-owned default clears inherited
+   libpq settings; an explicit override retains its owner-managed TLS/libpq
+   behavior and needs its own verified socket or SCRAM migration. The checks
+   retain environment text only in shell variables and never print it.
 
    Set `SERVICE_ENV_FILES` to the absolute `EnvironmentFiles` paths printed by
    `./ops env systemd`, joined with `:` in that same order. Use this shell-local
@@ -157,6 +159,7 @@ break-glass path.
    EOM_AUDIT_REPOSITORY_ROOT="$(git rev-parse --show-toplevel)" || exit 1
    EOM_AUDIT_SOURCE="$EOM_AUDIT_REPOSITORY_ROOT/scripts/eom_write_boundary_audit.py"
    EOM_AUDIT_INSTALLED="$HOME/.local/bin/eom-write-boundary-audit.py"
+   EOM_AUDIT_PRE_PEER_SOURCE="$EOM_AUDIT_INSTALLED.pre-atlas-peer"
    EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'
    EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'
    SERVICE_ENV_FILES='/absolute/first.service.env:/absolute/second.service.env'
@@ -167,11 +170,7 @@ break-glass path.
        *) return 1 ;;
      esac
    }
-   eom_audit_require_socket_default() {
-     if ! test -r "$EOM_AUDIT_SOURCE" || ! cmp -s "$EOM_AUDIT_SOURCE" "$EOM_AUDIT_INSTALLED"; then
-       printf '%s\n' 'installed EOM audit script does not match deployed source; install it before cutover' >&2
-       return 1
-     fi
+   eom_audit_require_unit_contract() {
      if ! systemctl --user is-enabled --quiet "$EOM_AUDIT_TIMER" \
        || ! systemctl --user is-active --quiet "$EOM_AUDIT_TIMER"; then
        printf '%s\n' 'EOM audit timer is not enabled and active; do not remove loopback trust' >&2
@@ -183,12 +182,22 @@ break-glass path.
        return 1
      }
      case "$eom_audit_exec_start" in
-       *"$EOM_AUDIT_INSTALLED"*) ;;
+       *'argv[]='*'argv[]='*)
+         printf '%s\n' 'EOM audit service has multiple effective commands; do not remove loopback trust' >&2
+         return 1
+         ;;
+       *'argv[]='*) ;;
        *)
-         printf '%s\n' 'EOM audit service does not execute the admitted installed script; do not remove loopback trust' >&2
+         printf '%s\n' 'could not parse EOM audit service command; do not remove loopback trust' >&2
          return 1
          ;;
      esac
+     eom_audit_argv="${eom_audit_exec_start#*argv[]=}"
+     eom_audit_argv="${eom_audit_argv%% ;*}"
+     if [ "$eom_audit_argv" != "/usr/bin/python3 $EOM_AUDIT_INSTALLED" ]; then
+       printf '%s\n' 'EOM audit service command is not the admitted target-free argv; do not remove loopback trust' >&2
+       return 1
+     fi
      eom_audit_environment_files="$(systemctl --user show "$EOM_AUDIT_SERVICE" \
        --property=EnvironmentFiles --value)" || {
        printf '%s\n' 'could not inspect EOM audit service environment files; do not remove loopback trust' >&2
@@ -212,6 +221,41 @@ break-glass path.
        printf '%s\n' 'EOM audit DSN override found; migrate and prove it separately before cutover' >&2
        return 1
      fi
+   }
+   eom_audit_require_socket_default() {
+     eom_audit_require_unit_contract || return 1
+     if ! test -r "$EOM_AUDIT_SOURCE" || ! cmp -s "$EOM_AUDIT_SOURCE" "$EOM_AUDIT_INSTALLED"; then
+       printf '%s\n' 'installed EOM audit script does not match deployed source; stage it after peer authentication' >&2
+       return 1
+     fi
+   }
+   eom_audit_stage_socket_source() {
+     if test -e "$EOM_AUDIT_PRE_PEER_SOURCE"; then
+       printf '%s\n' 'pre-peer EOM audit source backup already exists; inspect it before retrying' >&2
+       return 1
+     fi
+     if ! cp --preserve=mode,ownership,timestamps "$EOM_AUDIT_INSTALLED" "$EOM_AUDIT_PRE_PEER_SOURCE"; then
+       printf '%s\n' 'could not preserve the pre-peer EOM audit source; do not replace it' >&2
+       return 1
+     fi
+     eom_audit_stage="$(mktemp "$EOM_AUDIT_INSTALLED.stage.XXXXXX")" || {
+       printf '%s\n' 'could not create staged EOM audit source; do not replace it' >&2
+       return 1
+     }
+     if ! install -m 755 "$EOM_AUDIT_SOURCE" "$eom_audit_stage" \
+       || ! mv -f "$eom_audit_stage" "$EOM_AUDIT_INSTALLED"; then
+       rm -f -- "$eom_audit_stage"
+       cp --preserve=mode,ownership,timestamps "$EOM_AUDIT_PRE_PEER_SOURCE" "$EOM_AUDIT_INSTALLED" || return 1
+       printf '%s\n' 'could not stage the socket-default EOM audit source; restored the prior source' >&2
+       return 1
+     fi
+     eom_audit_require_socket_default
+   }
+   eom_audit_restore_pre_peer_source() {
+     if ! test -e "$EOM_AUDIT_PRE_PEER_SOURCE"; then
+       return 0
+     fi
+     cp --preserve=mode,ownership,timestamps "$EOM_AUDIT_PRE_PEER_SOURCE" "$EOM_AUDIT_INSTALLED"
    }
    service_db_has_case_variant_key() {
      sudo awk '
@@ -343,7 +387,7 @@ break-glass path.
        ATLAS_OPS_ENV_FILES="$SERVICE_ENV_FILES" \
        ./ops db inspect connectivity
    }
-   eom_audit_require_socket_default || exit 1
+   eom_audit_require_unit_contract || exit 1
    service_db_require_new_socket_configuration || exit 1
    service_db_inspect
    ```
@@ -360,7 +404,7 @@ break-glass path.
    `ATLAS_DB_SOCKET_PATH`; do not remove or rewrite one as part of this
    procedure. That needs a separate configuration-migration slice.
 
-2. Only after both the source and service-configuration receipts succeed,
+2. Only after the timer-contract and service-configuration receipts succeed,
    preserve the two PostgreSQL authentication files before editing them:
 
    ```bash
@@ -468,6 +512,7 @@ break-glass path.
 
    ```bash
    rollback_peer_cutover() {
+     eom_audit_restore_pre_peer_source || return 1
      service_db_require_effective_env_file || return 1
      sudoedit "$EFFECTIVE_DB_ENV_FILE" || return 1
      service_db_require_no_socket_assignments || return 1
@@ -482,6 +527,19 @@ break-glass path.
      fi
      systemctl --user restart atlas-api.service || return 1
      service_db_inspect
+   }
+   ```
+
+   Stage the socket-default monitor only after the previous peer-map/HBA receipt
+   succeeded and the rollback helper exists. If staging cannot preserve or
+   install the source, invoke that helper so the old source is restored before
+   the peer authentication files are restored:
+
+   ```bash
+   eom_audit_stage_socket_source || {
+     printf '%s\n' 'could not stage the EOM audit socket source; rollback required' >&2
+     rollback_peer_cutover
+     exit 1
    }
    ```
 
@@ -535,7 +593,7 @@ break-glass path.
      rollback_peer_cutover
      exit 1
    }
-   EOM_AUDIT_DRY_RUN_OUTPUT="$("$EOM_AUDIT_INSTALLED" \
+   EOM_AUDIT_DRY_RUN_OUTPUT="$(env -u ATLAS_EOM_AUDIT_ATLAS_DSN "$EOM_AUDIT_INSTALLED" \
      --state-dir "$EOM_AUDIT_DRY_RUN_DIR" \
      --ntfy-topic cutover-dry-run \
      --no-alert)"

@@ -18,6 +18,8 @@ Type=oneshot
 #
 # Absolute path, and no systemd %-specifiers in the command: an unescaped % in a
 # unit file silently produced a wrong SHA-256 digest once already.
+# Keep this effective argv target-free. The peer-socket cutover runbook admits
+# this exact command before it stages the installed socket-default source.
 ExecStart=/usr/bin/python3 /home/juan-canfield/.local/bin/eom-write-boundary-audit.py
 # notify-send needs a display for the desktop popup; the ntfy push does not.
 Environment=DISPLAY=:0

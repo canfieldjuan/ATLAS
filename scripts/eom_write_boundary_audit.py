@@ -95,10 +95,12 @@ DEFAULT_REALERT_EVERY = 24  # hourly cadence -> re-alert once a day while open
 # below; libpq receives the filesystem path rather than a TCP hostname.
 DEFAULT_ATLAS_DSN = "postgresql://atlas@%2Fvar%2Frun%2Fpostgresql:5433/atlas"
 
-# `psql_environment` must make the URI, rather than an inherited service-manager
-# setting, authoritative for the monitor's database target.  Clear every libpq
-# setting, then add back only values parsed from the monitor's DSN; this avoids
-# leaving an unenumerated selector such as PGHOSTADDR or PGSERVICE in effect.
+# The source-owned default must make its URI, rather than an inherited
+# service-manager setting, authoritative for the monitor's database target.
+# It clears every libpq setting before adding back only DSN-derived values, so
+# an unenumerated selector such as PGHOSTADDR or PGSERVICE cannot take effect.
+# Explicit owner-provided DSNs deliberately retain their inherited libpq/TLS
+# configuration.
 
 @dataclass(frozen=True)
 class Signal:
@@ -165,20 +167,32 @@ SELECT
 """
 
 
-def psql_environment(dsn: str) -> dict[str, str]:
+def psql_environment(
+    dsn: str,
+    *,
+    source_owned_default: bool = False,
+) -> dict[str, str]:
     """Connection settings for a psql subprocess, passed by environment.
 
     Never as an argument: /proc/<pid>/cmdline is world-readable on this
     deployment, so a DSN in argv hands the database password to any local
     account for the life of the process. /proc/<pid>/environ is readable only
     by the owner, which is why libpq supports these variables at all.
+
+    The source-owned default must not inherit a user-manager libpq target such
+    as ``PGHOSTADDR`` or ``PGSERVICE``. Explicit owner-provided DSNs retain the
+    monitor's previous libpq behavior, including TLS certificate inputs that
+    are intentionally not encoded in a URI.
     """
     parsed = urlsplit(dsn)
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith("PG")
-    }
+    if source_owned_default:
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if not key.startswith("PG")
+        }
+    else:
+        env = dict(os.environ)
     if parsed.username:
         env["PGUSER"] = unquote(parsed.username)
     if parsed.password:
@@ -255,10 +269,15 @@ def _parse_counts(raw: str, expected: int) -> tuple[list[int] | None, str | None
     return counts, None
 
 
-def query_atlas(psql_bin: str, dsn: str) -> tuple[list[int] | None, str | None]:
+def query_atlas(
+    psql_bin: str,
+    dsn: str,
+    *,
+    source_owned_default: bool = False,
+) -> tuple[list[int] | None, str | None]:
     raw, error = _run(
         [psql_bin, "-A", "-t", "-F", "|", "-v", "ON_ERROR_STOP=1", "-c", _atlas_sql()],
-        env=psql_environment(dsn),
+        env=psql_environment(dsn, source_owned_default=source_owned_default),
     )
     if error:
         return None, error
@@ -425,10 +444,7 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
 
 def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = publish) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--atlas-dsn",
-        default=os.environ.get("ATLAS_EOM_AUDIT_ATLAS_DSN", DEFAULT_ATLAS_DSN),
-    )
+    parser.add_argument("--atlas-dsn")
     parser.add_argument("--psql-bin", default=os.environ.get("ATLAS_EOM_AUDIT_PSQL_BIN", "psql"))
     parser.add_argument("--state-dir", default=os.environ.get("ATLAS_EOM_AUDIT_STATE_DIR", str(DEFAULT_STATE_DIR)))
     parser.add_argument("--ntfy-url", default=os.environ.get("ATLAS_EOM_AUDIT_NTFY_URL", DEFAULT_NTFY_URL))
@@ -436,6 +452,11 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
     parser.add_argument("--realert-every", type=int, default=int(os.environ.get("ATLAS_EOM_AUDIT_REALERT_EVERY", DEFAULT_REALERT_EVERY)))
     parser.add_argument("--no-alert", action="store_true", help="measure and print without notifying")
     args = parser.parse_args(argv)
+    configured_dsn = args.atlas_dsn
+    if configured_dsn is None and "ATLAS_EOM_AUDIT_ATLAS_DSN" in os.environ:
+        configured_dsn = os.environ["ATLAS_EOM_AUDIT_ATLAS_DSN"]
+    source_owned_default = configured_dsn is None
+    args.atlas_dsn = DEFAULT_ATLAS_DSN if source_owned_default else configured_dsn
     validate_settings(args.realert_every, args.ntfy_topic)
 
     state_path = Path(args.state_dir) / "state.json"
@@ -457,7 +478,13 @@ def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = p
         # measure breach and publish first -- and A would afterwards take the
         # lock and overwrite the state with its stale clean reading, cancelling
         # the alert that had already gone out.
-        result = build_signals(query_atlas(args.psql_bin, args.atlas_dsn))
+        result = build_signals(
+            query_atlas(
+                args.psql_bin,
+                args.atlas_dsn,
+                source_owned_default=source_owned_default,
+            )
+        )
         print(result.report())
         return _decide_and_notify(args, result, state_path, notifier)
 

@@ -156,7 +156,7 @@ def test_runbook_admits_new_socket_configuration_before_hba_mutation() -> None:
 def test_runbook_admits_the_dormant_eom_audit_before_hba_mutation() -> None:
     runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
 
-    admission = "eom_audit_require_socket_default || exit 1"
+    admission = "eom_audit_require_unit_contract || exit 1"
     first_hba_backup = (
         "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf"
     )
@@ -164,9 +164,11 @@ def test_runbook_admits_the_dormant_eom_audit_before_hba_mutation() -> None:
     assert runbook.count(admission) == 1
     assert runbook.index(admission) < runbook.index(first_hba_backup)
     assert "cmp -s \"$EOM_AUDIT_SOURCE\" \"$EOM_AUDIT_INSTALLED\"" in runbook
+    assert "eom_audit_stage_socket_source || {" in runbook
     assert "--property=EnvironmentFiles --value" in runbook
     assert "systemctl --user show-environment" in runbook
     assert "ATLAS_EOM_AUDIT_ATLAS_DSN=" in runbook
+    assert 'EOM_AUDIT_DRY_RUN_OUTPUT="$(env -u ATLAS_EOM_AUDIT_ATLAS_DSN' in runbook
     assert "--no-alert" in runbook
     assert "COULD NOT MEASURE" in runbook
     assert "0|2" in runbook
@@ -210,6 +212,22 @@ def _run_runbook_function(
     )
 
 
+def _eom_audit_systemctl_stub() -> str:
+    return (
+        "systemctl() {\n"
+        "  case \"$*\" in\n"
+        "    *'is-enabled --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ENABLED\" = true ] ;;\n"
+        "    *'is-active --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ACTIVE\" = true ] ;;\n"
+        "    *'--property=LoadState,ExecStart --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_EXEC_START\" ;;\n"
+        "    *'--property=EnvironmentFiles --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_ENVIRONMENT_FILES\" ;;\n"
+        "    *'--property=Environment --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_SERVICE_ENV\" ;;\n"
+        "    *show-environment*) printf '%s\\n' \"$EOM_AUDIT_TEST_MANAGER_ENV\" ;;\n"
+        "    *) return 97 ;;\n"
+        "  esac\n"
+        "}"
+    )
+
+
 @pytest.mark.parametrize(
     ("effective_is_selected", "expected_returncode"),
     ((True, 0), (False, 1)),
@@ -243,45 +261,82 @@ def test_service_db_effective_env_file_must_be_selected_before_cutover(
         "service_environment",
         "manager_environment",
         "environment_files",
-        "copies_match",
         "timer_enabled",
         "timer_active",
-        "exec_matches",
-        "expected_returncode",
+        "exec_variant",
+        "expected_error",
     ),
     (
-        ("", "", "", True, True, True, True, 0),
-        ("ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas", "", "", True, True, True, True, 1),
-        ("", "ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas", "", True, True, True, True, 1),
-        ("", "", "/secure/eom-audit.env", True, True, True, True, 1),
-        ("", "", "", False, True, True, True, 1),
-        ("", "", "", True, False, True, True, 1),
-        ("", "", "", True, True, False, True, 1),
-        ("", "", "", True, True, True, False, 1),
+        ("", "", "", True, True, "exact", None),
+        (
+            "ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas",
+            "",
+            "",
+            True,
+            True,
+            "exact",
+            "EOM audit DSN override found",
+        ),
+        (
+            "",
+            "ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas",
+            "",
+            True,
+            True,
+            "exact",
+            "EOM audit DSN override found",
+        ),
+        ("", "", "/secure/eom-audit.env", True, True, "exact", "EnvironmentFile"),
+        ("", "", "", False, True, "exact", "not enabled and active"),
+        ("", "", "", True, False, "exact", "not enabled and active"),
+        ("", "", "", True, True, "atlas_dsn", "admitted target-free argv"),
+        ("", "", "", True, True, "psql_bin", "admitted target-free argv"),
+        ("", "", "", True, True, "multiple", "multiple effective commands"),
+        ("", "", "", True, True, "unparseable", "could not parse EOM audit service command"),
     ),
 )
-def test_dormant_eom_audit_admission_rejects_transport_overrides_and_stale_install(
+def test_dormant_eom_audit_admission_rejects_transport_overrides_and_extra_commands(
     tmp_path: Path,
     service_environment: str,
     manager_environment: str,
     environment_files: str,
-    copies_match: bool,
     timer_enabled: bool,
     timer_active: bool,
-    exec_matches: bool,
-    expected_returncode: int,
+    exec_variant: str,
+    expected_error: str | None,
 ) -> None:
     runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
     source = tmp_path / "eom_write_boundary_audit.py"
     installed = tmp_path / "eom-write-boundary-audit.py"
     source.write_text("source\n", encoding="utf-8")
-    installed.write_text("source\n" if copies_match else "stale\n", encoding="utf-8")
+    installed.write_text("stale\n", encoding="utf-8")
+    canonical_argv = f"/usr/bin/python3 {installed}"
+    if exec_variant == "exact":
+        exec_start = f"{{ path=/usr/bin/python3 ; argv[]={canonical_argv} ; ignore_errors=no ; }}"
+    elif exec_variant == "atlas_dsn":
+        exec_start = (
+            "{ path=/usr/bin/python3 ; argv[]="
+            f"{canonical_argv} --atlas-dsn postgresql://tcp.example/atlas ; ignore_errors=no ; }}"
+        )
+    elif exec_variant == "psql_bin":
+        exec_start = (
+            "{ path=/usr/bin/python3 ; argv[]="
+            f"{canonical_argv} --psql-bin /tmp/psql ; ignore_errors=no ; }}"
+        )
+    elif exec_variant == "multiple":
+        exec_start = (
+            "{ path=/usr/bin/python3 ; argv[]="
+            f"{canonical_argv} ; argv[]=/usr/bin/true ; ignore_errors=no ; }}"
+        )
+    else:
+        assert exec_variant == "unparseable"
+        exec_start = f"loaded {installed}"
 
     result = _run_runbook_function(
         runbook,
         (
             "eom_audit_environment_has_dsn_override",
-            "eom_audit_require_socket_default",
+            "eom_audit_require_unit_contract",
         ),
         shell_stubs=(
             f"EOM_AUDIT_SOURCE={str(source)!r}",
@@ -293,30 +348,133 @@ def test_dormant_eom_audit_admission_rejects_transport_overrides_and_stale_insta
             f"EOM_AUDIT_TEST_ENVIRONMENT_FILES={environment_files!r}",
             f"EOM_AUDIT_TEST_TIMER_ENABLED={str(timer_enabled).lower()}",
             f"EOM_AUDIT_TEST_TIMER_ACTIVE={str(timer_active).lower()}",
-            f"EOM_AUDIT_TEST_EXEC_START={'loaded ' + str(installed) if exec_matches else 'loaded /other/eom-write-boundary-audit.py'!r}",
-            "systemctl() {\n"
-            "  case \"$*\" in\n"
-            "    *'is-enabled --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ENABLED\" = true ] ;;\n"
-            "    *'is-active --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ACTIVE\" = true ] ;;\n"
-            "    *'--property=LoadState,ExecStart --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_EXEC_START\" ;;\n"
-            "    *'--property=EnvironmentFiles --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_ENVIRONMENT_FILES\" ;;\n"
-            "    *'--property=Environment --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_SERVICE_ENV\" ;;\n"
-            "    *show-environment*) printf '%s\\n' \"$EOM_AUDIT_TEST_MANAGER_ENV\" ;;\n"
-            "    *) return 97 ;;\n"
-            "  esac\n"
-            "}",
+            f"EOM_AUDIT_TEST_EXEC_START={exec_start!r}",
+            _eom_audit_systemctl_stub(),
+        ),
+    )
+
+    assert result.returncode == (0 if expected_error is None else 1)
+    if expected_error is not None:
+        assert expected_error in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("installed_content", "expected_returncode"),
+    (("source\n", 0), ("stale\n", 1)),
+)
+def test_eom_audit_socket_default_requires_the_staged_source(
+    tmp_path: Path,
+    installed_content: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    source = tmp_path / "eom_write_boundary_audit.py"
+    installed = tmp_path / "eom-write-boundary-audit.py"
+    source.write_text("source\n", encoding="utf-8")
+    installed.write_text(installed_content, encoding="utf-8")
+    exec_start = (
+        "{ path=/usr/bin/python3 ; argv[]="
+        f"/usr/bin/python3 {installed} ; ignore_errors=no ; }}"
+    )
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "eom_audit_environment_has_dsn_override",
+            "eom_audit_require_unit_contract",
+            "eom_audit_require_socket_default",
+        ),
+        shell_stubs=(
+            f"EOM_AUDIT_SOURCE={str(source)!r}",
+            f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+            "EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'",
+            "EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'",
+            "EOM_AUDIT_TEST_SERVICE_ENV=''",
+            "EOM_AUDIT_TEST_MANAGER_ENV=''",
+            "EOM_AUDIT_TEST_ENVIRONMENT_FILES=''",
+            "EOM_AUDIT_TEST_TIMER_ENABLED=true",
+            "EOM_AUDIT_TEST_TIMER_ACTIVE=true",
+            f"EOM_AUDIT_TEST_EXEC_START={exec_start!r}",
+            _eom_audit_systemctl_stub(),
         ),
     )
 
     assert result.returncode == expected_returncode
     if expected_returncode:
-        assert (
-            "EOM audit DSN override found" in result.stderr
-            or "EOM audit service uses an EnvironmentFile" in result.stderr
-            or "installed EOM audit script does not match deployed source" in result.stderr
-            or "EOM audit timer is not enabled and active" in result.stderr
-            or "EOM audit service does not execute the admitted installed script" in result.stderr
-        )
+        assert "stage it after peer authentication" in result.stderr
+
+
+def test_eom_audit_source_stage_and_rollback_restore_the_pre_peer_copy(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    source = tmp_path / "eom_write_boundary_audit.py"
+    installed = tmp_path / "eom-write-boundary-audit.py"
+    backup = tmp_path / "eom-write-boundary-audit.py.pre-atlas-peer"
+    source.write_text("socket-default\n", encoding="utf-8")
+    installed.write_text("pre-peer\n", encoding="utf-8")
+    exec_start = (
+        "{ path=/usr/bin/python3 ; argv[]="
+        f"/usr/bin/python3 {installed} ; ignore_errors=no ; }}"
+    )
+    shell_stubs = (
+        f"EOM_AUDIT_SOURCE={str(source)!r}",
+        f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+        f"EOM_AUDIT_PRE_PEER_SOURCE={str(backup)!r}",
+        "EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'",
+        "EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'",
+        "EOM_AUDIT_TEST_SERVICE_ENV=''",
+        "EOM_AUDIT_TEST_MANAGER_ENV=''",
+        "EOM_AUDIT_TEST_ENVIRONMENT_FILES=''",
+        "EOM_AUDIT_TEST_TIMER_ENABLED=true",
+        "EOM_AUDIT_TEST_TIMER_ACTIVE=true",
+        f"EOM_AUDIT_TEST_EXEC_START={exec_start!r}",
+        _eom_audit_systemctl_stub(),
+    )
+
+    stage = _run_runbook_function(
+        runbook,
+        (
+            "eom_audit_environment_has_dsn_override",
+            "eom_audit_require_unit_contract",
+            "eom_audit_require_socket_default",
+            "eom_audit_stage_socket_source",
+        ),
+        shell_stubs=shell_stubs,
+    )
+
+    assert stage.returncode == 0, stage.stderr
+    assert installed.read_text(encoding="utf-8") == "socket-default\n"
+    assert backup.read_text(encoding="utf-8") == "pre-peer\n"
+
+    restore = _run_runbook_function(
+        runbook,
+        ("eom_audit_restore_pre_peer_source",),
+        shell_stubs=(
+            f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+            f"EOM_AUDIT_PRE_PEER_SOURCE={str(backup)!r}",
+        ),
+    )
+
+    assert restore.returncode == 0, restore.stderr
+    assert installed.read_text(encoding="utf-8") == "pre-peer\n"
+
+
+def test_runbook_stages_and_restores_the_audit_source_on_the_peer_side_of_cutover() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    peer_receipt = "The final query must return `0|1|1|0|1|0`"
+    stage = "eom_audit_stage_socket_source || {"
+    rollback = runbook.split("rollback_peer_cutover() {", maxsplit=1)[1].split(
+        "\n   }", maxsplit=1
+    )[0]
+
+    assert runbook.index(peer_receipt) < runbook.index(stage)
+    assert runbook.index(stage) < runbook.index(
+        "systemctl --user restart atlas-api.service", runbook.index(stage)
+    )
+    assert rollback.index("eom_audit_restore_pre_peer_source || return 1") < rollback.index(
+        "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer"
+    )
 
 
 @pytest.mark.parametrize(
@@ -497,6 +655,7 @@ def test_rollback_refuses_a_surviving_socket_assignment_before_hba_restore(
             "service_db_require_canonical_keys",
             "service_db_require_no_socket_assignments",
             "service_db_require_effective_env_file",
+            "eom_audit_restore_pre_peer_source",
             "rollback_peer_cutover",
         ),
         service_env_files=str(env_file),
@@ -526,6 +685,7 @@ def test_rollback_refuses_an_hba_source_mismatch_before_service_restart(
             "service_db_require_canonical_keys",
             "service_db_require_no_socket_assignments",
             "service_db_require_effective_env_file",
+            "eom_audit_restore_pre_peer_source",
             "rollback_peer_cutover",
         ),
         service_env_files=str(env_file),

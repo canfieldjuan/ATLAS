@@ -28,13 +28,9 @@ async def main(limit: int, dry_run: bool, topic_type_filter: str | None):
     import asyncpg
 
     pool = await asyncpg.create_pool(
-        host=db_settings.host,
-        port=db_settings.port,
-        database=db_settings.database,
-        user=db_settings.user,
-        password=db_settings.password,
         min_size=2,
         max_size=4,
+        **db_settings.connection_kwargs(),
     )
 
     from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (

@@ -960,6 +960,21 @@ def test_database_config_uses_socket_path_for_dsn_and_asyncpg_kwargs():
     assert same_socket_other_port.target_label != config.target_label
 
 
+def test_typed_maintenance_scripts_use_socket_aware_database_kwargs():
+    repo_root = Path(__file__).resolve().parents[1]
+    backfill = (repo_root / "scripts/backfill_community_buying_stage_defaults.py").read_text(
+        encoding="utf-8"
+    )
+    rebuild = (repo_root / "scripts/rebuild_blog_charts.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "db_settings.host" not in backfill
+    assert "db_settings.connection_kwargs(command_timeout=60)" in backfill
+    assert "db_settings.host" not in rebuild
+    assert "db_settings.connection_kwargs()" in rebuild
+
+
 def test_database_config_percent_encodes_socket_path_in_dsn_query():
     from urllib.parse import parse_qs, urlsplit
 
