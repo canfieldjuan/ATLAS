@@ -38,6 +38,9 @@ DATABASE_CONFIG_KEYS = frozenset(
         "ATLAS_DB_SOCKET_PATH",
     )
 )
+DATABASE_CONFIG_KEY_CASEFOLDS = frozenset(
+    key.casefold() for key in DATABASE_CONFIG_KEYS
+)
 DATABASE_INSPECTIONS = {
     "connectivity": "SELECT 1 AS ok",
     "migrations": (
@@ -272,8 +275,11 @@ def database_runtime_environment() -> dict[str, str]:
             config[key] = os.environ[key]
 
     child_env = os.environ.copy()
-    for key in DATABASE_CONFIG_KEYS:
-        child_env.pop(key, None)
+    # BaseSettings resolves environment variable names case-insensitively.  Keep
+    # only canonical file values and exact-uppercase runtime overrides.
+    for key in tuple(child_env):
+        if key.casefold() in DATABASE_CONFIG_KEY_CASEFOLDS:
+            child_env.pop(key)
     child_env.update(config)
     child_env["ATLAS_OPS_INTERNAL_DB_INSPECTION"] = "1"
     return child_env

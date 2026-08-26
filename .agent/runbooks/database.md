@@ -122,8 +122,9 @@ break-glass path.
    Set `SERVICE_ENV_FILES` to the absolute `EnvironmentFiles` paths printed by
    `./ops env systemd`, joined with `:` in that same order. Use this shell-local
    helper for every fixed inspection in this cutover. It selects the service's
-   configuration without printing values and removes ad hoc Atlas database
-   variables that would otherwise override those files:
+   configuration without printing values. The inspector also removes every
+   case variant of known Atlas database settings, so an inherited lower- or
+   mixed-case alias cannot override those files:
 
    ```bash
    SERVICE_ENV_FILES='/absolute/first.service.env:/absolute/second.service.env'

@@ -14,6 +14,15 @@ The same recovery reported raw `missing_source` and `mismatched` evidence even
 when matching, attested reconciliations admit a pending migration. The runbook
 incorrectly said that admissible state could contain no `missing_source`.
 
+This PR intentionally exceeds the normal diff budget because the configuration
+and caller seams, deployment cutover/rollback procedure, and plan evidence are
+one deployment-safety boundary. The migration-integrity correction must ship
+with that same restart procedure: `atlas-api` startup runs migration checks,
+and the former guidance stopped an operator on a raw `missing_source` state
+that the runtime admits when matching current attestation exists. Splitting
+either side would publish the socket transition without its proof/rollback or
+leave its restart procedure with contradictory integrity instructions.
+
 ### Problem-derived contract
 
 #### Root cause
@@ -23,6 +32,10 @@ incorrectly said that admissible state could contain no `missing_source`.
   inspection call it rather than `DatabaseConfig.dsn`.
 - A bare fixed inspection can select a worktree `.env` instead of the
   service's `EnvironmentFiles`, even when the worktree omits database keys.
+- `DatabaseConfig` resolves environment names case-insensitively, but `ops`
+  previously removed only canonical uppercase database keys. A lower- or
+  mixed-case inherited alias could therefore override the selected service
+  configuration in the inspector subprocess.
 - A socket target label omits its configured port even though the port selects
   the socket filename and the migration receipt confirms that label exactly.
 - A successful service or inspector connection is not socket proof while a
@@ -61,12 +74,17 @@ incorrectly said that admissible state could contain no `missing_source`.
    the service. The procedure must stop on unresolved or remaining loopback TCP
    clients and prove the loaded peer map has exactly the intended mapping. The fixed
    inspection must explicitly select the ordered `atlas-api.service`
-   `EnvironmentFiles` while excluding ad hoc `ATLAS_DB_*` overrides.
+   `EnvironmentFiles` while excluding every case variant of ad hoc known
+   `ATLAS_DB_*` overrides.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
 5. Exclude the unviable encrypted-credential experiment from this PR; it would
    require an unsupported plaintext-secret fallback.
+6. Update `ops` to admit only canonical uppercase runtime database overrides,
+   remove every case-insensitive known-database-key alias before its inspection
+   child constructs `DatabaseConfig`, and add a regression that proves the
+   selected service file wins in that child.
 
 #### Explicit non-scope
 
@@ -95,7 +113,8 @@ incorrectly said that admissible state could contain no `missing_source`.
   assertions, and the pool/raw caller seam.
 - Adjacent configuration-context regression: a worktree file remains the
   default inspector context, while an ordered `ATLAS_OPS_ENV_FILES` override
-  selects the intended service configuration.
+  selects the intended service configuration and lower/mixed-case inherited
+  database aliases cannot supersede it in the inspection child.
 - Cheap local gates: focused test target, `bash scripts/check_ascii_python.sh`,
   `git diff --check`, and `python scripts/sync_pr_plan.py ... --check`.
 - GitHub remains the complete unit gate.
@@ -120,7 +139,7 @@ incorrectly said that admissible state could contain no `missing_source`.
 
 Ownership lane: eom-crm/runtime-security
 Slice phase: production hardening
-Max files: 5
+Max files: 7
 
 ### Review contract
 
@@ -131,7 +150,9 @@ Max files: 5
   2. Complete DSNs retain their precedence; non-socket split settings retain
      existing TCP kwargs.
   3. `DatabasePool` and fixed `./ops db inspect` inherit the corrected path
-     because both already call `connection_kwargs()`.
+     because both already call `connection_kwargs()`, and the fixed inspector
+     admits only selected service values or exact-uppercase runtime database
+     overrides rather than case-variant inherited aliases.
   4. The operational procedure rejects an overriding complete DSN, authenticates
      the specific service OS account as `atlas` over the Unix socket before
      removing loopback `trust`, proves the exclusive loaded identity map, gives
@@ -164,8 +185,9 @@ Max files: 5
   - The socket target label includes that port, so confirmation cannot conflate
     same-directory, same-database clusters on distinct ports.
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
-    order, and removes ad hoc `ATLAS_DB_*` values before it constructs
-    `DatabaseConfig`.
+    order, and removes every case variant of known `ATLAS_DB_*` values before
+    it constructs `DatabaseConfig`; exact-uppercase runtime keys preserve the
+    documented override behavior.
   - The cutover reconciles every client observed in both initial and final
     loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
     receipt, requires no remaining final client, and requires an exact loaded
@@ -214,13 +236,22 @@ Max files: 5
   systemd`. An absent, unreadable, or unlisted effective configuration file
   stops fixed inspection and HBA mutation, the safer side over inspecting or
   changing a guessed database target.
+- **Database environment-key aliases — CLOSED / DERIVED for fixed inspection.**
+  Membership is the canonical `DATABASE_CONFIG_KEYS` set in `ops`; its
+  case-folded form is derived from that set. An exact-uppercase environment key
+  is the only inherited database override admitted. Every lower- or mixed-case
+  matching alias is removed before `DatabaseConfig` loads the child environment,
+  while unrelated keys remain unchanged; this fails closed against inspecting a
+  shadowed target.
 
 ### Files touched
 
 - `.agent/runbooks/database.md`
 - `atlas_brain/storage/config.py`
 - `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md`
+- `ops`
 - `plans/PR-Postgres-Loopback-Scram-Hardening.md`
+- `tests/test_agent_operations_contract.py`
 - `tests/test_eom_render_profile.py`
 
 ## Mechanism
@@ -231,9 +262,9 @@ as `atlas` over peer. The map/rule are proved while TCP remains available;
 only then do all loopback `trust` entries become `scram-sha-256`.
 
 The fixed inspector keeps its existing source-selection semantics. The runbook
-uses its documented explicit environment-file override, in the exact service
-order and without inherited database settings, so the read-only proof observes
-the same database target as `atlas-api.service`.
+uses its documented explicit environment-file override in the exact service
+order; `ops` discards case-insensitive aliases for known database settings, so
+the read-only proof observes the same database target as `atlas-api.service`.
 
 The migration-runbook change is documentation only: raw discrepancies stay
 visible and retain their forensic nonzero status.
@@ -244,8 +275,10 @@ visible and retain their forensic nonzero status.
   non-loopback access remain unchanged.
 - `ops` already carries `ATLAS_DB_SOCKET_PATH`; CRM read is production proof,
   not a feature.
-- `ops` context-selection code remains unchanged; the cutover invokes its
-  existing explicit override rather than changing normal worktree behavior.
+- `ops` context-selection precedence remains unchanged; the cutover invokes
+  its existing explicit override, while its inspection child now strips
+  case-variant inherited database aliases rather than changing normal worktree
+  selection behavior.
 
 ## Deferred
 
@@ -267,6 +300,9 @@ blocks the socket-peer path.
   'database_file_context_prefers_worktree_over_shared_and_systemd or
   database_file_context_honors_explicit_override_order'` — 2 passed, 39
   deselected (local).
+- `./ops test focused tests/test_agent_operations_contract.py -q -k
+  'database_runtime_environment'` — 2 passed, 40 deselected (local); proves
+  both the canonical override and case-variant rejection boundaries.
 - `bash scripts/check_ascii_python.sh` — passed (local).
 - `git diff --check` — passed (local).
 - `python scripts/sync_pr_plan.py
@@ -288,17 +324,16 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 400 |
+| `.agent/runbooks/database.md` | 401 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 304 |
+| `ops` | 10 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 339 |
+| `tests/test_agent_operations_contract.py` | 36 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **796** |
+| **Total** | **878** |
 
 ## Diff budget
 
-Diff-budget override: the socket construction, caller-seam evidence, exact
-target identity, and staged peer/SCRAM procedure are one deployment-safety
-boundary; splitting them would publish either executable configuration without
-its safe cutover/rollback proof or a procedure that refers to unavailable
-behavior.
+The complete over-budget rationale is in **Why this slice exists**. This
+footer is retained only as the plan's diff-budget marker.
