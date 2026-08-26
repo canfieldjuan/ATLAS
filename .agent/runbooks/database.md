@@ -327,9 +327,19 @@ break-glass path.
      ' "$1"
    }
    service_db_require_canonical_keys() {
+     if [ -z "$SERVICE_ENV_FILES" ]; then
+       printf '%s\n' 'no service EnvironmentFiles selected; do not inspect a fallback context' >&2
+       return 1
+     fi
      saw_service_env=0
      while IFS= read -r service_env_file; do
-       [ -n "$service_env_file" ] || continue
+       case "$service_env_file" in
+         /*) ;;
+         *)
+           printf '%s\n' 'service EnvironmentFile must be a nonempty absolute path; do not inspect it' >&2
+           return 1
+           ;;
+       esac
        saw_service_env=1
        if ! sudo test -r "$service_env_file"; then
          printf '%s\n' 'service EnvironmentFile is unreadable; do not inspect it' >&2
@@ -368,6 +378,14 @@ break-glass path.
      done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
    }
    service_db_require_effective_env_file() {
+     service_db_require_canonical_keys || return 1
+     case "$EFFECTIVE_DB_ENV_FILE" in
+       /*) ;;
+       *)
+         printf '%s\n' 'effective database environment file must be a nonempty absolute path' >&2
+         return 1
+         ;;
+     esac
      case ":$SERVICE_ENV_FILES:" in
        *":$EFFECTIVE_DB_ENV_FILE:"*) ;;
        *) printf '%s\n' 'effective database environment file is not a service EnvironmentFile' >&2; return 1 ;;

@@ -118,6 +118,11 @@ leave its restart procedure with contradictory integrity instructions.
   configured connection and command timeouts, although the prior `create_pool`
   call omitted both options; a long-running existing rebuild can therefore fail
   solely from this transport refactor.
+- The colon-delimited service environment-file list silently skips empty
+  members, while the effective-target sentinel treats an empty derived final
+  member as present. A trailing delimiter can therefore pass pre-mutation
+  admission, fail only at `sudoedit`, and block the rollback before it restores
+  authentication files.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
@@ -164,9 +169,10 @@ leave its restart procedure with contradictory integrity instructions.
    query must define its own derived loopback-coverage relation before it
    consumes that relation.
    The effective environment file must be derived from the ordered selected
-   service-file list and have its membership validated by the same pre-mutation
-   gate and rollback path; no manual file selection may occur after
-   authentication edits.
+   service-file list and have its nonempty absolute-path form and membership
+   validated by the same pre-mutation gate and rollback path. Every selected
+   list member must also be nonempty and absolute; no manual file selection may
+   occur after authentication edits.
    The loaded peer receipt must also require exactly one intended local HBA rule
    and no preceding local rule except the retained `postgres` recovery rule.
    It must require at least one qualifying post-restart `atlas` backend and a
@@ -253,7 +259,9 @@ leave its restart procedure with contradictory integrity instructions.
   configuration-admission command precedes the first HBA backup, and prove each
   final HBA receipt independently defines `covers_loopback`.
 - It must also prove the derived effective file passes only when it belongs to
-  the ordered selected service-file list and stops before the gate otherwise.
+  the ordered selected service-file list and stops before the gate otherwise,
+  including when a leading, middle, or trailing delimiter creates an empty
+  member or a relative member appears in the list.
 - Monitor regressions must prove both default-socket selection and preserved
   explicit-override selection, including hostile inherited `PG*` settings, and
   the runbook guard must reject service and user-manager DSN and executable
@@ -317,8 +325,8 @@ Max files: 12
      socket path or a nonblank complete DSN, so rollback removes only an
      assignment created by this cutover. Each final HBA receipt is independently
      executable with its own loopback-coverage relation, and the effective
-     environment file is derived and membership-checked before any authentication
-     mutation.
+     environment file is derived and its nonempty absolute form and membership
+     are checked before any authentication mutation.
   5. The migration runbook accurately distinguishes raw forensic output from
      attested admission without changing runner behavior.
 - Reachability proof: `atlas_brain/storage/database.py` initializes the pool
@@ -367,9 +375,10 @@ Max files: 12
     comment-only assignments remain admissible; a literal or expansion-shaped
     value requires a separate configuration migration.
   - The effective environment-file target is derived as the final selected
-    service file and must remain a member of that exact ordered list before
-    either the new-socket gate or rollback proceeds; an unlisted target stops
-    rather than creating a stray assignment.
+   service file and must be a nonempty absolute member of that exact ordered
+   list before either the new-socket gate or rollback proceeds; a leading,
+   middle, or trailing empty member, relative member, or unlisted target stops
+   rather than creating a stray assignment.
   - Before fixed inspection or an edit, every selected service file must be
     readable, the selected set must be nonempty, and all `ATLAS_DB_*` keys must
     be canonical uppercase. This makes the `ops` configuration parser and the
@@ -460,12 +469,12 @@ Max files: 12
   least one member and null `client_addr` for every member; any TCP member or an
   empty set stops the cutover.
 - **Service environment-file list — CLOSED / DERIVED for the selected service
-  unit.** Membership is the ordered `EnvironmentFiles` output of `./ops env
-  systemd`. The effective target is derived from the final member, then the
-  same membership predicate gates new-socket admission and rollback. An absent,
-  unreadable, or unlisted effective configuration file stops fixed inspection
-  and HBA mutation, the safer side over inspecting or changing a guessed
-  database target.
+  unit.** Membership is the ordered, nonempty absolute `EnvironmentFiles`
+  output of `./ops env systemd`. The effective target is derived from the final
+  member, then the same list validation and membership predicate gate new-socket
+  admission and rollback. An empty, relative, absent, unreadable, or unlisted
+  effective configuration file stops fixed inspection and HBA mutation, the
+  safer side over inspecting or changing a guessed database target.
 - **Pre-existing socket-path assignments — CLOSED / DERIVED before cutover.**
   Membership is every case-variant assignment matching `ATLAS_DB_SOCKET_PATH`
   in the ordered selected `EnvironmentFiles`. The only admitted set is empty;
@@ -537,8 +546,10 @@ only then do all loopback `trust` entries become `scram-sha-256`.
 
 The fixed inspector keeps its existing source-selection semantics. The runbook
 uses its documented explicit environment-file override in the exact service
-order; `ops` discards case-insensitive aliases for known database settings, so
-the read-only proof observes the same database target as `atlas-api.service`.
+order; it validates every selected member and the derived final target as a
+nonempty absolute path before either admission or rollback, and `ops` discards
+case-insensitive aliases for known database settings, so the read-only proof
+observes the same database target as `atlas-api.service`.
 
 The independent EOM audit monitor gains a source-owned passwordless socket
 default without importing or depending on `atlas-api`. The cutover first
@@ -590,11 +601,12 @@ blocks the socket-peer path.
 
 - `./ops test focused tests/test_eom_write_boundary_audit.py
   tests/test_agent_operations_contract.py tests/test_eom_render_profile.py -q`
-  — 197 passed, 2 skipped (local). This covers the source-owned default versus
+  — 203 passed, 2 skipped (local). This covers the source-owned default versus
   explicit TLS/libpq behavior, exact timer argv and service/user-manager
   executable-override boundaries, readable and unreadable source-stage inputs,
-  post-peer source staging and rollback restoration, and both typed maintenance
-  caller seams.
+  post-peer source staging and rollback restoration, nonempty absolute
+  service-environment list members and rollback-before-edit, and both typed
+  maintenance caller seams.
 - `bash scripts/check_ascii_python.sh` — passed (local).
 - `python scripts/check_guard_class_closure.py --base origin/main --strict` —
   passed (local advisory guard-closure lint).
@@ -631,19 +643,19 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 793 |
+| `.agent/runbooks/database.md` | 811 |
 | `atlas_brain/storage/config.py` | 13 |
 | `config/eom-write-boundary-audit.service` | 2 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 651 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 663 |
 | `scripts/backfill_community_buying_stage_defaults.py` | 8 |
 | `scripts/eom_write_boundary_audit.py` | 59 |
 | `scripts/rebuild_blog_charts.py` | 16 |
-| `tests/test_agent_operations_contract.py` | 795 |
+| `tests/test_agent_operations_contract.py` | 888 |
 | `tests/test_eom_render_profile.py` | 122 |
 | `tests/test_eom_write_boundary_audit.py` | 112 |
-| **Total** | **2606** |
+| **Total** | **2729** |
 
 ## Diff budget
 

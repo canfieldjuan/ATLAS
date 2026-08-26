@@ -246,7 +246,11 @@ def test_service_db_effective_env_file_must_be_selected_before_cutover(
 
     result = _run_runbook_function(
         runbook,
-        ("service_db_require_effective_env_file",),
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_require_effective_env_file",
+        ),
         service_env_files=str(selected_env_file),
         shell_stubs=(f"EFFECTIVE_DB_ENV_FILE={str(effective_env_file)!r}",),
     )
@@ -254,6 +258,60 @@ def test_service_db_effective_env_file_must_be_selected_before_cutover(
     assert result.returncode == expected_returncode
     if not effective_is_selected:
         assert "effective database environment file is not a service EnvironmentFile" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("list_shape", "expected_error"),
+    (
+        ("valid", None),
+        ("trailing_empty", "service EnvironmentFile must be a nonempty absolute path"),
+        ("leading_empty", "service EnvironmentFile must be a nonempty absolute path"),
+        ("middle_empty", "service EnvironmentFile must be a nonempty absolute path"),
+        ("relative", "service EnvironmentFile must be a nonempty absolute path"),
+    ),
+)
+def test_service_db_effective_env_file_rejects_empty_or_relative_list_members(
+    tmp_path: Path,
+    list_shape: str,
+    expected_error: str | None,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    first = tmp_path / "first.env"
+    second = tmp_path / "second.env"
+    first.write_text("ATLAS_DB_HOST=first.example\n", encoding="utf-8")
+    second.write_text("ATLAS_DB_HOST=second.example\n", encoding="utf-8")
+
+    if list_shape == "valid":
+        service_env_files = str(first)
+        effective_env_file = str(first)
+    elif list_shape == "trailing_empty":
+        service_env_files = f"{first}:"
+        effective_env_file = ""
+    elif list_shape == "leading_empty":
+        service_env_files = f":{first}"
+        effective_env_file = str(first)
+    elif list_shape == "middle_empty":
+        service_env_files = f"{first}::{second}"
+        effective_env_file = str(second)
+    else:
+        assert list_shape == "relative"
+        service_env_files = "relative.env"
+        effective_env_file = "relative.env"
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_require_effective_env_file",
+        ),
+        service_env_files=service_env_files,
+        shell_stubs=(f"EFFECTIVE_DB_ENV_FILE={effective_env_file!r}",),
+    )
+
+    assert result.returncode == (0 if expected_error is None else 1)
+    if expected_error is not None:
+        assert expected_error in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -745,6 +803,41 @@ def test_rollback_refuses_a_surviving_socket_assignment_before_hba_restore(
     assert result.returncode == 1
     assert "ATLAS_DB_SOCKET_PATH assignment remains" in result.stderr
     assert "unexpected env invocation" not in result.stderr
+
+
+def test_rollback_rejects_empty_environment_file_members_before_sudoedit(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text("ATLAS_DB_HOST=canonical.example\n", encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_require_effective_env_file",
+            "eom_audit_restore_pre_peer_source",
+            "rollback_peer_cutover",
+        ),
+        service_env_files=f"{env_file}:",
+        shell_stubs=(
+            "sudoedit() { printf '%s\\n' 'unexpected sudoedit' >&2; return 99; }",
+            (
+                "sudo() { "
+                "if [ \"$1\" = 'cp' ]; then printf '%s\\n' 'unexpected HBA restore' >&2; return 99; fi; "
+                "\"$@\"; "
+                "}"
+            ),
+            "EFFECTIVE_DB_ENV_FILE=''",
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "service EnvironmentFile must be a nonempty absolute path" in result.stderr
+    assert "unexpected sudoedit" not in result.stderr
+    assert "unexpected HBA restore" not in result.stderr
 
 
 def test_rollback_refuses_an_hba_source_mismatch_before_service_restart(
