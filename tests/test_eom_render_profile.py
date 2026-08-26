@@ -960,6 +960,29 @@ def test_database_config_uses_socket_path_for_dsn_and_asyncpg_kwargs():
     assert same_socket_other_port.target_label != config.target_label
 
 
+def test_database_config_percent_encodes_socket_path_in_dsn_query():
+    from urllib.parse import parse_qs, urlsplit
+
+    from atlas_brain.storage.config import DatabaseConfig
+
+    socket_path = "/tmp/atlas&cluster?primary"
+    config = DatabaseConfig(
+        connection_string="",
+        port=6543,
+        database="atlas_prod",
+        user="atlas_user",
+        password="atlas_pass",
+        socket_path=socket_path,
+    )
+
+    assert config.dsn == (
+        "postgresql://atlas_user:atlas_pass@/atlas_prod"
+        "?host=/tmp/atlas%26cluster%3Fprimary&port=6543"
+    )
+    assert parse_qs(urlsplit(config.dsn).query)["host"] == [socket_path]
+    assert config.connection_kwargs()["host"] == socket_path
+
+
 def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
     from atlas_brain.storage.config import DatabaseConfig
     from atlas_brain.storage import database

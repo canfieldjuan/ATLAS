@@ -5,7 +5,7 @@ Configuration is loaded from environment variables with sensible defaults.
 """
 
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -83,7 +83,7 @@ class DatabaseConfig(BaseSettings):
             # Unix socket connection (lowest latency)
             return (
                 f"postgresql://{self.user}:{self.password}@/{self.database}"
-                f"?host={self.socket_path}&port={self.port}"
+                f"?host={quote(self.socket_path, safe='/')}&port={self.port}"
             )
         else:
             # TCP connection

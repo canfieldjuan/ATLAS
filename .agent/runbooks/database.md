@@ -92,10 +92,22 @@ break-glass path.
       WHERE map_name = 'atlas_app' \
       ORDER BY line_number;"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
-     "SELECT type, database, user_name, address, netmask, auth_method \
+     "SELECT rule_number, file_name, line_number, type, database, user_name, \
+             address, netmask, auth_method \
       FROM pg_hba_file_rules \
       WHERE auth_method = 'trust' \
-      ORDER BY line_number;"
+      ORDER BY rule_number;"
+   if [ "$(sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT count(*) FILTER (WHERE auth_method = 'trust'), \
+             count(*) FILTER ( \
+               WHERE auth_method = 'trust' \
+                 AND file_name IS DISTINCT FROM '/etc/postgresql/16/main/pg_hba.conf' \
+             ), \
+             count(*) FILTER (WHERE error IS NOT NULL) \
+      FROM pg_hba_file_rules;")" != '4|0|0' ]; then
+     printf '%s\n' 'trust HBA source receipt was not 4|0|0; do not edit the top-level file' >&2
+     exit 1
+   fi
    ```
 
    Record every row from those two inventory queries in the cutover record as
@@ -115,9 +127,12 @@ break-glass path.
    the map/rules from the returned topology rather than copying these values
    blindly. The final query must show exactly four `host` trust rows: two
    `{all}` application rows and two `{replication}` rows, one for each of
-   `127.0.0.1` and `::1`. Stop if any other trust row exists; this runbook does
-   not generalize a different HBA topology. The `atlas_app` identity-map query
-   must return no rows before editing: do not reuse a pre-existing map name.
+   `127.0.0.1` and `::1`. The immediately preceding HBA source receipt must be
+   `4|0|0`: four trust rows, none sourced outside
+   `/etc/postgresql/16/main/pg_hba.conf`, and no parser error. Stop if any
+   value differs; this runbook does not generalize a different HBA topology or
+   edit an included HBA file. The `atlas_app` identity-map query must return no
+   rows before editing: do not reuse a pre-existing map name.
 
    Set `SERVICE_ENV_FILES` to the absolute `EnvironmentFiles` paths printed by
    `./ops env systemd`, joined with `:` in that same order. Use this shell-local
@@ -216,7 +231,9 @@ break-glass path.
    no readable `EnvironmentFiles`, stop rather than substituting a worktree or
    shared configuration.
 
-2. Preserve only the two PostgreSQL authentication files before editing them:
+2. The source receipt above proves every loopback `trust` rule this procedure
+   will replace lives in the top-level HBA file, so preserve only the two
+   PostgreSQL authentication files before editing them:
 
    ```bash
    if sudo test -e /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer \
@@ -348,8 +365,8 @@ break-glass path.
      sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_ident.conf.pre-atlas-peer \
        /etc/postgresql/16/main/pg_ident.conf || return 1
      sudo systemctl reload postgresql@16-main || return 1
-     if [ "$(sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c 'SELECT count(*) FILTER (WHERE auth_method = '\''trust'\''), count(*) FILTER (WHERE error IS NOT NULL) FROM pg_hba_file_rules;')" != '4|0' ]; then
-       printf '%s\n' 'restored HBA receipt was not 4|0; do not restart atlas-api' >&2
+     if [ "$(sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c 'SELECT count(*) FILTER (WHERE auth_method = '\''trust'\''), count(*) FILTER (WHERE auth_method = '\''trust'\'' AND file_name IS DISTINCT FROM '\''/etc/postgresql/16/main/pg_hba.conf'\''), count(*) FILTER (WHERE error IS NOT NULL) FROM pg_hba_file_rules;')" != '4|0|0' ]; then
+       printf '%s\n' 'restored HBA receipt was not 4|0|0; do not restart atlas-api' >&2
        return 1
      fi
      systemctl --user restart atlas-api.service || return 1
@@ -380,6 +397,19 @@ break-glass path.
         AND datname = 'atlas' \
         AND backend_type = 'client backend' \
       ORDER BY backend_start;"
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "WITH atlas_backends AS ( \
+        SELECT client_addr \
+        FROM pg_stat_activity \
+        WHERE usename = 'atlas' \
+          AND datname = 'atlas' \
+          AND backend_type = 'client backend' \
+      ) \
+      SELECT \
+        CASE WHEN count(*) > 0 THEN 1 ELSE 0 END, \
+        CASE WHEN count(*) FILTER (WHERE client_addr IS NULL) = count(*) \
+          THEN 1 ELSE 0 END \
+      FROM atlas_backends;"
    service_db_inspect
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
      "SELECT application_name, usename, client_addr, state \
@@ -391,13 +421,15 @@ break-glass path.
       WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
    ```
 
-   At least one backend with a `backend_start` after the just-issued service
-   restart must show `<unix>` for `client_addr`; compare the rows with the
-   loopback clients from step 1 and stop if the service's backend cannot be
-   identified as a Unix socket connection. The fixed inspection must also
-   succeed only after that transport proof. If any proof fails, remove only the
-   exact non-secret setting just added, restore the two saved PostgreSQL files,
-   reload PostgreSQL, and restart `atlas-api.service`.
+   The immediate transport receipt must return `1|1`: the CRM read created at
+   least one qualifying `atlas`/`atlas` client backend, and every qualifying
+   backend has a null `client_addr` (a Unix socket). Do not accept one socket
+   row while another qualifying backend is TCP; that would not prove the
+   restarted application uses the socket. Compare the rows with the loopback
+   clients from step 1. The fixed inspection must also succeed only after that
+   transport proof. If any proof fails, remove only the exact non-secret setting
+   just added, restore the two saved PostgreSQL files, reload PostgreSQL, and
+   restart `atlas-api.service`.
 
    Record those two later queries as the **final loopback-client inventory**.
    Before step 4, reconcile every client identity in the union of the initial
@@ -510,19 +542,24 @@ break-glass path.
             ) \
         ) AS unexpected_loopback_host_rules, \
         count(*) FILTER (WHERE auth_method = 'trust') AS remaining_trust_rules, \
-        count(*) FILTER (WHERE error IS NOT NULL) AS hba_errors \
+        count(*) FILTER (WHERE error IS NOT NULL) AS hba_errors, \
+        count(*) FILTER ( \
+          WHERE type <> 'local' \
+            AND covers_loopback \
+            AND file_name IS DISTINCT FROM '/etc/postgresql/16/main/pg_hba.conf' \
+        ) AS loopback_rules_outside_backup \
       FROM pg_hba_file_rules;"
    ```
 
    The first query must return `4`: it derives every non-local HBA rule whose
    network can cover either loopback endpoint. This count fails closed for a
    broader subnet, `hostssl`/other host type, an unparseable address form, or a
-   family mismatch. The second query must return `1|1|1|1|0|0|0`: one exact
+   family mismatch. The second query must return `1|1|1|1|0|0|0|0`: one exact
    application IPv4 rule, one exact application IPv6 rule, one exact replication
    IPv4 rule, one exact replication IPv6 rule, no unexpected endpoint-equal host
-   rule, no trust rule, and no parser error. If either receipt differs, do not
-   proceed: run
-   `rollback_peer_cutover` immediately so the restored HBA/ident files are
+   rule, no trust rule, no parser error, and no loopback rule sourced outside
+   the backed-up top-level HBA file. If either receipt differs, do not proceed:
+   run `rollback_peer_cutover` immediately so the restored HBA/ident files are
    reloaded before the procedure stops. Then repeat the service,
    `service_db_inspect`, and authenticated CRM proofs from step 3.
 
@@ -547,7 +584,7 @@ break-glass path.
 6. `rollback_peer_cutover` is mandatory when the loaded-HBA receipt, the
    passwordless TCP probe, or any later proof fails after HBA conversion. It
    removes only the added socket setting through `sudoedit`, restores and
-   reloads HBA/ident, proves the restored `4|0` HBA receipt, then restarts
+   reloads HBA/ident, proves the restored `4|0|0` HBA receipt, then restarts
    `atlas-api.service` and re-runs fixed inspection. After it succeeds, re-run
    the CRM read before declaring rollback complete. Do not edit roles,
    passwords, migration ledger rows, or database data as part of rollback.

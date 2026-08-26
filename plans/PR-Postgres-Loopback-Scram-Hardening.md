@@ -54,8 +54,17 @@ leave its restart procedure with contradictory integrity instructions.
   could therefore override the selected service configuration in its subprocess.
 - A socket target label omits its configured port even though the port selects
   the socket filename and the migration receipt confirms that label exactly.
+- A socket path is interpolated raw into the direct-DSN query string while the
+  pool path passes it as a raw asyncpg host, so URI delimiters can make the two
+  supported connection forms select different targets.
 - A successful service or inspector connection is not socket proof while a
   complete DSN retains deliberate precedence over split configuration.
+- The transport receipt accepts one socket connection among all qualifying
+  `atlas`/`atlas` backends, so it can pass while another qualifying backend
+  remains on TCP.
+- The HBA procedure backs up only the top-level file but did not prove the
+  loopback rules it edits originate there; an included source could survive
+  rollback.
 - A final-only loopback-client inventory can lose a client observed at preflight
   before it is proved Unix-socket or SCRAM-ready, and a peer-map insertion
   without an exact loaded-map receipt can retain a broader OS-account
@@ -72,6 +81,8 @@ leave its restart procedure with contradictory integrity instructions.
    forms and its log-safe target label honour `socket_path` and the configured
    PostgreSQL port:
    - `dsn` includes the socket host and port for direct asyncpg callers.
+   - The socket-host query value is URI-encoded so its decoded value remains
+     identical to the asyncpg keyword host for delimiter-containing paths.
    - `connection_kwargs()` uses the socket directory as `host`, retaining the
      configured port, so `DatabasePool` and `./ops db inspect` reach the Unix
      socket rather than loopback TCP.
@@ -79,8 +90,9 @@ leave its restart procedure with contradictory integrity instructions.
      distinguishes same-directory, same-database PostgreSQL clusters.
 2. Update focused `DatabaseConfig` tests in
    `tests/test_eom_render_profile.py` to pin both socket-path forms, distinct
-   socket ports, and the existing TCP/complete-DSN precedence behavior, then
-   assert the actual pool and raw-connection callers receive the socket kwargs.
+   socket ports, a delimiter-containing socket path, and the existing
+   TCP/complete-DSN precedence behavior, then assert the actual pool and
+   raw-connection callers receive the socket kwargs.
 3. Replace the provisional credential/SCRAM procedure with non-secret socket
    configuration, an exact `atlas-api` OS-user → `atlas` peer map, staged
    service/CRM/backend-transport/inspection proof, reconciled initial/final
@@ -103,6 +115,10 @@ leave its restart procedure with contradictory integrity instructions.
    spacing variants, before rollback restores HBA/identity configuration.
    The loaded peer receipt must also require exactly one intended local HBA rule
    and no preceding local rule except the retained `postgres` recovery rule.
+   It must require at least one qualifying post-restart `atlas` backend and a
+   null `client_addr` for every such backend before trust removal, and it must
+   stop before mutation unless every loopback trust rule is sourced from the
+   one top-level HBA file that rollback backs up and restores.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
@@ -138,8 +154,9 @@ leave its restart procedure with contradictory integrity instructions.
 #### Verification plan
 
 - Focused regression: socket `dsn` and `connection_kwargs()` assertions,
-  distinct socket target-label assertions, existing TCP and complete-DSN
-  assertions, and the pool/raw caller seam.
+  including a delimiter-containing socket path, distinct socket target-label
+  assertions, existing TCP and complete-DSN assertions, and the pool/raw caller
+  seam.
 - Adjacent configuration-context regression: a worktree file remains the
   default inspector context, while an ordered `ATLAS_OPS_ENV_FILES` override
   selects the intended service configuration and lower/mixed-case inherited
@@ -152,16 +169,18 @@ leave its restart procedure with contradictory integrity instructions.
 - Post-merge proof while existing TCP trust remains: deploy source; configure
   `ATLAS_DB_SOCKET_PATH` only when no complete DSN overrides it; add/reload the
   exact identity map and specific peer HBA rule; restart `atlas-api`; prove
-  health, an authenticated EOM CRM read, the application's Unix-socket backend,
+  health, an authenticated EOM CRM read, every qualifying application's
+  Unix-socket backend,
   fixed inspection selected from the service `EnvironmentFiles`, the exclusive
   loaded identity map, a Unix-socket or separately verified SCRAM receipt for
   every client observed in either inventory, and no remaining loopback TCP or
   replication client.
 - Only then replace every loopback TCP `trust` rule with `scram-sha-256`,
   reload PostgreSQL, prove the derived loopback-network receipt is `4` and the
-  exact loaded-HBA result is `1|1|1|1|0|0|0` (one exact application IPv4,
+  exact loaded-HBA result is `1|1|1|1|0|0|0|0` (one exact application IPv4,
   application IPv6, replication IPv4, and replication IPv6 SCRAM tuple; zero
-  unexpected endpoint-equal host rules, trust rows, and parser errors), repeat
+  unexpected endpoint-equal host rules, trust rows, parser errors, and
+  loopback rules outside the backed-up top-level source), repeat
   the proofs, prove passwordless TCP rejection, and prove
   `sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc 'SELECT
   current_user'` succeeds.
@@ -176,8 +195,9 @@ Max files: 7
 
 - Acceptance criteria:
   1. A configured socket path reaches the configured PostgreSQL socket port in
-     both `DatabaseConfig.dsn` and `connection_kwargs()`, and that port appears
-     in its log-safe exact-target label.
+     both `DatabaseConfig.dsn` and `connection_kwargs()`, URI delimiters round
+     trip identically through the DSN host query, and that port appears in its
+     log-safe exact-target label.
   2. Complete DSNs retain their precedence; non-socket split settings retain
      existing TCP kwargs.
   3. `DatabasePool` and fixed `./ops db inspect` inherit the corrected path
@@ -186,11 +206,13 @@ Max files: 7
      overrides rather than case-variant inherited aliases.
   4. The operational procedure rejects an overriding complete DSN, authenticates
      the specific service OS account as `atlas` over the Unix socket before
-     removing loopback `trust`, proves the exclusive loaded identity map, gives
+     removing loopback `trust`, proves the exclusive loaded identity map,
+     requires every qualifying post-restart backend to use a Unix socket, gives
      every initial/final loopback client a Unix-socket or verified-SCRAM receipt,
      leaves no TCP client, derives every loopback-covering HBA network rule,
      proves every exact tuple, retains `postgres` peer recovery, and reloads
-     restored TCP authentication before a rollback restart. It also stops before
+     restored TCP authentication before a rollback restart. It also proves every
+     loopback rule it edits is in the backed-up top-level HBA file, and stops before
      editing when any selected service file already assigns the socket path, so
      rollback removes only an assignment created by this cutover.
   5. The migration runbook accurately distinguishes raw forensic output from
@@ -215,6 +237,8 @@ Max files: 7
   - `connection_string` continues to win over split socket/TCP settings.
   - `socket_path` replaces only the host, retaining the configured port needed
     to select PostgreSQL's socket filename.
+  - A socket path containing URI delimiters is encoded only in `dsn`'s host
+    query value; asyncpg kwargs retain the original filesystem path.
   - The socket target label includes that port, so confirmation cannot conflate
     same-directory, same-database clusters on distinct ports.
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
@@ -239,12 +263,14 @@ Max files: 7
     before the intended rule.
   - The cutover reconciles every client observed in both initial and final
     loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
-    receipt, requires no remaining final client, and requires an exact loaded
+    receipt, requires every qualifying post-restart `atlas` backend to be a
+    Unix socket, requires no remaining final client, and requires an exact loaded
     `atlas_app | juan-canfield | atlas` identity map before HBA replacement.
   - The post-conversion HBA receipt derives every non-local rule whose network
     can cover either loopback endpoint, then requires one exact SCRAM tuple for
     each application/replication IPv4/IPv6 channel, no unexpected endpoint-equal
-    host rule, no remaining trust row, and no parser error before an IPv4-only
+    host rule, no remaining trust row, no parser error, and no loopback source
+    outside the backed-up file before an IPv4-only
     negative probe can be treated as sufficient.
   - Cutover order is peer proof before removal of any trust rule; rollback
     restores and reloads TCP authentication before restarting the application.
@@ -259,15 +285,18 @@ Max files: 7
   existing order; a nonblank DSN is outside the socket-proof-admissible subset
   and stops this cutover rather than allowing HBA mutation.
 - **Loopback HBA topology — CLOSED / DERIVED at cutover.** Membership comes
-  from every non-local live `pg_hba_file_rules` record on the declared socket
-  and port, not the four examples in this plan. A derived network predicate
+  from every non-local live `pg_hba_file_rules` record and its `file_name` on
+  the declared socket and port, not the four examples in this plan. A derived
+  network predicate
   includes an address/netmask rule when it can cover either loopback endpoint
   and treats null, unparseable, or family-mismatched forms as candidates. The
   procedure admits exactly four candidates, each one exact
   application/replication IPv4/IPv6 tuple with the declared user, netmask, and
   SCRAM method. A missing, duplicate, broader, TLS-specific, or unlisted rule
   fails closed to no HBA change because an unknown authentication path is less
-  safe than a deferred hardening run.
+  safe than a deferred hardening run. Before mutation, every trust rule must
+  come from the top-level source the procedure backs up; the post-conversion
+  receipt applies the same source check to every loopback rule.
 - **`atlas_app` peer-map membership — CLOSED / DERIVED at reload.** Membership
   comes from `pg_ident_file_mappings`; exactly one
   `atlas_app | juan-canfield | atlas` tuple and no mapping error is admitted.
@@ -280,6 +309,11 @@ Max files: 7
   client that disappears or newly appears, stops the cutover until it has a
   Unix-socket or separately verified SCRAM reconnect receipt; an empty final
   snapshot alone is not an admissible default.
+- **Post-restart Atlas transport — CLOSED / DERIVED before trust removal.**
+  Membership is every `pg_stat_activity` client backend for user/database
+  `atlas` after the authenticated CRM read. The only admitted receipt has at
+  least one member and null `client_addr` for every member; any TCP member or an
+  empty set stops the cutover.
 - **Service environment-file list — CLOSED / DERIVED for the selected service
   unit.** Membership is the ordered `EnvironmentFiles` output of `./ops env
   systemd`. An absent, unreadable, or unlisted effective configuration file
@@ -336,7 +370,8 @@ Max files: 7
 
 ## Mechanism
 
-`DatabaseConfig` now carries its existing socket path and port into asyncpg.
+`DatabaseConfig` now carries its existing socket path and port into asyncpg,
+encoding the direct-DSN host query without changing the raw asyncpg kwargs.
 No password is added: the post-merge identity map lets `atlas-api` authenticate
 as `atlas` over peer. The map/rule are proved while TCP remains available;
 only then do all loopback `trust` entries become `scram-sha-256`.
@@ -374,7 +409,7 @@ blocks the socket-peer path.
 ## Verification
 
 - `./ops test focused tests/test_eom_render_profile.py -q -k 'database_config
-  or database_pool_uses_configured_connection_kwargs'` — 4 passed, 61
+  or database_pool_uses_configured_connection_kwargs'` — 5 passed, 61
   deselected (local).
 - `./ops test focused tests/test_agent_operations_contract.py -q -k
   'database_file_context_prefers_worktree_over_shared_and_systemd or
@@ -383,13 +418,16 @@ blocks the socket-peer path.
 - `./ops test focused tests/test_agent_operations_contract.py -q -k
   'database_runtime_environment or service_db_inspect or
   service_db_case_variant_preflight or service_db_no_socket_guard or
-  rollback_refuses or peer_hba_receipt'` — 22 passed, 40 deselected (local);
+  rollback_refuses or peer_hba_receipt or qualifying_atlas_backends or
+  hba_sources'` — 25 passed, 40 deselected (local);
   proves the canonical override, case-variant rejection, complete key-set
   closure, the service-helper unset-set closure, socket/full-DSN alias and
   near-miss boundaries, empty-service-set rejection, a surviving spacing-variant
-  socket assignment cannot reach HBA restoration, and the loaded peer-HBA
-  receipt requires the intended rule/precedence predicate.
-- `./ops test focused tests/test_agent_operations_contract.py -q` — 62 passed
+  socket assignment cannot reach HBA restoration, the transport receipt requires
+  every qualifying Atlas backend to use the socket, the HBA source receipt gates
+  top-level backup/rollback, and the loaded peer-HBA receipt requires the
+  intended rule/precedence predicate.
+- `./ops test focused tests/test_agent_operations_contract.py -q` — 65 passed
   (local).
 - `bash scripts/check_ascii_python.sh` — passed (local).
 - `service_db_inspect`, canonical-key/no-socket, and rollback guard blocks
@@ -410,6 +448,9 @@ blocks the socket-peer path.
   `4|0`: four loopback-network candidates and zero unexpected candidates; a
   synthetic broader subnet, `hostssl` rule, and non-IP form each became a
   candidate while the current remote `/12` rule did not (local).
+- The read-only HBA source receipt returned `4|0|0`; the transport predicate
+  returned `socket_only|1|1` and `mixed|1|0` against synthetic socket-only and
+  mixed candidates (local).
 - Guarded `scripts/push_pr.sh` local PR review — passed; GitHub owns the full
   unit gate.
 - Post-merge: follow the exact peer-socket cutover/rollback procedure in
@@ -420,14 +461,14 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 509 |
-| `atlas_brain/storage/config.py` | 11 |
+| `.agent/runbooks/database.md` | 546 |
+| `atlas_brain/storage/config.py` | 13 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 435 |
-| `tests/test_agent_operations_contract.py` | 292 |
-| `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **1343** |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 476 |
+| `tests/test_agent_operations_contract.py` | 350 |
+| `tests/test_eom_render_profile.py` | 84 |
+| **Total** | **1504** |
 
 ## Diff budget
 

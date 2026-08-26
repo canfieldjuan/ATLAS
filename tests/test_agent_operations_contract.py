@@ -101,6 +101,28 @@ def test_peer_hba_receipt_requires_the_intended_first_applicable_rule() -> None:
     assert "0|1|1|0|1|0" in runbook
 
 
+def test_runbook_requires_all_qualifying_atlas_backends_to_use_the_socket() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    assert "WITH atlas_backends AS" in runbook
+    assert "CASE WHEN count(*) > 0 THEN 1 ELSE 0 END" in runbook
+    assert "count(*) FILTER (WHERE client_addr IS NULL) = count(*)" in runbook
+    assert "The immediate transport receipt must return `1|1`" in runbook
+    assert "At least one backend with a `backend_start`" not in runbook
+
+
+def test_runbook_refuses_hba_sources_outside_the_backed_up_file() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    top_level_hba = "/etc/postgresql/16/main/pg_hba.conf"
+    assert "SELECT rule_number, file_name, line_number, type" in runbook
+    assert f"file_name IS DISTINCT FROM '{top_level_hba}'" in runbook
+    assert "trust HBA source receipt was not 4|0|0" in runbook
+    assert "restored HBA receipt was not 4|0|0" in runbook
+    assert "1|1|1|1|0|0|0|0" in runbook
+    assert "loopback_rules_outside_backup" in runbook
+
+
 def _run_runbook_function(
     runbook: str,
     function_names: tuple[str, ...],
@@ -280,6 +302,42 @@ def test_rollback_refuses_a_surviving_socket_assignment_before_hba_restore(
     assert result.returncode == 1
     assert "ATLAS_DB_SOCKET_PATH assignment remains" in result.stderr
     assert "unexpected env invocation" not in result.stderr
+
+
+def test_rollback_refuses_an_hba_source_mismatch_before_service_restart(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text("ATLAS_DB_HOST=canonical.example\n", encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+            "rollback_peer_cutover",
+        ),
+        service_env_files=str(env_file),
+        shell_stubs=(
+            "sudoedit() { return 0; }",
+            (
+                "sudo() { "
+                "if [ \"$1\" = '-u' ]; then printf '%s\\n' '4|1|0'; return 0; fi; "
+                "if [ \"$1\" = 'cp' ] || [ \"$1\" = 'systemctl' ]; then return 0; fi; "
+                "\"$@\"; "
+                "}"
+            ),
+            "systemctl() { printf '%s\\n' 'unexpected user restart' >&2; return 99; }",
+            f"EFFECTIVE_DB_ENV_FILE={str(env_file)!r}",
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "restored HBA receipt was not 4|0|0" in result.stderr
+    assert "unexpected user restart" not in result.stderr
 
 
 @pytest.mark.parametrize(
