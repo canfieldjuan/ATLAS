@@ -67,12 +67,13 @@ authentication. The existing `postgres` Unix-socket peer rule remains the
 break-glass path.
 
 1. Revalidate the exact deployed source, service identity, PostgreSQL paths,
-   active local clients, and current health. Do not print `.env` values or a
+   active local clients, and current health. Record the service
+   `EnvironmentFiles` in their printed order. Do not print `.env` values or a
    database URL:
 
    ```bash
    ./ops deploy status
-   ./ops db inspect connectivity
+   ./ops env systemd
    id -un
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
      "SHOW hba_file; SHOW ident_file; SHOW unix_socket_directories;"
@@ -82,6 +83,11 @@ break-glass path.
       WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
      "SELECT count(*) FROM pg_stat_replication;"
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT type, address, netmask, auth_method \
+      FROM pg_hba_file_rules \
+      WHERE auth_method = 'trust' \
+      ORDER BY line_number;"
    ```
 
    For the current single-user deployment, the service account is
@@ -89,7 +95,37 @@ break-glass path.
    identity-map file is `/etc/postgresql/16/main/pg_ident.conf`, and the socket
    directory is `/var/run/postgresql`. Stop if the live results differ; derive
    the map/rules from the returned topology rather than copying these values
-   blindly.
+   blindly. The final query must show exactly four `host` trust rows: two for
+   `127.0.0.1` and two for `::1`, one application and one replication row for
+   each address. Stop if any other trust row exists; this runbook does not
+   generalize a different HBA topology.
+
+   Set `SERVICE_ENV_FILES` to the absolute `EnvironmentFiles` paths printed by
+   `./ops env systemd`, joined with `:` in that same order. Use this shell-local
+   helper for every fixed inspection in this cutover. It selects the service's
+   configuration without printing values and removes ad hoc Atlas database
+   variables that would otherwise override those files:
+
+   ```bash
+   SERVICE_ENV_FILES='/absolute/first.service.env:/absolute/second.service.env'
+   service_db_inspect() {
+     env -u ATLAS_DB_CONNECTION_STRING \
+       -u ATLAS_DB_HOST \
+       -u ATLAS_DB_PORT \
+       -u ATLAS_DB_DATABASE \
+       -u ATLAS_DB_USER \
+       -u ATLAS_DB_PASSWORD \
+       -u ATLAS_DB_SOCKET_PATH \
+       ATLAS_OPS_ENV_FILES="$SERVICE_ENV_FILES" \
+       ./ops db inspect connectivity
+   }
+   service_db_inspect
+   ```
+
+   Do not run a bare `./ops db inspect connectivity` in this procedure: a
+   worktree `.env` takes precedence over the service files. If the service has
+   no readable `EnvironmentFiles`, stop rather than substituting a worktree or
+   shared configuration.
 
 2. Preserve only the two PostgreSQL authentication files before editing them:
 
@@ -130,13 +166,15 @@ break-glass path.
    point, so a valid scoped peer rule can be proved without removing the
    existing path.
 
-3. In the shared application configuration read by `atlas-api.service`, use an
-   editor to verify that `ATLAS_DB_CONNECTION_STRING` is absent or empty. A
-   nonblank full DSN deliberately takes precedence over
-   `ATLAS_DB_SOCKET_PATH`, so this cutover must stop if one is effective. Do
-   not remove or rewrite a full DSN as part of this procedure; that needs a
-   separate configuration-migration slice. Then add exactly this non-secret
-   setting; do not copy or print the rest of the file:
+3. In the effective service configuration selected by `SERVICE_ENV_FILES`, use
+   `./ops env keys --file <each service file>` and an editor to identify the
+   final `ATLAS_DB_*` assignment in service-file order. Verify that the
+   effective `ATLAS_DB_CONNECTION_STRING` is absent or empty. A nonblank full
+   DSN deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this
+   cutover must stop if one is effective. Do not remove or rewrite a full DSN as
+   part of this procedure; that needs a separate configuration-migration slice.
+   Then add exactly this non-secret setting to the file that supplies the
+   effective database configuration; do not copy or print the rest of any file:
 
    ```text
    ATLAS_DB_SOCKET_PATH=/var/run/postgresql
@@ -165,7 +203,7 @@ break-glass path.
         AND datname = 'atlas' \
         AND backend_type = 'client backend' \
       ORDER BY backend_start;"
-   ./ops db inspect connectivity
+   service_db_inspect
    ```
 
    At least one backend with a `backend_start` after the just-issued service
@@ -186,8 +224,27 @@ break-glass path.
    host    replication     all             ::1/128                 scram-sha-256
    ```
 
-   Do not alter any non-loopback rule. Reload PostgreSQL and repeat the
-   service, fixed-inspection, and authenticated CRM proofs from step 3.
+   Do not alter any non-loopback rule. Reload PostgreSQL, then verify the
+   loaded rule set before repeating the service, fixed-inspection, and
+   authenticated CRM proofs from step 3:
+
+   ```bash
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT \
+        count(*) FILTER ( \
+          WHERE type = 'host' \
+            AND address IN ('127.0.0.1', '::1') \
+            AND auth_method = 'scram-sha-256' \
+        ) AS loopback_scram_rules, \
+        count(*) FILTER (WHERE auth_method = 'trust') AS remaining_trust_rules, \
+        count(*) FILTER (WHERE error IS NOT NULL) AS hba_errors \
+      FROM pg_hba_file_rules;"
+   ```
+
+   The query must return `4|0|0`: all four recorded loopback host rules use
+   SCRAM, no trust rule remains, and PostgreSQL loaded the file without errors.
+   Otherwise restore the saved files and stop. Then repeat the service,
+   `service_db_inspect`, and authenticated CRM proofs from step 3.
 
 5. Verify both sides of the new boundary. The passwordless TCP probe must fail;
    the retained `postgres` socket peer probe must succeed:
@@ -207,16 +264,15 @@ break-glass path.
    a secret-bearing shell environment as a substitute test.
 
 6. If a step fails after the HBA conversion, first remove only the added
-   `ATLAS_DB_SOCKET_PATH` line from shared configuration. Then restore both
-   saved authentication files, reload PostgreSQL, and restart
-   `atlas-api.service` once. Re-run the fixed inspection and CRM read before
+   `ATLAS_DB_SOCKET_PATH` line from the effective service configuration. Then
+   restore both saved authentication files, reload PostgreSQL, and restart
+   `atlas-api.service` once. Re-run `service_db_inspect` and the CRM read before
    declaring rollback complete. Do not edit roles, passwords, migration ledger
    rows, or database data as part of rollback.
 
-`./ops db inspect` remains fixed-query-only. It already selects the same
-socket-path configuration as the application and uses a `READ ONLY`
-transaction. This cutover does not create a generic command runner or expose a
-credential.
+`service_db_inspect` remains fixed-query-only. It explicitly selects the same
+service configuration as the application and uses a `READ ONLY` transaction.
+This cutover does not create a generic command runner or expose a credential.
 
 ## Migrations
 

@@ -21,10 +21,14 @@ incorrectly said that admissible state could contain no `missing_source`.
 - Loopback TCP `trust` lets a local process request any database role.
 - `connection_kwargs()` ignores `socket_path`, while the pool and fixed
   inspection call it rather than `DatabaseConfig.dsn`.
+- A bare fixed inspection can select a worktree `.env` instead of the
+  service's `EnvironmentFiles`, even when the worktree omits database keys.
 - A socket target label omits its configured port even though the port selects
   the socket filename and the migration receipt confirms that label exactly.
 - A successful service or inspector connection is not socket proof while a
   complete DSN retains deliberate precedence over split configuration.
+- A manual four-rule HBA conversion needs a loaded-rule postcondition; one
+  IPv4 application probe cannot prove the IPv6 and replication channels.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
@@ -45,7 +49,10 @@ incorrectly said that admissible state could contain no `missing_source`.
 3. Replace the provisional credential/SCRAM procedure with non-secret socket
    configuration, an exact `atlas-api` OS-user → `atlas` peer map, staged
    service/CRM/backend-transport/inspection proof, loopback-SCRAM replacement,
-   and a rollback that restores TCP settings before restarting the service.
+   a loaded-HBA assertion for all four loopback rules, and a rollback that
+   restores TCP settings before restarting the service. The fixed inspection
+   must explicitly select the ordered `atlas-api.service` `EnvironmentFiles`
+   while excluding ad hoc `ATLAS_DB_*` overrides.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
@@ -77,6 +84,9 @@ incorrectly said that admissible state could contain no `missing_source`.
 - Focused regression: socket `dsn` and `connection_kwargs()` assertions,
   distinct socket target-label assertions, existing TCP and complete-DSN
   assertions, and the pool/raw caller seam.
+- Adjacent configuration-context regression: a worktree file remains the
+  default inspector context, while an ordered `ATLAS_OPS_ENV_FILES` override
+  selects the intended service configuration.
 - Cheap local gates: focused test target, `bash scripts/check_ascii_python.sh`,
   `git diff --check`, and `python scripts/sync_pr_plan.py ... --check`.
 - GitHub remains the complete unit gate.
@@ -84,11 +94,12 @@ incorrectly said that admissible state could contain no `missing_source`.
   `ATLAS_DB_SOCKET_PATH` only when no complete DSN overrides it; add/reload the
   exact identity map and specific peer HBA rule; restart `atlas-api`; prove
   health, an authenticated EOM CRM read, the application's Unix-socket backend,
-  and fixed inspection.
+  and fixed inspection selected from the service `EnvironmentFiles`.
 - Only then replace every loopback TCP `trust` rule with `scram-sha-256`,
-  reload PostgreSQL, repeat the proofs, prove passwordless TCP rejection, and
-  prove `sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc
-  'SELECT current_user'` succeeds.
+  reload PostgreSQL, prove the loaded HBA result is `4|0|0` (four loopback
+  SCRAM rows, zero trust rows, zero parser errors), repeat the proofs, prove
+  passwordless TCP rejection, and prove `sudo -u postgres psql -h
+  /var/run/postgresql -p 5433 -d atlas -Atc 'SELECT current_user'` succeeds.
 
 ## Scope (this PR)
 
@@ -117,6 +128,15 @@ Max files: 5
   `DatabaseConfig(_env_file=None)` and passes those kwargs to its fixed asyncpg
   inspection. Direct maintenance scripts that call `db_settings.dsn` receive
   the corrected socket port as well.
+- Affected surfaces: `DatabaseConfig` DSN/asyncpg construction and target
+  labels; `DatabasePool`; the fixed `./ops db inspect` environment-selection
+  seam; PostgreSQL HBA/ident operational procedure; migration target
+  confirmation; and the authenticated EOM CRM read used as production proof.
+- Risk areas: local role impersonation over loopback TCP, wrong-cluster
+  inspection, service/inspector configuration skew, HBA parser failure,
+  IPv6/replication trust left behind, startup-migration availability, and
+  rollback recovery.
+- Reviewer rules triggered: R1, R2, R3, R11, R12, R14.
 - Boundary-change enumeration:
   - `socket_path=None` continues to produce TCP host/port kwargs.
   - `connection_string` continues to win over split socket/TCP settings.
@@ -124,6 +144,12 @@ Max files: 5
     to select PostgreSQL's socket filename.
   - The socket target label includes that port, so confirmation cannot conflate
     same-directory, same-database clusters on distinct ports.
+  - The fixed inspector uses only the service `EnvironmentFiles`, in service
+    order, and removes ad hoc `ATLAS_DB_*` values before it constructs
+    `DatabaseConfig`.
+  - The post-conversion HBA receipt requires four loopback SCRAM rows, no
+    remaining trust row, and no parser error before an IPv4-only negative probe
+    can be treated as sufficient.
   - Cutover order is peer proof before removal of any trust rule; rollback
     restores TCP configuration before restarting the application.
 
@@ -142,6 +168,11 @@ No password is added: the post-merge identity map lets `atlas-api` authenticate
 as `atlas` over peer. The map/rule are proved while TCP remains available;
 only then do all loopback `trust` entries become `scram-sha-256`.
 
+The fixed inspector keeps its existing source-selection semantics. The runbook
+uses its documented explicit environment-file override, in the exact service
+order and without inherited database settings, so the read-only proof observes
+the same database target as `atlas-api.service`.
+
 The migration-runbook change is documentation only: raw discrepancies stay
 visible and retain their forensic nonzero status.
 
@@ -151,6 +182,8 @@ visible and retain their forensic nonzero status.
   non-loopback access remain unchanged.
 - `ops` already carries `ATLAS_DB_SOCKET_PATH`; CRM read is production proof,
   not a feature.
+- `ops` context-selection code remains unchanged; the cutover invokes its
+  existing explicit override rather than changing normal worktree behavior.
 
 ## Deferred
 
@@ -165,24 +198,41 @@ blocks the socket-peer path.
 
 ## Verification
 
-- Pending before push: `./ops test focused tests/test_eom_render_profile.py -q
-  -k 'database_config or database_pool_uses_configured_connection_kwargs'`.
-- Pending before push: `bash scripts/check_ascii_python.sh`.
-- Pending before push: `git diff --check`.
-- Pending before push: `python scripts/sync_pr_plan.py
-  plans/PR-Postgres-Loopback-Scram-Hardening.md --check`.
-- Pending before push: cold diff / contract audit and normal PR mechanical
-  review helpers.
+- `./ops test focused tests/test_eom_render_profile.py -q -k 'database_config
+  or database_pool_uses_configured_connection_kwargs'` — 4 passed, 61
+  deselected (local).
+- `./ops test focused tests/test_agent_operations_contract.py -q -k
+  'database_file_context_prefers_worktree_over_shared_and_systemd or
+  database_file_context_honors_explicit_override_order'` — 2 passed, 39
+  deselected (local).
+- `bash scripts/check_ascii_python.sh` — passed (local).
+- `git diff --check` — passed (local).
+- `python scripts/sync_pr_plan.py
+  plans/PR-Postgres-Loopback-Scram-Hardening.md --check` — passed (local).
+- `python scripts/audit_pr_body.py --base-ref origin/main
+  tmp/pr-body-postgres-loopback-peer-hardening.md` and the reconciliation/fix
+  loop auditors — passed (local).
+- Guarded `scripts/push_pr.sh` local PR review — passed; GitHub owns the full
+  unit gate.
 - Post-merge: follow the exact peer-socket cutover/rollback procedure in
-  `.agent/runbooks/database.md`; GitHub Actions remains the complete unit gate.
+  `.agent/runbooks/database.md`; do not remove HBA trust until service-pinned
+  inspection, CRM, transport, and loaded-HBA proofs all succeed.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 171 |
+| `.agent/runbooks/database.md` | 227 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 188 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 238 |
 | `tests/test_eom_render_profile.py` | 60 |
-| **Total** | **450** |
+| **Total** | **556** |
+
+## Diff budget
+
+Diff-budget override: the socket construction, caller-seam evidence, exact
+target identity, and staged peer/SCRAM procedure are one deployment-safety
+boundary; splitting them would publish either executable configuration without
+its safe cutover/rollback proof or a procedure that refers to unavailable
+behavior.
