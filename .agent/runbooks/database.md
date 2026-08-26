@@ -134,6 +134,18 @@ break-glass path.
    edit an included HBA file. The `atlas_app` identity-map query must return no
    rows before editing: do not reuse a pre-existing map name.
 
+   `eom-write-boundary-audit.timer` is a repository-owned hourly one-shot
+   database client. It is normally absent from both live inventory queries, so
+   its absence is not evidence that it has no TCP dependency. Before any HBA
+   backup or authentication edit, require its installed script to match this
+   deployed source, its timer/service identity to be live, and its unit or
+   user-manager environment to contain no `ATLAS_EOM_AUDIT_ATLAS_DSN` override
+   or `EnvironmentFile`. The source default is the passwordless
+   `/var/run/postgresql` socket route and clears inherited libpq target
+   selectors before invoking `psql`; an override needs its own owner-verified
+   socket or SCRAM migration rather than being silently accepted here. The
+   checks retain environment text only in shell variables and never print it.
+
    Set `SERVICE_ENV_FILES` to the absolute `EnvironmentFiles` paths printed by
    `./ops env systemd`, joined with `:` in that same order. Use this shell-local
    helper for every fixed inspection in this cutover. It selects the service's
@@ -142,8 +154,65 @@ break-glass path.
    lower- or mixed-case alias cannot override those files:
 
    ```bash
+   EOM_AUDIT_REPOSITORY_ROOT="$(git rev-parse --show-toplevel)" || exit 1
+   EOM_AUDIT_SOURCE="$EOM_AUDIT_REPOSITORY_ROOT/scripts/eom_write_boundary_audit.py"
+   EOM_AUDIT_INSTALLED="$HOME/.local/bin/eom-write-boundary-audit.py"
+   EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'
+   EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'
    SERVICE_ENV_FILES='/absolute/first.service.env:/absolute/second.service.env'
    EFFECTIVE_DB_ENV_FILE="${SERVICE_ENV_FILES##*:}"
+   eom_audit_environment_has_dsn_override() {
+     case "$1" in
+       *'ATLAS_EOM_AUDIT_ATLAS_DSN='*) return 0 ;;
+       *) return 1 ;;
+     esac
+   }
+   eom_audit_require_socket_default() {
+     if ! test -r "$EOM_AUDIT_SOURCE" || ! cmp -s "$EOM_AUDIT_SOURCE" "$EOM_AUDIT_INSTALLED"; then
+       printf '%s\n' 'installed EOM audit script does not match deployed source; install it before cutover' >&2
+       return 1
+     fi
+     if ! systemctl --user is-enabled --quiet "$EOM_AUDIT_TIMER" \
+       || ! systemctl --user is-active --quiet "$EOM_AUDIT_TIMER"; then
+       printf '%s\n' 'EOM audit timer is not enabled and active; do not remove loopback trust' >&2
+       return 1
+     fi
+     eom_audit_exec_start="$(systemctl --user show "$EOM_AUDIT_SERVICE" \
+       --property=LoadState,ExecStart --value)" || {
+       printf '%s\n' 'could not inspect EOM audit service identity; do not remove loopback trust' >&2
+       return 1
+     }
+     case "$eom_audit_exec_start" in
+       *"$EOM_AUDIT_INSTALLED"*) ;;
+       *)
+         printf '%s\n' 'EOM audit service does not execute the admitted installed script; do not remove loopback trust' >&2
+         return 1
+         ;;
+     esac
+     eom_audit_environment_files="$(systemctl --user show "$EOM_AUDIT_SERVICE" \
+       --property=EnvironmentFiles --value)" || {
+       printf '%s\n' 'could not inspect EOM audit service environment files; do not remove loopback trust' >&2
+       return 1
+     }
+     if [ -n "$eom_audit_environment_files" ]; then
+       printf '%s\n' 'EOM audit service uses an EnvironmentFile; inventory its transport separately before cutover' >&2
+       return 1
+     fi
+     eom_audit_service_environment="$(systemctl --user show "$EOM_AUDIT_SERVICE" \
+       --property=Environment --value)" || {
+       printf '%s\n' 'could not inspect EOM audit service environment; do not remove loopback trust' >&2
+       return 1
+     }
+     eom_audit_manager_environment="$(systemctl --user show-environment)" || {
+       printf '%s\n' 'could not inspect EOM audit manager environment; do not remove loopback trust' >&2
+       return 1
+     }
+     if eom_audit_environment_has_dsn_override "$eom_audit_service_environment" \
+       || eom_audit_environment_has_dsn_override "$eom_audit_manager_environment"; then
+       printf '%s\n' 'EOM audit DSN override found; migrate and prove it separately before cutover' >&2
+       return 1
+     fi
+   }
    service_db_has_case_variant_key() {
      sudo awk '
        BEGIN { found = 0 }
@@ -274,6 +343,7 @@ break-glass path.
        ATLAS_OPS_ENV_FILES="$SERVICE_ENV_FILES" \
        ./ops db inspect connectivity
    }
+   eom_audit_require_socket_default || exit 1
    service_db_require_new_socket_configuration || exit 1
    service_db_inspect
    ```
@@ -285,7 +355,8 @@ break-glass path.
    backup, HBA/identity edit, or PostgreSQL reload. It rejects an empty
    service-file set, any case-variant `ATLAS_DB_*` key, every existing socket
    assignment, and every nonblank complete-DSN assignment without printing a
-   value. A complete DSN deliberately takes precedence over
+   value. The dormant monitor admission must also succeed before the first
+   backup, HBA/identity edit, or PostgreSQL reload. A complete DSN deliberately takes precedence over
    `ATLAS_DB_SOCKET_PATH`; do not remove or rewrite one as part of this
    procedure. That needs a separate configuration-migration slice.
 
@@ -365,9 +436,11 @@ break-glass path.
    `local atlas atlas peer map=atlas_app` rule, and no preceding local rule in
    loaded `rule_number` order
    other than the retained `local all postgres peer` recovery rule. Otherwise
-   restore both saved files and reload PostgreSQL before continuing. The service
+   restore both saved files and reload PostgreSQL before continuing. `atlas-api`
    still uses TCP at this point, so a valid scoped peer rule can be proved
-   without removing the existing path.
+   without removing the existing path. The separately admitted audit monitor is
+   not yet its socket receipt; obtain that receipt after the application restart
+   and before loopback trust is replaced.
 
 3. The pre-mutation admission receipt derives and validates
    `EFFECTIVE_DB_ENV_FILE` as the final selected service file before any
@@ -457,13 +530,47 @@ break-glass path.
      "SELECT application_name, usename, client_addr, state, sync_state \
       FROM pg_stat_replication \
       WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
+   EOM_AUDIT_DRY_RUN_DIR="$(mktemp -d)" || {
+     printf '%s\n' 'could not create EOM audit dry-run state directory; rollback required' >&2
+     rollback_peer_cutover
+     exit 1
+   }
+   EOM_AUDIT_DRY_RUN_OUTPUT="$("$EOM_AUDIT_INSTALLED" \
+     --state-dir "$EOM_AUDIT_DRY_RUN_DIR" \
+     --ntfy-topic cutover-dry-run \
+     --no-alert)"
+   EOM_AUDIT_DRY_RUN_STATUS=$?
+   rm -rf -- "$EOM_AUDIT_DRY_RUN_DIR" || {
+     printf '%s\n' 'could not remove EOM audit dry-run state directory; rollback required' >&2
+     rollback_peer_cutover
+     exit 1
+   }
+   case "$EOM_AUDIT_DRY_RUN_OUTPUT" in
+     *'COULD NOT MEASURE'*)
+       printf '%s\n' 'EOM audit could not measure through its default socket route; rollback required' >&2
+       rollback_peer_cutover
+       exit 1
+       ;;
+   esac
+   case "$EOM_AUDIT_DRY_RUN_STATUS" in
+     0|2) ;;
+     *)
+       printf '%s\n' 'EOM audit dry run exited unexpectedly; rollback required' >&2
+       rollback_peer_cutover
+       exit 1
+       ;;
+   esac
    ```
 
    The immediate transport receipt must return `1|1`: the CRM read created at
    least one qualifying `atlas`/`atlas` client backend, and every qualifying
    backend has a null `client_addr` (a Unix socket). Do not accept one socket
    row while another qualifying backend is TCP; that would not prove the
-   restarted application uses the socket. Compare the rows with the loopback
+   restarted application uses the socket. The EOM audit dry run must not report
+   `COULD NOT MEASURE`; its `--no-alert` invocation intentionally leaves no
+   notification or persistent alert-state change. Exit `0` means the audit was
+   clean and exit `2` means it measured a boundary breach; either is a transport
+   receipt. Any other exit is a failure. Compare the rows with the loopback
    clients from step 1. The fixed inspection must also succeed only after that
    transport proof. If any proof fails, remove only the exact non-secret setting
    just added, restore the two saved PostgreSQL files, reload PostgreSQL, and
@@ -473,13 +580,16 @@ break-glass path.
    Before step 4, reconcile every client identity in the union of the initial
    and final inventories. Each must have either a post-restart Unix-socket
    backend receipt or a separate, owner-verified SCRAM reconnect receipt for
-   that client. A TCP session that disappeared between snapshots is not a
-   receipt; stop and obtain one before conversion. Both final inventories must
-   also be empty. A remaining loopback TCP client, including a replication
-   client, is a stop condition even if it has a future SCRAM receipt: move that
-   client to the Unix socket or complete its separate migration and disconnect
-   it before re-running this cutover. Do not create a new credential or remove
-   HBA trust while any row or receipt remains unresolved.
+   that client. Record the audit monitor's source-match/no-override admission
+   and dry-run transport receipt alongside that union: its scheduled absence
+   from both snapshots is admissible only with both receipts. A TCP session that
+   disappeared between snapshots is not a receipt; stop and obtain one before
+   conversion. Both final inventories must also be empty. A remaining loopback
+   TCP client, including a replication client, is a stop condition even if it
+   has a future SCRAM receipt: move that client to the Unix socket or complete
+   its separate migration and disconnect it before re-running this cutover. Do
+   not create a new credential or remove HBA trust while any row or receipt
+   remains unresolved.
 
 4. Only after the socket-peer proof succeeds, replace **all four** loopback
    TCP `trust` entries in `pg_hba.conf` with `scram-sha-256` using `sudoedit`:

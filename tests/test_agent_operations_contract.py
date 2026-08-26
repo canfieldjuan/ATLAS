@@ -153,6 +153,25 @@ def test_runbook_admits_new_socket_configuration_before_hba_mutation() -> None:
     assert "nonblank ATLAS_DB_CONNECTION_STRING assignment found" in runbook
 
 
+def test_runbook_admits_the_dormant_eom_audit_before_hba_mutation() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    admission = "eom_audit_require_socket_default || exit 1"
+    first_hba_backup = (
+        "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf"
+    )
+
+    assert runbook.count(admission) == 1
+    assert runbook.index(admission) < runbook.index(first_hba_backup)
+    assert "cmp -s \"$EOM_AUDIT_SOURCE\" \"$EOM_AUDIT_INSTALLED\"" in runbook
+    assert "--property=EnvironmentFiles --value" in runbook
+    assert "systemctl --user show-environment" in runbook
+    assert "ATLAS_EOM_AUDIT_ATLAS_DSN=" in runbook
+    assert "--no-alert" in runbook
+    assert "COULD NOT MEASURE" in runbook
+    assert "0|2" in runbook
+
+
 def _run_runbook_function(
     runbook: str,
     function_names: tuple[str, ...],
@@ -217,6 +236,87 @@ def test_service_db_effective_env_file_must_be_selected_before_cutover(
     assert result.returncode == expected_returncode
     if not effective_is_selected:
         assert "effective database environment file is not a service EnvironmentFile" in result.stderr
+
+
+@pytest.mark.parametrize(
+    (
+        "service_environment",
+        "manager_environment",
+        "environment_files",
+        "copies_match",
+        "timer_enabled",
+        "timer_active",
+        "exec_matches",
+        "expected_returncode",
+    ),
+    (
+        ("", "", "", True, True, True, True, 0),
+        ("ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas", "", "", True, True, True, True, 1),
+        ("", "ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas", "", True, True, True, True, 1),
+        ("", "", "/secure/eom-audit.env", True, True, True, True, 1),
+        ("", "", "", False, True, True, True, 1),
+        ("", "", "", True, False, True, True, 1),
+        ("", "", "", True, True, False, True, 1),
+        ("", "", "", True, True, True, False, 1),
+    ),
+)
+def test_dormant_eom_audit_admission_rejects_transport_overrides_and_stale_install(
+    tmp_path: Path,
+    service_environment: str,
+    manager_environment: str,
+    environment_files: str,
+    copies_match: bool,
+    timer_enabled: bool,
+    timer_active: bool,
+    exec_matches: bool,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    source = tmp_path / "eom_write_boundary_audit.py"
+    installed = tmp_path / "eom-write-boundary-audit.py"
+    source.write_text("source\n", encoding="utf-8")
+    installed.write_text("source\n" if copies_match else "stale\n", encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "eom_audit_environment_has_dsn_override",
+            "eom_audit_require_socket_default",
+        ),
+        shell_stubs=(
+            f"EOM_AUDIT_SOURCE={str(source)!r}",
+            f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+            "EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'",
+            "EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'",
+            f"EOM_AUDIT_TEST_SERVICE_ENV={service_environment!r}",
+            f"EOM_AUDIT_TEST_MANAGER_ENV={manager_environment!r}",
+            f"EOM_AUDIT_TEST_ENVIRONMENT_FILES={environment_files!r}",
+            f"EOM_AUDIT_TEST_TIMER_ENABLED={str(timer_enabled).lower()}",
+            f"EOM_AUDIT_TEST_TIMER_ACTIVE={str(timer_active).lower()}",
+            f"EOM_AUDIT_TEST_EXEC_START={'loaded ' + str(installed) if exec_matches else 'loaded /other/eom-write-boundary-audit.py'!r}",
+            "systemctl() {\n"
+            "  case \"$*\" in\n"
+            "    *'is-enabled --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ENABLED\" = true ] ;;\n"
+            "    *'is-active --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ACTIVE\" = true ] ;;\n"
+            "    *'--property=LoadState,ExecStart --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_EXEC_START\" ;;\n"
+            "    *'--property=EnvironmentFiles --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_ENVIRONMENT_FILES\" ;;\n"
+            "    *'--property=Environment --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_SERVICE_ENV\" ;;\n"
+            "    *show-environment*) printf '%s\\n' \"$EOM_AUDIT_TEST_MANAGER_ENV\" ;;\n"
+            "    *) return 97 ;;\n"
+            "  esac\n"
+            "}",
+        ),
+    )
+
+    assert result.returncode == expected_returncode
+    if expected_returncode:
+        assert (
+            "EOM audit DSN override found" in result.stderr
+            or "EOM audit service uses an EnvironmentFile" in result.stderr
+            or "installed EOM audit script does not match deployed source" in result.stderr
+            or "EOM audit timer is not enabled and active" in result.stderr
+            or "EOM audit service does not execute the admitted installed script" in result.stderr
+        )
 
 
 @pytest.mark.parametrize(

@@ -89,7 +89,16 @@ DEFAULT_NTFY_TOPIC = ""
 DEFAULT_NTFY_URL = "https://ntfy.sh"
 DEFAULT_REALERT_EVERY = 24  # hourly cadence -> re-alert once a day while open
 
+# The monitor is an independent scheduled client.  It must keep a passwordless
+# route when the production cutover replaces loopback TCP trust with SCRAM.
+# PostgreSQL URI socket hosts are percent-encoded, then decoded into PGHOST
+# below; libpq receives the filesystem path rather than a TCP hostname.
+DEFAULT_ATLAS_DSN = "postgresql://atlas@%2Fvar%2Frun%2Fpostgresql:5433/atlas"
 
+# `psql_environment` must make the URI, rather than an inherited service-manager
+# setting, authoritative for the monitor's database target.  Clear every libpq
+# setting, then add back only values parsed from the monitor's DSN; this avoids
+# leaving an unenumerated selector such as PGHOSTADDR or PGSERVICE in effect.
 
 @dataclass(frozen=True)
 class Signal:
@@ -165,13 +174,17 @@ def psql_environment(dsn: str) -> dict[str, str]:
     by the owner, which is why libpq supports these variables at all.
     """
     parsed = urlsplit(dsn)
-    env = dict(os.environ)
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith("PG")
+    }
     if parsed.username:
         env["PGUSER"] = unquote(parsed.username)
     if parsed.password:
         env["PGPASSWORD"] = unquote(parsed.password)
     if parsed.hostname:
-        env["PGHOST"] = parsed.hostname
+        env["PGHOST"] = unquote(parsed.hostname)
     if parsed.port:
         env["PGPORT"] = str(parsed.port)
     database = parsed.path.lstrip("/")
@@ -412,7 +425,10 @@ def publish(ntfy_url: str, topic: str, title: str, body: str, priority: str, tag
 
 def main(argv: Sequence[str] | None = None, *, notifier: Callable[..., None] = publish) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--atlas-dsn", default=os.environ.get("ATLAS_EOM_AUDIT_ATLAS_DSN", "postgresql://atlas:atlas@localhost:5433/atlas"))
+    parser.add_argument(
+        "--atlas-dsn",
+        default=os.environ.get("ATLAS_EOM_AUDIT_ATLAS_DSN", DEFAULT_ATLAS_DSN),
+    )
     parser.add_argument("--psql-bin", default=os.environ.get("ATLAS_EOM_AUDIT_PSQL_BIN", "psql"))
     parser.add_argument("--state-dir", default=os.environ.get("ATLAS_EOM_AUDIT_STATE_DIR", str(DEFAULT_STATE_DIR)))
     parser.add_argument("--ntfy-url", default=os.environ.get("ATLAS_EOM_AUDIT_NTFY_URL", DEFAULT_NTFY_URL))

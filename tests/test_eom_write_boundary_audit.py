@@ -218,6 +218,43 @@ def test_main_stays_silent_and_exits_zero_when_clean(monkeypatch, tmp_path):
     assert sent == []
 
 
+def test_main_uses_the_passwordless_socket_default_without_a_dsn_override(
+    monkeypatch, tmp_path
+):
+    captured: list[str] = []
+    monkeypatch.delenv("ATLAS_EOM_AUDIT_ATLAS_DSN", raising=False)
+    monkeypatch.setattr(
+        audit,
+        "query_atlas",
+        lambda _psql_bin, dsn: (captured.append(dsn), ([0, 0, 0], None))[1],
+    )
+
+    code = audit.main(
+        ["--state-dir", str(tmp_path), "--ntfy-topic", "t", "--no-alert"],
+    )
+
+    assert code == 0
+    assert captured == [audit.DEFAULT_ATLAS_DSN]
+
+
+def test_main_preserves_an_explicit_audit_dsn_override(monkeypatch, tmp_path):
+    override = "postgresql://audit@localhost:5433/atlas"
+    captured: list[str] = []
+    monkeypatch.setenv("ATLAS_EOM_AUDIT_ATLAS_DSN", override)
+    monkeypatch.setattr(
+        audit,
+        "query_atlas",
+        lambda _psql_bin, dsn: (captured.append(dsn), ([0, 0, 0], None))[1],
+    )
+
+    code = audit.main(
+        ["--state-dir", str(tmp_path), "--ntfy-topic", "t", "--no-alert"],
+    )
+
+    assert code == 0
+    assert captured == [override]
+
+
 def test_an_undelivered_alert_does_not_advance_state(monkeypatch, tmp_path):
     """A failed push must not record the breach as notified.
 
@@ -523,6 +560,52 @@ def test_credentials_are_passed_by_environment_not_argv(monkeypatch):
     assert captured["env"]["PGPORT"] == "5433"
     assert captured["env"]["PGDATABASE"] == "db"
     assert captured["env"]["PGSSLMODE"] == "require"
+
+
+def test_default_socket_dsn_decodes_its_unix_host_for_libpq(monkeypatch):
+    monkeypatch.delenv("PGPASSWORD", raising=False)
+
+    env = audit.psql_environment(audit.DEFAULT_ATLAS_DSN)
+
+    assert env["PGUSER"] == "atlas"
+    assert env["PGHOST"] == "/var/run/postgresql"
+    assert env["PGPORT"] == "5433"
+    assert env["PGDATABASE"] == "atlas"
+    assert "PGPASSWORD" not in env
+
+
+def test_default_socket_dsn_scrubs_all_inherited_libpq_target_settings(monkeypatch):
+    inherited = {
+        "PGHOST": "localhost",
+        "PGHOSTADDR": "127.0.0.1",
+        "PGPORT": "6543",
+        "PGDATABASE": "wrong_database",
+        "PGUSER": "wrong_user",
+        "PGPASSWORD": "wrong_password",
+        "PGPASSFILE": "/tmp/wrong-passfile",
+        "PGSERVICE": "wrong-service",
+        "PGSERVICEFILE": "/tmp/wrong-service-file",
+        "PGAPPNAME": "wrong-application-name",
+        "PGOPTIONS": "-c search_path=wrong_schema",
+        "PGSSLMODE": "require",
+        "PGTARGETSESSIONATTRS": "read-write",
+        "PGLOADBALANCEHOSTS": "random",
+    }
+    for key, value in inherited.items():
+        monkeypatch.setenv(key, value)
+
+    env = audit.psql_environment(audit.DEFAULT_ATLAS_DSN)
+
+    assert env["PGHOST"] == "/var/run/postgresql"
+    assert env["PGPORT"] == "5433"
+    assert env["PGDATABASE"] == "atlas"
+    assert env["PGUSER"] == "atlas"
+    assert {key for key in env if key.startswith("PG")} == {
+        "PGDATABASE",
+        "PGHOST",
+        "PGPORT",
+        "PGUSER",
+    }
 
 
 def test_search_path_options_travel_as_pgoptions():

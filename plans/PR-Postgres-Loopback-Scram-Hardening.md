@@ -82,6 +82,15 @@ leave its restart procedure with contradictory integrity instructions.
 - The effective service file was manually selected after authentication edits
   and only checked during rollback, so a mistyped or unlisted path could create
   a stray socket assignment that the rollback path refuses to remove.
+- The loopback-client inventory sees only current PostgreSQL sessions. The
+  repository-owned `eom-write-boundary-audit.timer` is an hourly one-shot and
+  can be absent from both snapshots while its source default still selects
+  loopback TCP, so its database path could be lost during trust removal without
+  any client receipt.
+- Its libpq helper begins with the inherited process environment, so ambient
+  `PG*` settings can survive a socket-default change and make the monitor's
+  effective transport depend on user-manager state rather than the admitted
+  source URI.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
@@ -148,6 +157,16 @@ leave its restart procedure with contradictory integrity instructions.
    proves the selected service file wins for both target and timeout settings,
    plus a closure test that fails when a future `DatabaseConfig` field is not
    added to that scrub set.
+7. Move the standalone EOM write-boundary monitor's source default to a
+   passwordless encoded Unix-socket URI, decode that URI host before passing it
+   to libpq, clear inherited `PG*` libpq settings before applying that URI,
+   preserve explicit monitor-DSN override behavior, and add focused monitor
+   tests. The cutover runbook must inventory this dormant scheduled
+   client before HBA mutation by requiring an installed-source match, an active
+   timer/service identity, no `EnvironmentFile`, and no unit/user-manager DSN
+   override without printing environment values; after peer configuration it must dry-run the
+   installed monitor with no alert/state mutation and reject an unreadable
+   socket route before trust replacement.
 
 #### Explicit non-scope
 
@@ -160,6 +179,10 @@ leave its restart procedure with contradictory integrity instructions.
   fixed read-only statements, refactor arbitrary maintenance scripts, add
   dependencies, or make runtime-routing changes.
 - Do not change the `postgres` Unix-socket peer break-glass rule.
+- Do not change the EOM audit's signals, alert delivery, timer cadence, state
+  semantics, unit configuration, or any monitor override value; an explicit
+  monitor DSN remains supported but is outside this cutover until separately
+  migrated and proved.
 
 #### Assumptions and blockers
 
@@ -168,6 +191,10 @@ leave its restart procedure with contradictory integrity instructions.
 - Recheck the peer map and local replication activity before changing HBA.
 - HBA/ident/shared configuration changes occur only after this source revision
   is deployed.
+- The deployed audit unit executes the documented installed script path and no
+  `EnvironmentFile` or `ATLAS_EOM_AUDIT_ATLAS_DSN` value is inherited from its
+  unit or user manager; otherwise the cutover stops rather than inferring its
+  transport.
 
 #### Verification plan
 
@@ -189,6 +216,10 @@ leave its restart procedure with contradictory integrity instructions.
   final HBA receipt independently defines `covers_loopback`.
 - It must also prove the derived effective file passes only when it belongs to
   the ordered selected service-file list and stops before the gate otherwise.
+- Monitor regressions must prove both default-socket selection and preserved
+  explicit-override selection, including hostile inherited `PG*` settings, and
+  the runbook guard must reject service and user-manager DSN overrides plus a
+  stale installed monitor copy before the first HBA backup.
 - GitHub remains the complete unit gate.
 - Post-merge proof while existing TCP trust remains: deploy source; configure
   `ATLAS_DB_SOCKET_PATH` only when no complete DSN overrides it; add/reload the
@@ -197,8 +228,9 @@ leave its restart procedure with contradictory integrity instructions.
   Unix-socket backend,
   fixed inspection selected from the service `EnvironmentFiles`, the exclusive
   loaded identity map, a Unix-socket or separately verified SCRAM receipt for
-  every client observed in either inventory, and no remaining loopback TCP or
-  replication client.
+  every client observed in either inventory, the dormant audit monitor's
+  installed-source/no-override admission and no-alert socket dry-run receipt,
+  and no remaining loopback TCP or replication client.
 - Only then replace every loopback TCP `trust` rule with `scram-sha-256`,
   reload PostgreSQL, prove the derived loopback-network receipt is `4` and the
   exact loaded-HBA result is `1|1|1|1|0|0|0|0` (one exact application IPv4,
@@ -213,7 +245,7 @@ leave its restart procedure with contradictory integrity instructions.
 
 Ownership lane: eom-crm/runtime-security
 Slice phase: production hardening
-Max files: 7
+Max files: 9
 
 ### Review contract
 
@@ -228,7 +260,12 @@ Max files: 7
      because both already call `connection_kwargs()`, and the fixed inspector
      admits only selected service values or exact-uppercase runtime database
      overrides rather than case-variant inherited aliases.
-  4. The operational procedure rejects an overriding complete DSN, authenticates
+  4. The operational procedure rejects an overriding complete DSN, independently
+     admits the dormant EOM audit monitor's installed source, service/timer
+     identity, no `EnvironmentFile`, and no-override default socket route before
+     HBA mutation, then
+     records its no-alert socket dry-run receipt before trust replacement,
+     authenticates
      the specific service OS account as `atlas` over the Unix socket before
      removing loopback `trust`, proves the exclusive loaded identity map,
      requires every qualifying post-restart backend to use a Unix socket, gives
@@ -252,13 +289,15 @@ Max files: 7
   the corrected socket port as well.
 - Affected surfaces: `DatabaseConfig` DSN/asyncpg construction and target
   labels; `DatabasePool`; the fixed `./ops db inspect` environment-selection
-  seam; PostgreSQL HBA/ident operational procedure; migration target
+  seam; the standalone EOM write-boundary monitor's libpq environment
+  construction; PostgreSQL HBA/ident operational procedure; migration target
   confirmation; and the authenticated EOM CRM read used as production proof.
 - Risk areas: local role impersonation over loopback TCP, wrong-cluster
   inspection, service/inspector configuration skew, HBA parser failure,
   an overbroad peer map, active local client disconnect, duplicated/missing
   IPv4/IPv6/replication tuples, unreloaded failed HBA restoration,
-  startup-migration availability, and rollback recovery.
+  dormant scheduled-client disconnect, startup-migration availability, and
+  rollback recovery.
 - Reviewer rules triggered: R1, R2, R3, R11, R12, R14.
 - Boundary-change enumeration:
   - `socket_path=None` continues to produce TCP host/port kwargs.
@@ -269,6 +308,12 @@ Max files: 7
     query value; asyncpg kwargs retain the original filesystem path.
   - The socket target label includes that port, so confirmation cannot conflate
     same-directory, same-database clusters on distinct ports.
+  - The standalone audit's absent monitor-DSN default selects the encoded Unix
+    socket host and no password; its libpq environment decodes that host to the
+    filesystem path and clears every inherited `PG*` setting first. An explicit
+    `ATLAS_EOM_AUDIT_ATLAS_DSN` still wins for the monitor itself, but it stops
+    this peer cutover until separately migrated and proved rather than becoming
+    an unobserved TCP dependency.
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
     order, and removes every case variant of every consumed `ATLAS_DB_*` value
     before it constructs `DatabaseConfig`; exact-uppercase runtime keys preserve
@@ -300,8 +345,10 @@ Max files: 7
   - The cutover reconciles every client observed in both initial and final
     loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
     receipt, requires every qualifying post-restart `atlas` backend to be a
-    Unix socket, requires no remaining final client, and requires an exact loaded
-    `atlas_app | juan-canfield | atlas` identity map before HBA replacement.
+    Unix socket, requires the known dormant audit monitor's independent
+    installed-source/no-override and dry-run receipt, requires no remaining
+    final client, and requires an exact loaded `atlas_app | juan-canfield |
+    atlas` identity map before HBA replacement.
   - The post-conversion HBA receipt derives every non-local rule whose network
     can cover either loopback endpoint, then requires one exact SCRAM tuple for
     each application/replication IPv4/IPv6 channel, no unexpected endpoint-equal
@@ -346,6 +393,25 @@ Max files: 7
   client that disappears or newly appears, stops the cutover until it has a
   Unix-socket or separately verified SCRAM reconnect receipt; an empty final
   snapshot alone is not an admissible default.
+- **EOM audit scheduled client — CLOSED / DERIVED before trust removal.**
+  Membership is the one repository-owned `eom-write-boundary-audit.service`
+  reached by its active hourly timer, its installed script at the documented
+  path, any service `EnvironmentFile`, and any unit or user-manager
+  `ATLAS_EOM_AUDIT_ATLAS_DSN` assignment.
+  The admitted member has a byte-identical installed script, expected service
+  executable, active enabled timer, no `EnvironmentFile`, no override in either
+  environment source, an explicit-source-owned libpq target, and a post-peer
+  no-alert dry run that does not report `COULD NOT MEASURE`.
+  A clean result (`0`) and a measured boundary breach (`2`) both prove its
+  socket transport; an absent timer, stale script, different executable,
+  override, unreadable measurement, or other exit stops before HBA replacement.
+- **Inherited libpq settings — OPEN / DERIVED per monitor invocation.**
+  Membership is every inherited environment key with the `PG` prefix, derived
+  by `psql_environment()` from the process environment. The safe default is to
+  remove every member, then derive the only admitted libpq settings from the
+  parsed monitor DSN (including its explicit `options` and `sslmode` query
+  values). A setting absent from that URI cannot silently select another target;
+  non-`PG` process environment remains available to locate and run `psql`.
 - **Post-restart Atlas transport — CLOSED / DERIVED before trust removal.**
   Membership is every `pg_stat_activity` client backend for user/database
   `atlas` after the authenticated CRM read. The only admitted receipt has at
@@ -411,8 +477,10 @@ Max files: 7
 - `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md`
 - `ops`
 - `plans/PR-Postgres-Loopback-Scram-Hardening.md`
+- `scripts/eom_write_boundary_audit.py`
 - `tests/test_agent_operations_contract.py`
 - `tests/test_eom_render_profile.py`
+- `tests/test_eom_write_boundary_audit.py`
 
 ## Mechanism
 
@@ -427,6 +495,15 @@ uses its documented explicit environment-file override in the exact service
 order; `ops` discards case-insensitive aliases for known database settings, so
 the read-only proof observes the same database target as `atlas-api.service`.
 
+The independent EOM audit monitor now defaults to the same passwordless socket
+transport through libpq without importing or depending on `atlas-api`. Before
+the cutover can rely on that source default, the runbook proves the installed
+standalone copy is current and has no hidden DSN override; its dry run is
+measurement-only and cannot consume an alert transition. Its subprocess
+environment removes every inherited `PG*` setting before the source URI is
+parsed, so a user-manager `PGHOSTADDR`, service profile, or unlisted libpq
+configuration cannot silently turn the socket receipt back into TCP.
+
 The migration-runbook change is documentation only: raw discrepancies stay
 visible and retain their forensic nonzero status.
 
@@ -440,6 +517,9 @@ visible and retain their forensic nonzero status.
   its existing explicit override, while its inspection child now strips
   case-variant inherited database aliases rather than changing normal worktree
   selection behavior.
+- The EOM audit's timer, signals, notification delivery, state persistence, and
+  explicit DSN override precedence remain unchanged; only its absent-override
+  default moves to the socket.
 
 ## Deferred
 
@@ -461,28 +541,22 @@ blocks the socket-peer path.
   'database_file_context_prefers_worktree_over_shared_and_systemd or
   database_file_context_honors_explicit_override_order'` — 2 passed, 39
   deselected (local).
+- `./ops test focused tests/test_eom_write_boundary_audit.py -q -k 'socket or
+  dsn or libpq_target'` — 5 passed, 29 deselected (local); proves the monitor's
+  default socket URI decodes into a libpq filesystem host, hostile inherited
+  target selectors are scrubbed, and an explicit DSN still wins.
 - `./ops test focused tests/test_agent_operations_contract.py -q -k
-  'database_runtime_environment or service_db_inspect or
-  service_db_case_variant_preflight or service_db_no_socket_guard or
-  effective_env_file or new_socket_configuration or final_hba_receipt or
-  admits_new_socket_configuration_before_hba_mutation or rollback_refuses or
-  peer_hba_receipt or qualifying_atlas_backends or hba_sources'` — 15 passed,
-  60 deselected (local);
-  proves the canonical override, case-variant rejection, complete key-set
-  closure, the service-helper unset-set closure, socket/full-DSN alias and
-  near-miss boundaries, empty-service-set rejection, a nonblank complete DSN
-  stops before the first HBA backup, a selected versus unlisted effective file
-  boundary gates both cutover and rollback, a surviving spacing-variant socket
-  assignment cannot reach HBA restoration, each final HBA receipt defines its
-  own loopback CTE, the transport receipt requires every qualifying Atlas backend
-  to use the socket, the HBA source receipt gates top-level backup/rollback, and
-  the loaded peer-HBA receipt requires the intended rule/precedence predicate.
-- `./ops test focused tests/test_agent_operations_contract.py -q` — 75 passed
-  (local).
+  'dormant_eom_audit or admits_the_dormant'` — 9 passed, 75 deselected (local);
+  proves the dormant-client admission is before HBA backup and rejects a stale
+  installed copy, disabled/inactive timer, unexpected executable, an
+  `EnvironmentFile`, or either service or user-manager DSN override.
+- `./ops test focused tests/test_eom_write_boundary_audit.py
+  tests/test_agent_operations_contract.py -q` — 116 passed, 2 skipped (local);
+  covers the full current monitor and operations-contract suite.
 - `bash scripts/check_ascii_python.sh` — passed (local).
-- `service_db_inspect`, effective-file, new-socket-admission, canonical-key/no-socket, and rollback guard blocks
-  extracted from `.agent/runbooks/database.md` and checked with `bash -n` —
-  passed (local).
+- The initial admission block and the post-restart audit dry-run block extracted
+  from `.agent/runbooks/database.md` and checked with `bash -n` — passed
+  (local).
 - The read-only loaded peer-HBA receipt returned `0|0|0|0|0|0` against the
   pre-cutover state, proving its negative boundary; the synthetic receipt
   returned `accepted|1|0` and `blocked|1|1` for the retained recovery-only and
@@ -516,14 +590,16 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 601 |
+| `.agent/runbooks/database.md` | 711 |
 | `atlas_brain/storage/config.py` | 13 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 531 |
-| `tests/test_agent_operations_contract.py` | 458 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 607 |
+| `scripts/eom_write_boundary_audit.py` | 22 |
+| `tests/test_agent_operations_contract.py` | 558 |
 | `tests/test_eom_render_profile.py` | 84 |
-| **Total** | **1722** |
+| `tests/test_eom_write_boundary_audit.py` | 83 |
+| **Total** | **2113** |
 
 ## Diff budget
 
