@@ -540,6 +540,7 @@ def test_default_dba_config_ignores_worktree_dotenv_and_fails_closed(
     monkeypatch.delenv(runner.DBA_DSN_ENV, raising=False)
     monkeypatch.chdir(tmp_path)
     dotenv_value = "postgresql://dotenv-test:synthetic@example.test:5432/atlas"
+    process_value = "postgresql://process-test:synthetic@example.test:5432/atlas"
     (tmp_path / ".env").write_text(f"{runner.DBA_DSN_ENV}={dotenv_value}\n")
     (tmp_path / ".env.local").write_text(f"{runner.DBA_DSN_ENV}={dotenv_value}\n")
 
@@ -563,6 +564,12 @@ def test_default_dba_config_ignores_worktree_dotenv_and_fails_closed(
         )
 
     assert pool_calls == []
+
+    monkeypatch.setenv(runner.DBA_DSN_ENV, process_value)
+    assert (
+        runner.DatabaseRoleTopologyDBAConfig().database_url.get_secret_value()
+        == process_value
+    )
 
 
 def test_preflight_rejects_database_mismatch_before_catalog_reporting(
