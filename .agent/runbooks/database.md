@@ -81,8 +81,15 @@ break-glass path.
      "SELECT application_name, usename, client_addr, state \
       FROM pg_stat_activity \
       WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
-   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
-     "SELECT count(*) FROM pg_stat_replication;"
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT application_name, usename, client_addr, state, sync_state \
+      FROM pg_stat_replication \
+      WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT map_name, sys_name, pg_username, error \
+      FROM pg_ident_file_mappings \
+      WHERE map_name = 'atlas_app' \
+      ORDER BY line_number;"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
      "SELECT type, database, user_name, address, netmask, auth_method \
       FROM pg_hba_file_rules \
@@ -98,7 +105,8 @@ break-glass path.
    blindly. The final query must show exactly four `host` trust rows: two
    `{all}` application rows and two `{replication}` rows, one for each of
    `127.0.0.1` and `::1`. Stop if any other trust row exists; this runbook does
-   not generalize a different HBA topology.
+   not generalize a different HBA topology. The `atlas_app` identity-map query
+   must return no rows before editing: do not reuse a pre-existing map name.
 
    Set `SERVICE_ENV_FILES` to the absolute `EnvironmentFiles` paths printed by
    `./ops env systemd`, joined with `:` in that same order. Use this shell-local
@@ -158,12 +166,23 @@ break-glass path.
    ```bash
    sudo systemctl reload postgresql@16-main
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
-     "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL;"
+     "SELECT \
+        (SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL), \
+        count(*) FILTER ( \
+          WHERE map_name = 'atlas_app' \
+            AND sys_name = 'juan-canfield' \
+            AND pg_username = 'atlas' \
+        ), \
+        count(*) FILTER (WHERE map_name = 'atlas_app'), \
+        count(*) FILTER (WHERE error IS NOT NULL) \
+      FROM pg_ident_file_mappings;"
    ```
 
-   The final query must return `0`; otherwise restore both saved files and
-   reload PostgreSQL before continuing. The service still uses TCP at this
-   point, so a valid scoped peer rule can be proved without removing the
+   The final query must return `0|1|1|0`: no HBA parser error, exactly one
+   intended `atlas_app | juan-canfield | atlas` mapping, no additional
+   `atlas_app` mapping, and no identity-map error. Otherwise restore both saved
+   files and reload PostgreSQL before continuing. The service still uses TCP at
+   this point, so a valid scoped peer rule can be proved without removing the
    existing path.
 
 3. In the effective service configuration selected by `SERVICE_ENV_FILES`, use
@@ -204,6 +223,14 @@ break-glass path.
         AND backend_type = 'client backend' \
       ORDER BY backend_start;"
    service_db_inspect
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT application_name, usename, client_addr, state \
+      FROM pg_stat_activity \
+      WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT application_name, usename, client_addr, state, sync_state \
+      FROM pg_stat_replication \
+      WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
    ```
 
    At least one backend with a `backend_start` after the just-issued service
@@ -213,6 +240,12 @@ break-glass path.
    succeed only after that transport proof. If any proof fails, remove only the
    exact non-secret setting just added, restore the two saved PostgreSQL files,
    reload PostgreSQL, and restart `atlas-api.service`.
+
+   Before step 4, both final loopback inventories must be empty. A remaining
+   loopback TCP client, including a replication client, is a stop condition:
+   move that client to the Unix socket or complete a separate, owner-verified
+   SCRAM reconnect migration before re-running this cutover. Do not create a
+   new credential or remove HBA trust while any such row remains.
 
 4. Only after the socket-peer proof succeeds, replace **all four** loopback
    TCP `trust` entries in `pg_hba.conf` with `scram-sha-256` using `sudoedit`:
