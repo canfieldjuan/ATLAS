@@ -21,23 +21,31 @@ incorrectly said that admissible state could contain no `missing_source`.
 - Loopback TCP `trust` lets a local process request any database role.
 - `connection_kwargs()` ignores `socket_path`, while the pool and fixed
   inspection call it rather than `DatabaseConfig.dsn`.
+- A socket target label omits its configured port even though the port selects
+  the socket filename and the migration receipt confirms that label exactly.
+- A successful service or inspector connection is not socket proof while a
+  complete DSN retains deliberate precedence over split configuration.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
 
 1. Update `atlas_brain/storage/config.py` so both connection construction
-   forms honour `socket_path` and the configured PostgreSQL port:
+   forms and its log-safe target label honour `socket_path` and the configured
+   PostgreSQL port:
    - `dsn` includes the socket host and port for direct asyncpg callers.
    - `connection_kwargs()` uses the socket directory as `host`, retaining the
      configured port, so `DatabasePool` and `./ops db inspect` reach the Unix
      socket rather than loopback TCP.
+   - `target_label` includes the socket port so exact-target confirmation
+     distinguishes same-directory, same-database PostgreSQL clusters.
 2. Update focused `DatabaseConfig` tests in
-   `tests/test_eom_render_profile.py` to pin both socket-path forms and the
-   existing TCP/complete-DSN precedence behavior, then assert the actual pool
-   and raw-connection callers receive the socket kwargs.
+   `tests/test_eom_render_profile.py` to pin both socket-path forms, distinct
+   socket ports, and the existing TCP/complete-DSN precedence behavior, then
+   assert the actual pool and raw-connection callers receive the socket kwargs.
 3. Replace the provisional credential/SCRAM procedure with non-secret socket
    configuration, an exact `atlas-api` OS-user → `atlas` peer map, staged
-   service/inspection/CRM proof, loopback-SCRAM replacement, and rollback.
+   service/CRM/backend-transport/inspection proof, loopback-SCRAM replacement,
+   and a rollback that restores TCP settings before restarting the service.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
@@ -67,17 +75,20 @@ incorrectly said that admissible state could contain no `missing_source`.
 #### Verification plan
 
 - Focused regression: socket `dsn` and `connection_kwargs()` assertions,
-  existing TCP and complete-DSN assertions, and the pool/raw caller seam.
+  distinct socket target-label assertions, existing TCP and complete-DSN
+  assertions, and the pool/raw caller seam.
 - Cheap local gates: focused test target, `bash scripts/check_ascii_python.sh`,
   `git diff --check`, and `python scripts/sync_pr_plan.py ... --check`.
 - GitHub remains the complete unit gate.
 - Post-merge proof while existing TCP trust remains: deploy source; configure
-  `ATLAS_DB_SOCKET_PATH`; add/reload the exact identity map and specific peer
-  HBA rule; restart `atlas-api`; prove health, fixed inspection, and an
-  authenticated EOM CRM read.
+  `ATLAS_DB_SOCKET_PATH` only when no complete DSN overrides it; add/reload the
+  exact identity map and specific peer HBA rule; restart `atlas-api`; prove
+  health, an authenticated EOM CRM read, the application's Unix-socket backend,
+  and fixed inspection.
 - Only then replace every loopback TCP `trust` rule with `scram-sha-256`,
   reload PostgreSQL, repeat the proofs, prove passwordless TCP rejection, and
-  prove `sudo -u postgres psql -d atlas -Atc 'SELECT current_user'` succeeds.
+  prove `sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc
+  'SELECT current_user'` succeeds.
 
 ## Scope (this PR)
 
@@ -89,14 +100,16 @@ Max files: 5
 
 - Acceptance criteria:
   1. A configured socket path reaches the configured PostgreSQL socket port in
-     both `DatabaseConfig.dsn` and `connection_kwargs()`.
+     both `DatabaseConfig.dsn` and `connection_kwargs()`, and that port appears
+     in its log-safe exact-target label.
   2. Complete DSNs retain their precedence; non-socket split settings retain
      existing TCP kwargs.
   3. `DatabasePool` and fixed `./ops db inspect` inherit the corrected path
      because both already call `connection_kwargs()`.
-  4. The operational procedure authenticates the specific service OS account
-     as `atlas` over the Unix socket before removing loopback `trust`, retains
-     `postgres` peer recovery, and has a rollback order.
+  4. The operational procedure rejects an overriding complete DSN, authenticates
+     the specific service OS account as `atlas` over the Unix socket before
+     removing loopback `trust`, retains `postgres` peer recovery, and restores
+     TCP settings before a rollback restart.
   5. The migration runbook accurately distinguishes raw forensic output from
      attested admission without changing runner behavior.
 - Reachability proof: `atlas_brain/storage/database.py` initializes the pool
@@ -109,8 +122,10 @@ Max files: 5
   - `connection_string` continues to win over split socket/TCP settings.
   - `socket_path` replaces only the host, retaining the configured port needed
     to select PostgreSQL's socket filename.
+  - The socket target label includes that port, so confirmation cannot conflate
+    same-directory, same-database clusters on distinct ports.
   - Cutover order is peer proof before removal of any trust rule; rollback
-    restores saved HBA/ident/config state before restarting the application.
+    restores TCP configuration before restarting the application.
 
 ### Files touched
 
@@ -165,9 +180,9 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 147 |
-| `atlas_brain/storage/config.py` | 7 |
-| `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 10 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 173 |
-| `tests/test_eom_render_profile.py` | 51 |
-| **Total** | **388** |
+| `.agent/runbooks/database.md` | 171 |
+| `atlas_brain/storage/config.py` | 11 |
+| `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 188 |
+| `tests/test_eom_render_profile.py` | 60 |
+| **Total** | **450** |

@@ -102,7 +102,9 @@ class DatabaseConfig(BaseSettings):
             except ValueError:
                 return "dsn=<connection-string>"
         if self.socket_path:
-            return f"socket={self.socket_path}, db={self.database}"
+            return (
+                f"socket={self.socket_path}, port={self.port}, db={self.database}"
+            )
         return f"host={self.host}, port={self.port}, db={self.database}"
 
     def connection_kwargs(

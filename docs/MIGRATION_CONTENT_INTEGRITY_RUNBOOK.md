@@ -43,11 +43,11 @@ bytes verified, and the read-only preflight continues to report that mismatch.
      every reported evidence entry is `attested`, and no unknown or
      non-attested discrepancy remains. The preflight still exits 2 to preserve
      forensic truth; do not treat exit 2 alone as approval.
-   - Any unknown mismatch, missing source, a known record that is currently
-     reported as mismatched but has absent/non-attested evidence, target
-     mismatch, or `could_not_determine` result is a stop condition. Do not
-     probe a known reconciliation that is not an active mismatch as a reason to
-     stop an otherwise clean target.
+   - Any unknown discrepancy; any reported mismatch or missing-source item
+     without matching, currently attested evidence; target mismatch; or a
+     `could_not_determine` result is a stop condition. Do not probe a known
+     reconciliation that is not an active mismatch as a reason to stop an
+     otherwise clean target.
 
 4. Deploy the admission-policy release to every Atlas process that can invoke
    `run_migrations()` before adding a later migration-bearing release. This

@@ -74,13 +74,13 @@ break-glass path.
    ./ops deploy status
    ./ops db inspect connectivity
    id -un
-   sudo -u postgres psql -d atlas -At -F '|' -c \
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
      "SHOW hba_file; SHOW ident_file; SHOW unix_socket_directories;"
-   sudo -u postgres psql -d atlas -At -F '|' -c \
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
      "SELECT application_name, usename, client_addr, state \
       FROM pg_stat_activity \
       WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
-   sudo -u postgres psql -d atlas -At -c \
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
      "SELECT count(*) FROM pg_stat_replication;"
    ```
 
@@ -121,7 +121,7 @@ break-glass path.
 
    ```bash
    sudo systemctl reload postgresql@16-main
-   sudo -u postgres psql -d atlas -At -c \
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
      "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL;"
    ```
 
@@ -130,9 +130,13 @@ break-glass path.
    point, so a valid scoped peer rule can be proved without removing the
    existing path.
 
-3. In the shared application configuration read by `atlas-api.service`, add
-   exactly this non-secret setting with an editor; do not copy or print the
-   rest of the file:
+3. In the shared application configuration read by `atlas-api.service`, use an
+   editor to verify that `ATLAS_DB_CONNECTION_STRING` is absent or empty. A
+   nonblank full DSN deliberately takes precedence over
+   `ATLAS_DB_SOCKET_PATH`, so this cutover must stop if one is effective. Do
+   not remove or rewrite a full DSN as part of this procedure; that needs a
+   separate configuration-migration slice. Then add exactly this non-secret
+   setting; do not copy or print the rest of the file:
 
    ```text
    ATLAS_DB_SOCKET_PATH=/var/run/postgresql
@@ -144,14 +148,33 @@ break-glass path.
    ```bash
    systemctl --user restart atlas-api.service
    ./ops deploy status
-   ./ops db inspect connectivity
    ```
 
    Perform one read-only authenticated EOM CRM Contacts-page refresh. A health
    response alone is insufficient: the generic pool can initialize lazily, so
-   the CRM read proves the application data path. If either proof fails,
-   restore the two saved PostgreSQL files, remove only the exact non-secret
-   setting just added, reload PostgreSQL, and restart `atlas-api.service`.
+   the CRM read proves the application data path. Immediately after that
+   refresh, before running the fixed inspector, observe the application's
+   PostgreSQL backends:
+
+   ```bash
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "SELECT backend_start, usename, datname, \
+             COALESCE(client_addr::text, '<unix>'), state \
+      FROM pg_stat_activity \
+      WHERE usename = 'atlas' \
+        AND datname = 'atlas' \
+        AND backend_type = 'client backend' \
+      ORDER BY backend_start;"
+   ./ops db inspect connectivity
+   ```
+
+   At least one backend with a `backend_start` after the just-issued service
+   restart must show `<unix>` for `client_addr`; compare the rows with the
+   loopback clients from step 1 and stop if the service's backend cannot be
+   identified as a Unix socket connection. The fixed inspection must also
+   succeed only after that transport proof. If any proof fails, remove only the
+   exact non-secret setting just added, restore the two saved PostgreSQL files,
+   reload PostgreSQL, and restart `atlas-api.service`.
 
 4. Only after the socket-peer proof succeeds, replace **all four** loopback
    TCP `trust` entries in `pg_hba.conf` with `scram-sha-256` using `sudoedit`:
@@ -175,19 +198,20 @@ break-glass path.
      printf '%s\n' 'unexpected passwordless loopback TCP access' >&2
      exit 1
    fi
-   sudo -u postgres psql -d atlas -Atc 'SELECT current_user'
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc \
+     'SELECT current_user'
    ```
 
    The second command must print `postgres`. The first must reject
    authentication without prompting. Do not use an existing `.pgpass` file or
    a secret-bearing shell environment as a substitute test.
 
-6. If a step fails after the HBA conversion, restore both saved authentication
-   files, reload PostgreSQL, and restart `atlas-api.service`. If the service
-   still cannot reconnect, remove only the added `ATLAS_DB_SOCKET_PATH` line
-   from shared configuration and restart again. Re-run the fixed inspection and
-   CRM read before declaring rollback complete. Do not edit roles, passwords,
-   migration ledger rows, or database data as part of rollback.
+6. If a step fails after the HBA conversion, first remove only the added
+   `ATLAS_DB_SOCKET_PATH` line from shared configuration. Then restore both
+   saved authentication files, reload PostgreSQL, and restart
+   `atlas-api.service` once. Re-run the fixed inspection and CRM read before
+   declaring rollback complete. Do not edit roles, passwords, migration ledger
+   rows, or database data as part of rollback.
 
 `./ops db inspect` remains fixed-query-only. It already selects the same
 socket-path configuration as the application and uses a `READ ONLY`

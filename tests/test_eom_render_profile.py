@@ -948,6 +948,15 @@ def test_database_config_uses_socket_path_for_dsn_and_asyncpg_kwargs():
         "command_timeout": 17.0,
     }
     assert config.connection_kwargs(command_timeout=60)["command_timeout"] == 60
+    assert config.target_label == (
+        "socket=/var/run/postgresql, port=6543, db=atlas_prod"
+    )
+
+    same_socket_other_port = config.model_copy(update={"port": 6544})
+    assert same_socket_other_port.target_label == (
+        "socket=/var/run/postgresql, port=6544, db=atlas_prod"
+    )
+    assert same_socket_other_port.target_label != config.target_label
 
 
 def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
