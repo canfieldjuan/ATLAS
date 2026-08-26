@@ -214,6 +214,38 @@ Must not change:
   role-cutover mechanism. The disposable PostgreSQL 16 fixture remains the
   only test code allowed to create and clean up uniquely named test topology.
 
+### Contract revision — process-environment-only DBA credential
+
+Root cause:
+
+- The topology command invokes `DatabaseRoleTopologyDBAConfig()` with its
+  default settings source. That settings class currently includes the shared
+  `.env` and `.env.local` files, so an absent process environment variable can
+  silently resolve to a stale privileged DBA DSN from a worktree file. The
+  command's missing-configuration guard therefore does not actually mean that
+  the operator supplied the protected credential for this invocation.
+
+Required change surface:
+
+1. Make `DatabaseRoleTopologyDBAConfig` read its privileged DSN from the
+   process environment only; it must not read either shared dotenv file while
+   preserving the existing environment-variable name, `SecretStr` redaction,
+   and empty-value fail-closed behavior.
+2. Add default-constructor and command-entry tests from a temporary working
+   directory containing both dotenv files. With the process variable absent,
+   both tests must prove the key is ignored and the command fails before it
+   opens either database pool.
+3. State the process-environment-only requirement in the database runbook so
+   operators do not store the DBA credential in the worktree dotenv files.
+
+Must not change:
+
+- Do not change `ENV_FILES`, `DatabaseConfig`, any other settings class, normal
+  application startup, the database URL environment-variable name, or the
+  standalone command's fixed-query/read-only database behavior.
+- Do not read, write, migrate, or rotate a production credential as part of
+  this change. Test-only dotenv files may contain only a synthetic DSN.
+
 ## Scope (this PR)
 
 Ownership lane: eom-crm/runtime-security
@@ -385,14 +417,14 @@ Parked hardening: none.
 
 ## Verification
 
-- Passed locally after the compatibility, cleanup, provenance, and
-  privilege-semantics corrections:
+- Passed locally after the compatibility, cleanup, provenance,
+  privilege-semantics, and dotenv-boundary corrections:
   `python3.11 -m py_compile
   tests/test_database_role_topology_preflight.py`; `python -m py_compile
   scripts/check_database_role_topology.py
   tests/test_database_role_topology_preflight.py atlas_brain/config.py`;
   `./ops test focused tests/test_database_role_topology_preflight.py -q`
-  (`22 passed, 1 skipped`); `./ops test focused
+  (`23 passed, 1 skipped`); `./ops test focused
   tests/test_database_role_topology_preflight.py
   tests/test_agent_operations_contract.py
   tests/test_eom_first_clean_completion_dba_runner.py -q` (`144 passed, 1
@@ -418,10 +450,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 53 |
+| `.agent/runbooks/database.md` | 55 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 6 |
-| `atlas_brain/config.py` | 24 |
-| `plans/PR-Postgres-Role-Topology-Preflight.md` | 427 |
+| `atlas_brain/config.py` | 26 |
+| `plans/PR-Postgres-Role-Topology-Preflight.md` | 459 |
 | `scripts/check_database_role_topology.py` | 848 |
-| `tests/test_database_role_topology_preflight.py` | 1174 |
-| **Total** | **2532** |
+| `tests/test_database_role_topology_preflight.py` | 1209 |
+| **Total** | **2603** |

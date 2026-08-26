@@ -71,12 +71,14 @@ DSN argument and has no apply mode.
 2. In a protected, operator-only environment, provide exactly one direct
    PostgreSQL-superuser DSN under
    `ATLAS_DATABASE_ROLE_TOPOLOGY_DBA_DATABASE_URL`. Do not reuse the normal
-   `ATLAS_DB_*` application credentials. The normal runtime target continues to
-   come only from `DatabaseConfig`; the command pins both connections in
-   read-only repeatable-read transactions and rejects a missing DBA value, a
-   different database/schema/cluster, a DBA session that reuses the runtime
-   authenticated or effective identity, a switched `SET ROLE` session, or a
-   non-superuser session before it reads the catalog.
+   `ATLAS_DB_*` application credentials. Export this protected value in the
+   command's process environment; the command intentionally ignores `.env` and
+   `.env.local`. The normal runtime target continues to come only from
+   `DatabaseConfig`; the command pins both connections in read-only
+   repeatable-read transactions and rejects a missing DBA value, a different
+   database/schema/cluster, a DBA session that reuses the runtime authenticated
+   or effective identity, a switched `SET ROLE` session, or a non-superuser
+   session before it reads the catalog.
 
 3. From the Atlas worktree that supplies the intended runtime configuration,
    run the fixed evidence command:

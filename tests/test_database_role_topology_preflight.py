@@ -530,6 +530,41 @@ def test_preflight_rejects_missing_or_blank_dba_dsn_before_opening_a_pool(
         )
 
 
+def test_default_dba_config_ignores_worktree_dotenv_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A stale worktree dotenv value cannot satisfy the protected DSN boundary."""
+
+    runner = _load_preflight_module()
+    monkeypatch.delenv(runner.DBA_DSN_ENV, raising=False)
+    monkeypatch.chdir(tmp_path)
+    dotenv_value = "postgresql://dotenv-test:synthetic@example.test:5432/atlas"
+    (tmp_path / ".env").write_text(f"{runner.DBA_DSN_ENV}={dotenv_value}\n")
+    (tmp_path / ".env.local").write_text(f"{runner.DBA_DSN_ENV}={dotenv_value}\n")
+
+    assert runner.DatabaseRoleTopologyDBAConfig().database_url.get_secret_value() == ""
+
+    pool_calls: list[object] = []
+
+    async def create_pool(connection_kwargs: object) -> _Pool:
+        pool_calls.append(connection_kwargs)
+        raise AssertionError("dotenv-only DBA config must prevent pool creation")
+
+    with pytest.raises(
+        runner.PreflightError,
+        match=f"Missing protected DBA DSN configuration {runner.DBA_DSN_ENV}",
+    ):
+        asyncio.run(
+            runner._run(
+                create_pool=create_pool,
+                runtime_config_factory=_RuntimeConfig,
+            )
+        )
+
+    assert pool_calls == []
+
+
 def test_preflight_rejects_database_mismatch_before_catalog_reporting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

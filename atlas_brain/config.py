@@ -2615,7 +2615,9 @@ class DatabaseRoleTopologyDBAConfig(BaseSettings):
     connection it represents, and it performs no role or ownership mutation.
     """
 
-    model_config = SettingsConfigDict(env_file=ENV_FILES, extra="ignore")
+    # This direct-superuser credential is intentionally process-environment
+    # only: a worktree dotenv file must not satisfy the preflight boundary.
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
     database_url: SecretStr = Field(
         default=SecretStr(""),
