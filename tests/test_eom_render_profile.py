@@ -870,6 +870,7 @@ def test_database_config_prefers_connection_string_for_asyncpg_kwargs():
         database="atlas",
         user="atlas",
         password="split-secret",
+        socket_path="/var/run/postgresql",
         connect_timeout=7.0,
         command_timeout=11.0,
     )

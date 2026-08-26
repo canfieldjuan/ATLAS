@@ -169,6 +169,38 @@ Max files: 5
   - Cutover order is peer proof before removal of any trust rule; rollback
     restores and reloads TCP authentication before restarting the application.
 
+### Boundary-set closure declaration
+
+- **`DatabaseConfig` connection-construction branches — CLOSED / DERIVED.**
+  Membership is the three ordered outcomes in
+  `atlas_brain/storage/config.py:80-136`: a nonblank complete DSN, a blank DSN
+  with `socket_path`, or a blank DSN without `socket_path`. No fourth
+  construction path exists. Any setting combination resolves through that
+  existing order; a nonblank DSN is outside the socket-proof-admissible subset
+  and stops this cutover rather than allowing HBA mutation.
+- **Loopback HBA topology — CLOSED / DERIVED at cutover.** Membership comes
+  from the live `pg_hba_file_rules` receipt on the declared socket and port, not
+  the four examples in this plan. The procedure admits exactly one loaded
+  application/replication IPv4/IPv6 tuple with the declared user, netmask, and
+  SCRAM method. A missing, duplicate, or unlisted loopback rule fails closed to
+  no HBA change because an unknown authentication path is less safe than a
+  deferred hardening run.
+- **`atlas_app` peer-map membership — CLOSED / DERIVED at reload.** Membership
+  comes from `pg_ident_file_mappings`; exactly one
+  `atlas_app | juan-canfield | atlas` tuple and no mapping error is admitted.
+  Any extra, missing, malformed, or unrecognized mapping stops before HBA
+  replacement because it could broaden local role impersonation.
+- **Loopback-client inventory — OPEN / DERIVED at observation time.**
+  `pg_stat_activity` and `pg_stat_replication` supply every current TCP
+  loopback client; application names and client identities are not enumerated.
+  Any observed member, including a new unrecognized client, stops the cutover
+  until it moves to a socket or completes a separately verified SCRAM migration.
+- **Service environment-file list — CLOSED / DERIVED for the selected service
+  unit.** Membership is the ordered `EnvironmentFiles` output of `./ops env
+  systemd`. An absent, unreadable, or unlisted effective configuration file
+  stops fixed inspection and HBA mutation, the safer side over inspecting or
+  changing a guessed database target.
+
 ### Files touched
 
 - `.agent/runbooks/database.md`
@@ -238,12 +270,12 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 318 |
+| `.agent/runbooks/database.md` | 356 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 254 |
-| `tests/test_eom_render_profile.py` | 60 |
-| **Total** | **663** |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 286 |
+| `tests/test_eom_render_profile.py` | 61 |
+| **Total** | **734** |
 
 ## Diff budget
 

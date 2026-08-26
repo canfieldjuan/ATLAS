@@ -192,11 +192,49 @@ break-glass path.
    DSN deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this
    cutover must stop if one is effective. Do not remove or rewrite a full DSN as
    part of this procedure; that needs a separate configuration-migration slice.
-   Then add exactly this non-secret setting to the file that supplies the
-   effective database configuration; do not copy or print the rest of any file:
+   Set `EFFECTIVE_DB_ENV_FILE` to that one effective file, confirm it is one of
+   the paths in `SERVICE_ENV_FILES`, and add exactly this non-secret setting
+   with `sudoedit "$EFFECTIVE_DB_ENV_FILE"`; do not copy or print the rest of
+   any file:
+
+   ```bash
+   EFFECTIVE_DB_ENV_FILE='/absolute/path/to/the-effective.service.env'
+   sudoedit "$EFFECTIVE_DB_ENV_FILE"
+   ```
 
    ```text
    ATLAS_DB_SOCKET_PATH=/var/run/postgresql
+   ```
+
+   Define this shell-local rollback helper before the restart. It is the only
+   rollback path after the socket setting exists; when it opens the editor,
+   remove only the exact `ATLAS_DB_SOCKET_PATH=/var/run/postgresql` line just
+   added, save, and exit before the function restores the two authentication
+   files:
+
+   ```bash
+   rollback_peer_cutover() {
+     case ":$SERVICE_ENV_FILES:" in
+       *":$EFFECTIVE_DB_ENV_FILE:"*) ;;
+       *) printf '%s\n' 'effective database environment file is not a service EnvironmentFile' >&2; return 1 ;;
+     esac
+     sudoedit "$EFFECTIVE_DB_ENV_FILE" || return 1
+     if sudo grep -Eq '^[[:space:]]*ATLAS_DB_SOCKET_PATH=/var/run/postgresql[[:space:]]*$' "$EFFECTIVE_DB_ENV_FILE"; then
+       printf '%s\n' 'remove only the added ATLAS_DB_SOCKET_PATH line before rollback can continue' >&2
+       return 1
+     fi
+     sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer \
+       /etc/postgresql/16/main/pg_hba.conf || return 1
+     sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_ident.conf.pre-atlas-peer \
+       /etc/postgresql/16/main/pg_ident.conf || return 1
+     sudo systemctl reload postgresql@16-main || return 1
+     if [ "$(sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c 'SELECT count(*) FILTER (WHERE auth_method = '\''trust'\''), count(*) FILTER (WHERE error IS NOT NULL) FROM pg_hba_file_rules;')" != '4|0' ]; then
+       printf '%s\n' 'restored HBA receipt was not 4|0; do not restart atlas-api' >&2
+       return 1
+     fi
+     systemctl --user restart atlas-api.service || return 1
+     service_db_inspect
+   }
    ```
 
    Restart the user service, then prove that the application has changed its
@@ -330,10 +368,10 @@ break-glass path.
    The query must return `1|1|1|1|0|0|0`: one exact application IPv4 rule, one
    exact application IPv6 rule, one exact replication IPv4 rule, one exact
    replication IPv6 rule, no unexpected loopback host rule, no trust rule, and
-   no parser error. If any field differs, do not proceed: follow step 6 exactly
-   so the restored HBA/ident files are reloaded before the procedure stops. Then
-   repeat the service, `service_db_inspect`, and authenticated CRM proofs from
-   step 3.
+   no parser error. If any field differs, do not proceed: run
+   `rollback_peer_cutover` immediately so the restored HBA/ident files are
+   reloaded before the procedure stops. Then repeat the service,
+   `service_db_inspect`, and authenticated CRM proofs from step 3.
 
 5. Verify both sides of the new boundary. The passwordless TCP probe must fail;
    the retained `postgres` socket peer probe must succeed:
@@ -342,6 +380,7 @@ break-glass path.
    if env -u PGPASSWORD -u ATLAS_DB_PASSWORD PGPASSFILE=/dev/null \
      psql -w -h 127.0.0.1 -p 5433 -U atlas -d atlas -Atc 'SELECT 1'; then
      printf '%s\n' 'unexpected passwordless loopback TCP access' >&2
+     rollback_peer_cutover
      exit 1
    fi
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc \
@@ -352,14 +391,13 @@ break-glass path.
    authentication without prompting. Do not use an existing `.pgpass` file or
    a secret-bearing shell environment as a substitute test.
 
-6. If the loaded-HBA receipt or any later step fails after the HBA conversion,
-   first remove only the added `ATLAS_DB_SOCKET_PATH` line from the effective
-   service configuration. Then restore both saved authentication files and
-   reload PostgreSQL before stopping or restarting anything else. Restart
-   `atlas-api.service` once only after that reload. Re-run
-   `service_db_inspect` and the CRM read before declaring rollback complete. Do
-   not edit roles, passwords, migration ledger rows, or database data as part of
-   rollback.
+6. `rollback_peer_cutover` is mandatory when the loaded-HBA receipt, the
+   passwordless TCP probe, or any later proof fails after HBA conversion. It
+   removes only the added socket setting through `sudoedit`, restores and
+   reloads HBA/ident, proves the restored `4|0` HBA receipt, then restarts
+   `atlas-api.service` and re-runs fixed inspection. After it succeeds, re-run
+   the CRM read before declaring rollback complete. Do not edit roles,
+   passwords, migration ledger rows, or database data as part of rollback.
 
 `service_db_inspect` remains fixed-query-only. It explicitly selects the same
 service configuration as the application and uses a `READ ONLY` transaction.
