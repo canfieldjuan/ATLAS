@@ -63,6 +63,852 @@ def test_database_surface_contains_only_fixed_inspections() -> None:
         assert DATABASE_INSPECTIONS[name] not in command
 
 
+def test_database_runtime_environment_covers_every_database_config_key() -> None:
+    from atlas_brain.storage.config import DatabaseConfig
+
+    assert DATABASE_CONFIG_KEYS == frozenset(
+        f"ATLAS_DB_{field_name.upper()}" for field_name in DatabaseConfig.model_fields
+    )
+
+
+def test_service_db_inspect_clears_every_database_config_key() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    helper = runbook.split("service_db_inspect() {", maxsplit=1)[1].split(
+        "\n   }", maxsplit=1
+    )[0]
+    cleared_keys = set(
+        re.findall(r"(?m)^\s*(?:env\s+)?-u\s+(ATLAS_DB_[A-Z_]+)\s+\\$", helper)
+    )
+
+    assert cleared_keys == DATABASE_CONFIG_KEYS
+    assert "ATLAS_DB_SOCKET_PATH assignment remains; do not continue" in runbook
+    assert "sudo grep -Eqi" in runbook
+    assert "service_db_require_canonical_keys || return 1" in helper
+    assert "service_db_require_no_socket_assignments || return 1" in runbook
+
+
+def test_peer_hba_receipt_requires_the_intended_first_applicable_rule() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    assert "WITH intended_peer_rule AS" in runbook
+    assert "database = ARRAY['atlas']::text[]" in runbook
+    assert "user_name = ARRAY['atlas']::text[]" in runbook
+    assert "options = ARRAY['map=atlas_app']::text[]" in runbook
+    assert "SELECT rule_number" in runbook
+    assert "ON rules.rule_number < intended.rule_number" in runbook
+    assert "ON rules.line_number < intended.line_number" not in runbook
+    assert "rules.user_name = ARRAY['postgres']::text[]" in runbook
+    assert "0|1|1|0|1|0" in runbook
+
+
+def test_runbook_requires_all_qualifying_atlas_backends_to_use_the_socket() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    assert "WITH atlas_backends AS" in runbook
+    assert "CASE WHEN count(*) > 0 THEN 1 ELSE 0 END" in runbook
+    assert "count(*) FILTER (WHERE client_addr IS NULL) = count(*)" in runbook
+    assert "The immediate transport receipt must return `1|1`" in runbook
+    assert "At least one backend with a `backend_start`" not in runbook
+
+
+def test_runbook_refuses_hba_sources_outside_the_backed_up_file() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    top_level_hba = "/etc/postgresql/16/main/pg_hba.conf"
+    assert "SELECT rule_number, file_name, line_number, type" in runbook
+    assert f"file_name IS DISTINCT FROM '{top_level_hba}'" in runbook
+    assert "trust HBA source receipt was not 4|0|0" in runbook
+    assert "restored HBA receipt was not 4|0|0" in runbook
+    assert "1|1|1|1|0|0|0|0" in runbook
+    assert "loopback_rules_outside_backup" in runbook
+
+
+def test_runbook_defines_loopback_cte_in_each_final_hba_receipt() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    final_receipts = runbook.split("4. Only after the socket-peer proof succeeds", 1)[1].split(
+        "The first query must return `4`", 1
+    )[0]
+
+    standalone_receipts = re.findall(
+        r'"WITH hba AS .*?FROM hba;"', final_receipts, flags=re.DOTALL
+    )
+
+    assert len(standalone_receipts) == 2
+    assert all("END AS covers_loopback" in receipt for receipt in standalone_receipts)
+    assert "loopback_rules_outside_backup" in standalone_receipts[1]
+
+
+def test_runbook_admits_new_socket_configuration_before_hba_mutation() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    admission = "service_db_require_new_socket_configuration || exit 1"
+    effective_file_derivation = 'EFFECTIVE_DB_ENV_FILE="${SERVICE_ENV_FILES##*:}"'
+    first_hba_backup = (
+        "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf"
+    )
+
+    assert runbook.count(admission) == 1
+    assert runbook.index(effective_file_derivation) < runbook.index(admission)
+    assert runbook.index(admission) < runbook.index(first_hba_backup)
+    assert "nonblank ATLAS_DB_CONNECTION_STRING assignment found" in runbook
+
+
+def test_runbook_admits_the_dormant_eom_audit_before_hba_mutation() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    admission = "eom_audit_require_unit_contract || exit 1"
+    first_hba_backup = (
+        "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf"
+    )
+
+    assert runbook.count(admission) == 1
+    assert runbook.index(admission) < runbook.index(first_hba_backup)
+    assert "cmp -s \"$EOM_AUDIT_SOURCE\" \"$EOM_AUDIT_INSTALLED\"" in runbook
+    assert "eom_audit_stage_socket_source || {" in runbook
+    assert "--property=EnvironmentFiles --value" in runbook
+    assert "systemctl --user show-environment" in runbook
+    assert "ATLAS_EOM_AUDIT_ATLAS_DSN=" in runbook
+    assert 'EOM_AUDIT_DRY_RUN_OUTPUT="$(env -u ATLAS_EOM_AUDIT_ATLAS_DSN' in runbook
+    assert "--no-alert" in runbook
+    assert "COULD NOT MEASURE" in runbook
+    assert "0|2" in runbook
+
+
+def _run_runbook_function(
+    runbook: str,
+    function_names: tuple[str, ...],
+    *,
+    argument: Path | None = None,
+    service_env_files: str | None = None,
+    shell_stubs: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
+    functions = []
+    for function_name in function_names:
+        function_body = runbook.split(f"{function_name}() {{", maxsplit=1)[1].split(
+            "\n   }", maxsplit=1
+        )[0]
+        functions.append(f"{function_name}() {{{function_body}\n}}")
+    call = f'{function_names[-1]} "$1"' if argument is not None else function_names[-1]
+    script = "\n".join(
+        (
+            'sudo() { "$@"; }',
+            *functions,
+            "env() { printf '%s\\n' 'unexpected env invocation' >&2; return 99; }",
+            f"SERVICE_ENV_FILES={service_env_files!r}"
+            if service_env_files is not None
+            else "",
+            *shell_stubs,
+            call,
+        )
+    )
+    command = ["bash", "-c", script, "runbook-test"]
+    if argument is not None:
+        command.append(str(argument))
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _eom_audit_systemctl_stub() -> str:
+    return (
+        "systemctl() {\n"
+        "  case \"$*\" in\n"
+        "    *'is-enabled --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ENABLED\" = true ] ;;\n"
+        "    *'is-active --quiet'*) [ \"$EOM_AUDIT_TEST_TIMER_ACTIVE\" = true ] ;;\n"
+        "    *'--property=LoadState,ExecStart --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_EXEC_START\" ;;\n"
+        "    *'--property=EnvironmentFiles --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_ENVIRONMENT_FILES\" ;;\n"
+        "    *'--property=Environment --value'*) printf '%s\\n' \"$EOM_AUDIT_TEST_SERVICE_ENV\" ;;\n"
+        "    *show-environment*) printf '%s\\n' \"$EOM_AUDIT_TEST_MANAGER_ENV\" ;;\n"
+        "    *) return 97 ;;\n"
+        "  esac\n"
+        "}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("effective_is_selected", "expected_returncode"),
+    ((True, 0), (False, 1)),
+)
+def test_service_db_effective_env_file_must_be_selected_before_cutover(
+    tmp_path: Path,
+    effective_is_selected: bool,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    selected_env_file = tmp_path / "atlas-api.env"
+    selected_env_file.write_text("ATLAS_DB_HOST=canonical.example\n", encoding="utf-8")
+    effective_env_file = (
+        selected_env_file if effective_is_selected else tmp_path / "outside.env"
+    )
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_require_effective_env_file",
+        ),
+        service_env_files=str(selected_env_file),
+        shell_stubs=(f"EFFECTIVE_DB_ENV_FILE={str(effective_env_file)!r}",),
+    )
+
+    assert result.returncode == expected_returncode
+    if not effective_is_selected:
+        assert "effective database environment file is not a service EnvironmentFile" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("list_shape", "expected_error"),
+    (
+        ("valid", None),
+        ("trailing_empty", "service EnvironmentFile must be a nonempty absolute path"),
+        ("leading_empty", "service EnvironmentFile must be a nonempty absolute path"),
+        ("middle_empty", "service EnvironmentFile must be a nonempty absolute path"),
+        ("relative", "service EnvironmentFile must be a nonempty absolute path"),
+    ),
+)
+def test_service_db_effective_env_file_rejects_empty_or_relative_list_members(
+    tmp_path: Path,
+    list_shape: str,
+    expected_error: str | None,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    first = tmp_path / "first.env"
+    second = tmp_path / "second.env"
+    first.write_text("ATLAS_DB_HOST=first.example\n", encoding="utf-8")
+    second.write_text("ATLAS_DB_HOST=second.example\n", encoding="utf-8")
+
+    if list_shape == "valid":
+        service_env_files = str(first)
+        effective_env_file = str(first)
+    elif list_shape == "trailing_empty":
+        service_env_files = f"{first}:"
+        effective_env_file = ""
+    elif list_shape == "leading_empty":
+        service_env_files = f":{first}"
+        effective_env_file = str(first)
+    elif list_shape == "middle_empty":
+        service_env_files = f"{first}::{second}"
+        effective_env_file = str(second)
+    else:
+        assert list_shape == "relative"
+        service_env_files = "relative.env"
+        effective_env_file = "relative.env"
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_require_effective_env_file",
+        ),
+        service_env_files=service_env_files,
+        shell_stubs=(f"EFFECTIVE_DB_ENV_FILE={effective_env_file!r}",),
+    )
+
+    assert result.returncode == (0 if expected_error is None else 1)
+    if expected_error is not None:
+        assert expected_error in result.stderr
+
+
+@pytest.mark.parametrize(
+    (
+        "service_environment",
+        "manager_environment",
+        "environment_files",
+        "timer_enabled",
+        "timer_active",
+        "exec_variant",
+        "expected_error",
+    ),
+    (
+        ("", "", "", True, True, "exact", None),
+        (
+            "ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas",
+            "",
+            "",
+            True,
+            True,
+            "exact",
+            "EOM audit DSN override found",
+        ),
+        (
+            "",
+            "ATLAS_EOM_AUDIT_ATLAS_DSN=postgresql://tcp.example/atlas",
+            "",
+            True,
+            True,
+            "exact",
+            "EOM audit DSN override found",
+        ),
+        (
+            "ATLAS_EOM_AUDIT_PSQL_BIN=/missing/psql",
+            "",
+            "",
+            True,
+            True,
+            "exact",
+            "EOM audit psql executable override found",
+        ),
+        (
+            "",
+            "ATLAS_EOM_AUDIT_PSQL_BIN=/missing/psql",
+            "",
+            True,
+            True,
+            "exact",
+            "EOM audit psql executable override found",
+        ),
+        ("", "", "/secure/eom-audit.env", True, True, "exact", "EnvironmentFile"),
+        ("", "", "", False, True, "exact", "not enabled and active"),
+        ("", "", "", True, False, "exact", "not enabled and active"),
+        ("", "", "", True, True, "atlas_dsn", "admitted target-free argv"),
+        ("", "", "", True, True, "psql_bin", "admitted target-free argv"),
+        ("", "", "", True, True, "multiple", "multiple effective commands"),
+        ("", "", "", True, True, "unparseable", "could not parse EOM audit service command"),
+    ),
+)
+def test_dormant_eom_audit_admission_rejects_transport_or_executable_overrides_and_extra_commands(
+    tmp_path: Path,
+    service_environment: str,
+    manager_environment: str,
+    environment_files: str,
+    timer_enabled: bool,
+    timer_active: bool,
+    exec_variant: str,
+    expected_error: str | None,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    source = tmp_path / "eom_write_boundary_audit.py"
+    installed = tmp_path / "eom-write-boundary-audit.py"
+    source.write_text("source\n", encoding="utf-8")
+    installed.write_text("stale\n", encoding="utf-8")
+    canonical_argv = f"/usr/bin/python3 {installed}"
+    if exec_variant == "exact":
+        exec_start = f"{{ path=/usr/bin/python3 ; argv[]={canonical_argv} ; ignore_errors=no ; }}"
+    elif exec_variant == "atlas_dsn":
+        exec_start = (
+            "{ path=/usr/bin/python3 ; argv[]="
+            f"{canonical_argv} --atlas-dsn postgresql://tcp.example/atlas ; ignore_errors=no ; }}"
+        )
+    elif exec_variant == "psql_bin":
+        exec_start = (
+            "{ path=/usr/bin/python3 ; argv[]="
+            f"{canonical_argv} --psql-bin /tmp/psql ; ignore_errors=no ; }}"
+        )
+    elif exec_variant == "multiple":
+        exec_start = (
+            "{ path=/usr/bin/python3 ; argv[]="
+            f"{canonical_argv} ; argv[]=/usr/bin/true ; ignore_errors=no ; }}"
+        )
+    else:
+        assert exec_variant == "unparseable"
+        exec_start = f"loaded {installed}"
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "eom_audit_environment_has_dsn_override",
+            "eom_audit_environment_has_psql_bin_override",
+            "eom_audit_require_unit_contract",
+        ),
+        shell_stubs=(
+            f"EOM_AUDIT_SOURCE={str(source)!r}",
+            f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+            "EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'",
+            "EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'",
+            f"EOM_AUDIT_TEST_SERVICE_ENV={service_environment!r}",
+            f"EOM_AUDIT_TEST_MANAGER_ENV={manager_environment!r}",
+            f"EOM_AUDIT_TEST_ENVIRONMENT_FILES={environment_files!r}",
+            f"EOM_AUDIT_TEST_TIMER_ENABLED={str(timer_enabled).lower()}",
+            f"EOM_AUDIT_TEST_TIMER_ACTIVE={str(timer_active).lower()}",
+            f"EOM_AUDIT_TEST_EXEC_START={exec_start!r}",
+            _eom_audit_systemctl_stub(),
+        ),
+    )
+
+    assert result.returncode == (0 if expected_error is None else 1)
+    if expected_error is not None:
+        assert expected_error in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("source_mode", "installed_mode", "expected_returncode"),
+    (
+        (0o600, 0o600, 0),
+        (None, 0o600, 1),
+        (0o600, None, 1),
+        (0o000, 0o600, 1),
+        (0o600, 0o000, 1),
+    ),
+)
+def test_eom_audit_admission_requires_both_stage_inputs_before_cutover(
+    tmp_path: Path,
+    source_mode: int | None,
+    installed_mode: int | None,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    source = tmp_path / "eom_write_boundary_audit.py"
+    installed = tmp_path / "eom-write-boundary-audit.py"
+    if source_mode is not None:
+        source.write_text("source\n", encoding="utf-8")
+        source.chmod(source_mode)
+    if installed_mode is not None:
+        installed.write_text("installed\n", encoding="utf-8")
+        installed.chmod(installed_mode)
+
+    try:
+        result = _run_runbook_function(
+            runbook,
+            ("eom_audit_require_stage_inputs",),
+            shell_stubs=(
+                f"EOM_AUDIT_SOURCE={str(source)!r}",
+                f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+            ),
+        )
+    finally:
+        for path in (source, installed):
+            if path.exists():
+                path.chmod(0o600)
+
+    assert result.returncode == expected_returncode
+    if expected_returncode:
+        assert "source or installed script is unreadable" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("installed_content", "expected_returncode"),
+    (("source\n", 0), ("stale\n", 1)),
+)
+def test_eom_audit_socket_default_requires_the_staged_source(
+    tmp_path: Path,
+    installed_content: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    source = tmp_path / "eom_write_boundary_audit.py"
+    installed = tmp_path / "eom-write-boundary-audit.py"
+    source.write_text("source\n", encoding="utf-8")
+    installed.write_text(installed_content, encoding="utf-8")
+    exec_start = (
+        "{ path=/usr/bin/python3 ; argv[]="
+        f"/usr/bin/python3 {installed} ; ignore_errors=no ; }}"
+    )
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "eom_audit_environment_has_dsn_override",
+            "eom_audit_environment_has_psql_bin_override",
+            "eom_audit_require_unit_contract",
+            "eom_audit_require_stage_inputs",
+            "eom_audit_require_socket_default",
+        ),
+        shell_stubs=(
+            f"EOM_AUDIT_SOURCE={str(source)!r}",
+            f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+            "EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'",
+            "EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'",
+            "EOM_AUDIT_TEST_SERVICE_ENV=''",
+            "EOM_AUDIT_TEST_MANAGER_ENV=''",
+            "EOM_AUDIT_TEST_ENVIRONMENT_FILES=''",
+            "EOM_AUDIT_TEST_TIMER_ENABLED=true",
+            "EOM_AUDIT_TEST_TIMER_ACTIVE=true",
+            f"EOM_AUDIT_TEST_EXEC_START={exec_start!r}",
+            _eom_audit_systemctl_stub(),
+        ),
+    )
+
+    assert result.returncode == expected_returncode
+    if expected_returncode:
+        assert "stage it after peer authentication" in result.stderr
+
+
+def test_eom_audit_source_stage_and_rollback_restore_the_pre_peer_copy(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    source = tmp_path / "eom_write_boundary_audit.py"
+    installed = tmp_path / "eom-write-boundary-audit.py"
+    backup = tmp_path / "eom-write-boundary-audit.py.pre-atlas-peer"
+    source.write_text("socket-default\n", encoding="utf-8")
+    installed.write_text("pre-peer\n", encoding="utf-8")
+    exec_start = (
+        "{ path=/usr/bin/python3 ; argv[]="
+        f"/usr/bin/python3 {installed} ; ignore_errors=no ; }}"
+    )
+    shell_stubs = (
+        f"EOM_AUDIT_SOURCE={str(source)!r}",
+        f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+        f"EOM_AUDIT_PRE_PEER_SOURCE={str(backup)!r}",
+        "EOM_AUDIT_SERVICE='eom-write-boundary-audit.service'",
+        "EOM_AUDIT_TIMER='eom-write-boundary-audit.timer'",
+        "EOM_AUDIT_TEST_SERVICE_ENV=''",
+        "EOM_AUDIT_TEST_MANAGER_ENV=''",
+        "EOM_AUDIT_TEST_ENVIRONMENT_FILES=''",
+        "EOM_AUDIT_TEST_TIMER_ENABLED=true",
+        "EOM_AUDIT_TEST_TIMER_ACTIVE=true",
+        f"EOM_AUDIT_TEST_EXEC_START={exec_start!r}",
+        _eom_audit_systemctl_stub(),
+    )
+
+    stage = _run_runbook_function(
+        runbook,
+        (
+            "eom_audit_environment_has_dsn_override",
+            "eom_audit_environment_has_psql_bin_override",
+            "eom_audit_require_unit_contract",
+            "eom_audit_require_stage_inputs",
+            "eom_audit_require_socket_default",
+            "eom_audit_stage_socket_source",
+        ),
+        shell_stubs=shell_stubs,
+    )
+
+    assert stage.returncode == 0, stage.stderr
+    assert installed.read_text(encoding="utf-8") == "socket-default\n"
+    assert backup.read_text(encoding="utf-8") == "pre-peer\n"
+
+    restore = _run_runbook_function(
+        runbook,
+        ("eom_audit_restore_pre_peer_source",),
+        shell_stubs=(
+            f"EOM_AUDIT_INSTALLED={str(installed)!r}",
+            f"EOM_AUDIT_PRE_PEER_SOURCE={str(backup)!r}",
+        ),
+    )
+
+    assert restore.returncode == 0, restore.stderr
+    assert installed.read_text(encoding="utf-8") == "pre-peer\n"
+
+
+def test_runbook_stages_and_restores_the_audit_source_on_the_peer_side_of_cutover() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    peer_receipt = "The final query must return `0|1|1|0|1|0`"
+    stage = "eom_audit_stage_socket_source || {"
+    rollback = runbook.split("rollback_peer_cutover() {", maxsplit=1)[1].split(
+        "\n   }", maxsplit=1
+    )[0]
+    stage_input_admission = "eom_audit_require_stage_inputs || exit 1"
+    first_hba_backup = (
+        "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf"
+    )
+
+    assert runbook.index(stage_input_admission) < runbook.index(first_hba_backup)
+    assert runbook.index(peer_receipt) < runbook.index(stage)
+    assert runbook.index(stage) < runbook.index(
+        "systemctl --user restart atlas-api.service", runbook.index(stage)
+    )
+    assert rollback.index("eom_audit_restore_pre_peer_source || return 1") < rollback.index(
+        "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer"
+    )
+    assert (
+        'env -u ATLAS_EOM_AUDIT_ATLAS_DSN \\\n     -u ATLAS_EOM_AUDIT_PSQL_BIN "$EOM_AUDIT_INSTALLED"'
+        in runbook
+    )
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode"),
+    (
+        ("ATLAS_DB_HOST=canonical.example\n", 1),
+        ("ATLAS_DB_SOCKET_PATH_BACKUP=/var/run/postgresql\n", 1),
+        ("atlas_db_connection_string=postgresql://shadow.example/atlas\n", 0),
+        ("AtLaS_Db_SoCkEt_PaTh=/var/run/postgresql\n", 0),
+        ("export atLaS_dB_CoNnEcT_tImEoUt=0.01\n", 0),
+    ),
+)
+def test_service_db_case_variant_preflight_matches_database_aliases(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        ("service_db_has_case_variant_key",),
+        argument=env_file,
+    )
+
+    assert result.returncode == expected_returncode
+
+
+def test_service_db_inspect_rejects_empty_service_environment_file_set() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_inspect",
+        ),
+        service_env_files="",
+    )
+
+    assert result.returncode == 1
+    assert "no service EnvironmentFiles selected" in result.stderr
+    assert "unexpected env invocation" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode", "expected_stderr"),
+    (
+        ("ATLAS_DB_HOST=canonical.example\n", 99, "unexpected env invocation"),
+        (
+            "atlas_db_connection_string=postgresql://shadow.example/atlas\n",
+            1,
+            "case-variant ATLAS_DB_* key found",
+        ),
+    ),
+)
+def test_service_db_inspect_preflight_controls_ops_invocation(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+    expected_stderr: str,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_inspect",
+        ),
+        service_env_files=str(env_file),
+    )
+
+    assert result.returncode == expected_returncode
+    assert expected_stderr in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode"),
+    (
+        ("ATLAS_DB_HOST=canonical.example\n", 0),
+        ("ATLAS_DB_SOCKET_PATH = /var/run/postgresql\n", 1),
+        ("ATLAS_DB_SOCKET_PATH_BACKUP=/var/run/postgresql\n", 0),
+    ),
+)
+def test_service_db_no_socket_guard_checks_every_selected_file(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+        ),
+        service_env_files=str(env_file),
+    )
+
+    assert result.returncode == expected_returncode
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode", "expected_stderr"),
+    (
+        ("ATLAS_DB_CONNECTION_STRING=\n", 0, ""),
+        ('ATLAS_DB_CONNECTION_STRING="" # intentionally empty\n', 0, ""),
+        ("ATLAS_DB_CONNECTION_STRING=''\n", 0, ""),
+        ("ATLAS_DB_CONNECTION_STRING= # intentionally empty\n", 0, ""),
+        (
+            "ATLAS_DB_CONNECTION_STRING=postgresql://db.example/atlas\n",
+            1,
+            "nonblank ATLAS_DB_CONNECTION_STRING assignment found",
+        ),
+        (
+            "ATLAS_DB_CONNECTION_STRING=${ATLAS_DATABASE_URL}\n",
+            1,
+            "nonblank ATLAS_DB_CONNECTION_STRING assignment found",
+        ),
+    ),
+)
+def test_new_socket_configuration_admission_rejects_nonempty_complete_dsn(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+    expected_stderr: str,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_has_nonempty_connection_string_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+            "service_db_require_effective_env_file",
+            "service_db_require_new_socket_configuration",
+        ),
+        service_env_files=str(env_file),
+        shell_stubs=(f"EFFECTIVE_DB_ENV_FILE={str(env_file)!r}",),
+    )
+
+    assert result.returncode == expected_returncode
+    assert expected_stderr in result.stderr
+
+
+def test_rollback_refuses_a_surviving_socket_assignment_before_hba_restore(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(
+        "ATLAS_DB_SOCKET_PATH = /var/run/postgresql\n",
+        encoding="utf-8",
+    )
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+            "service_db_require_effective_env_file",
+            "eom_audit_restore_pre_peer_source",
+            "rollback_peer_cutover",
+        ),
+        service_env_files=str(env_file),
+        shell_stubs=(
+            "sudoedit() { return 0; }",
+            f"EFFECTIVE_DB_ENV_FILE={str(env_file)!r}",
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "ATLAS_DB_SOCKET_PATH assignment remains" in result.stderr
+    assert "unexpected env invocation" not in result.stderr
+
+
+def test_rollback_rejects_empty_environment_file_members_before_sudoedit(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text("ATLAS_DB_HOST=canonical.example\n", encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_require_effective_env_file",
+            "eom_audit_restore_pre_peer_source",
+            "rollback_peer_cutover",
+        ),
+        service_env_files=f"{env_file}:",
+        shell_stubs=(
+            "sudoedit() { printf '%s\\n' 'unexpected sudoedit' >&2; return 99; }",
+            (
+                "sudo() { "
+                "if [ \"$1\" = 'cp' ]; then printf '%s\\n' 'unexpected HBA restore' >&2; return 99; fi; "
+                "\"$@\"; "
+                "}"
+            ),
+            "EFFECTIVE_DB_ENV_FILE=''",
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "service EnvironmentFile must be a nonempty absolute path" in result.stderr
+    assert "unexpected sudoedit" not in result.stderr
+    assert "unexpected HBA restore" not in result.stderr
+
+
+def test_rollback_refuses_an_hba_source_mismatch_before_service_restart(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text("ATLAS_DB_HOST=canonical.example\n", encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+            "service_db_require_effective_env_file",
+            "eom_audit_restore_pre_peer_source",
+            "rollback_peer_cutover",
+        ),
+        service_env_files=str(env_file),
+        shell_stubs=(
+            "sudoedit() { return 0; }",
+            (
+                "sudo() { "
+                "if [ \"$1\" = '-u' ]; then printf '%s\\n' '4|1|0'; return 0; fi; "
+                "if [ \"$1\" = 'cp' ] || [ \"$1\" = 'systemctl' ]; then return 0; fi; "
+                "\"$@\"; "
+                "}"
+            ),
+            "systemctl() { printf '%s\\n' 'unexpected user restart' >&2; return 99; }",
+            f"EFFECTIVE_DB_ENV_FILE={str(env_file)!r}",
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "restored HBA receipt was not 4|0|0" in result.stderr
+    assert "unexpected user restart" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode"),
+    (
+        ("ATLAS_DB_SOCKET_PATH=/var/run/postgresql\n", 0),
+        ("atlas_db_socket_path=/var/run/postgresql\n", 0),
+        ("export AtLaS_Db_SoCkEt_PaTh = /var/run/postgresql\n", 0),
+        ("ATLAS_DB_SOCKET_PATH_BACKUP=/var/run/postgresql\n", 1),
+        ("ATLAS_DB_SOCKET_PATH\n", 1),
+    ),
+)
+def test_service_db_inspect_socket_precondition_matches_case_variants_only(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    match = re.search(r"sudo grep -Eqi '([^']+)'", runbook)
+    assert match is not None
+
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+    result = subprocess.run(
+        ["grep", "-Eqi", match.group(1), str(env_file)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == expected_returncode
+
+
 @pytest.mark.parametrize(
     "args",
     (
@@ -158,6 +1004,48 @@ def test_database_runtime_environment_overrides_dotenv(
     child_env = database_runtime_environment()
 
     assert child_env["ATLAS_DB_HOST"] == "runtime.example"
+
+
+def test_database_runtime_environment_ignores_case_variant_database_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from atlas_brain.storage.config import DatabaseConfig
+
+    file_dsn = "postgresql://file.example:5433/atlas"
+    shadow_dsn = "postgresql://shadow.example:5433/shadow"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        f"ATLAS_DB_CONNECTION_STRING={file_dsn}\n"
+        "ATLAS_DB_HOST=file.example\n"
+        "ATLAS_DB_CONNECT_TIMEOUT=7.5\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ATLAS_OPS_ENV_FILES", str(env_file))
+    monkeypatch.setenv("atlas_db_connection_string", shadow_dsn)
+    monkeypatch.setenv("AtLaS_Db_HoSt", "shadow.example")
+    monkeypatch.setenv("AtLaS_Db_Connect_Timeout", "0.01")
+    for key in DATABASE_CONFIG_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    child_env = database_runtime_environment()
+
+    assert child_env["ATLAS_DB_CONNECTION_STRING"] == file_dsn
+    assert child_env["ATLAS_DB_HOST"] == "file.example"
+    assert child_env["ATLAS_DB_CONNECT_TIMEOUT"] == "7.5"
+    assert "atlas_db_connection_string" not in child_env
+    assert "AtLaS_Db_HoSt" not in child_env
+    assert "AtLaS_Db_Connect_Timeout" not in child_env
+    with monkeypatch.context() as child_process:
+        for key in tuple(os.environ):
+            child_process.delenv(key, raising=False)
+        for key, value in child_env.items():
+            child_process.setenv(key, value)
+        application_config = DatabaseConfig(_env_file=None)
+
+    assert application_config.connection_string == file_dsn
+    assert application_config.host == "file.example"
+    assert application_config.connect_timeout == 7.5
 
 
 def test_database_file_context_prefers_worktree_over_shared_and_systemd(

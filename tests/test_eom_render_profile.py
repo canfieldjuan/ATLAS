@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import runpy
 import string
 import subprocess
 import sys
@@ -870,6 +871,7 @@ def test_database_config_prefers_connection_string_for_asyncpg_kwargs():
         database="atlas",
         user="atlas",
         password="split-secret",
+        socket_path="/var/run/postgresql",
         connect_timeout=7.0,
         command_timeout=11.0,
     )
@@ -919,11 +921,110 @@ def test_database_config_preserves_split_host_port_kwargs_without_connection_str
     assert config.connection_kwargs(command_timeout=60)["command_timeout"] == 60
 
 
+def test_database_config_uses_socket_path_for_dsn_and_asyncpg_kwargs():
+    from atlas_brain.storage.config import DatabaseConfig
+
+    config = DatabaseConfig(
+        connection_string=" ",
+        host="postgres.internal",
+        port=6543,
+        database="atlas_prod",
+        user="atlas_user",
+        password="atlas_pass",
+        socket_path="/var/run/postgresql",
+        connect_timeout=5.0,
+        command_timeout=17.0,
+    )
+
+    assert config.dsn == (
+        "postgresql://atlas_user:atlas_pass@/atlas_prod"
+        "?host=/var/run/postgresql&port=6543"
+    )
+    assert config.connection_kwargs() == {
+        "host": "/var/run/postgresql",
+        "port": 6543,
+        "database": "atlas_prod",
+        "user": "atlas_user",
+        "password": "atlas_pass",
+        "timeout": 5.0,
+        "command_timeout": 17.0,
+    }
+    assert config.connection_kwargs(command_timeout=60)["command_timeout"] == 60
+    assert config.target_label == (
+        "socket=/var/run/postgresql, port=6543, db=atlas_prod"
+    )
+
+    same_socket_other_port = config.model_copy(update={"port": 6544})
+    assert same_socket_other_port.target_label == (
+        "socket=/var/run/postgresql, port=6544, db=atlas_prod"
+    )
+    assert same_socket_other_port.target_label != config.target_label
+
+
+def test_typed_maintenance_scripts_use_socket_aware_database_kwargs():
+    repo_root = Path(__file__).resolve().parents[1]
+    backfill = (repo_root / "scripts/backfill_community_buying_stage_defaults.py").read_text(
+        encoding="utf-8"
+    )
+    rebuild = (repo_root / "scripts/rebuild_blog_charts.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "db_settings.host" not in backfill
+    assert "db_settings.connection_kwargs(command_timeout=60)" in backfill
+    assert "db_settings.host" not in rebuild
+    assert "db_settings.connection_kwargs()" in rebuild
+    assert "min_size=2" in rebuild
+    assert "max_size=4" in rebuild
+
+    rebuild_module = runpy.run_path(str(repo_root / "scripts/rebuild_blog_charts.py"))
+    pool_kwargs = rebuild_module["_rebuild_pool_connection_kwargs"](
+        {
+            "host": "/var/run/postgresql",
+            "port": 5433,
+            "database": "atlas",
+            "user": "atlas",
+            "password": "secret",
+            "timeout": 10.0,
+            "command_timeout": 30.0,
+        }
+    )
+    assert pool_kwargs == {
+        "host": "/var/run/postgresql",
+        "port": 5433,
+        "database": "atlas",
+        "user": "atlas",
+        "password": "secret",
+    }
+
+
+def test_database_config_percent_encodes_socket_path_in_dsn_query():
+    from urllib.parse import parse_qs, urlsplit
+
+    from atlas_brain.storage.config import DatabaseConfig
+
+    socket_path = "/tmp/atlas&cluster?primary"
+    config = DatabaseConfig(
+        connection_string="",
+        port=6543,
+        database="atlas_prod",
+        user="atlas_user",
+        password="atlas_pass",
+        socket_path=socket_path,
+    )
+
+    assert config.dsn == (
+        "postgresql://atlas_user:atlas_pass@/atlas_prod"
+        "?host=/tmp/atlas%26cluster%3Fprimary&port=6543"
+    )
+    assert parse_qs(urlsplit(config.dsn).query)["host"] == [socket_path]
+    assert config.connection_kwargs()["host"] == socket_path
+
+
 def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
     from atlas_brain.storage.config import DatabaseConfig
     from atlas_brain.storage import database
 
-    dsn = "postgresql://atlas_eom:secret@atlas-eom-postgres:5432/atlas_eom"
     calls: dict[str, dict[str, object]] = {}
 
     class _FakePool:
@@ -940,7 +1041,12 @@ def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
 
     config = DatabaseConfig(
         enabled=True,
-        connection_string=dsn,
+        connection_string="",
+        socket_path="/var/run/postgresql",
+        port=5433,
+        database="atlas",
+        user="atlas",
+        password="",
         min_pool_size=1,
         max_pool_size=3,
         connect_timeout=4.0,
@@ -963,14 +1069,22 @@ def test_database_pool_uses_configured_connection_kwargs(monkeypatch):
         database.db_settings = original_settings
 
     assert calls["create_pool"] == {
-        "dsn": dsn,
+        "host": "/var/run/postgresql",
+        "port": 5433,
+        "database": "atlas",
+        "user": "atlas",
+        "password": "",
         "timeout": 4.0,
         "command_timeout": 9.0,
         "min_size": 1,
         "max_size": 3,
     }
     assert calls["connect"] == {
-        "dsn": dsn,
+        "host": "/var/run/postgresql",
+        "port": 5433,
+        "database": "atlas",
+        "user": "atlas",
+        "password": "",
         "timeout": 4.0,
         "command_timeout": 60,
     }

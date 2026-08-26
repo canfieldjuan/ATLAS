@@ -5,7 +5,7 @@ Configuration is loaded from environment variables with sensible defaults.
 """
 
 from typing import Optional
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -81,7 +81,10 @@ class DatabaseConfig(BaseSettings):
             return self.connection_string.strip()
         if self.socket_path:
             # Unix socket connection (lowest latency)
-            return f"postgresql://{self.user}:{self.password}@/{self.database}?host={self.socket_path}"
+            return (
+                f"postgresql://{self.user}:{self.password}@/{self.database}"
+                f"?host={quote(self.socket_path, safe='/')}&port={self.port}"
+            )
         else:
             # TCP connection
             return f"postgresql://{self.user}:{self.password}@{self.host}:{self.port}/{self.database}"
@@ -99,7 +102,9 @@ class DatabaseConfig(BaseSettings):
             except ValueError:
                 return "dsn=<connection-string>"
         if self.socket_path:
-            return f"socket={self.socket_path}, db={self.database}"
+            return (
+                f"socket={self.socket_path}, port={self.port}, db={self.database}"
+            )
         return f"host={self.host}, port={self.port}, db={self.database}"
 
     def connection_kwargs(
@@ -122,7 +127,7 @@ class DatabaseConfig(BaseSettings):
                 **timeout_kwargs,
             }
         return {
-            "host": self.host,
+            "host": self.socket_path or self.host,
             "port": self.port,
             "database": self.database,
             "user": self.user,

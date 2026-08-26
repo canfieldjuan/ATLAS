@@ -61,13 +61,7 @@ def _should_downgrade(row: dict[str, Any]) -> bool:
 
 async def _run(limit: int, apply: bool) -> None:
     conn = await asyncpg.connect(
-        host=db_settings.host,
-        port=db_settings.port,
-        database=db_settings.database,
-        user=db_settings.user,
-        password=db_settings.password,
-        timeout=db_settings.connect_timeout,
-        command_timeout=60,
+        **db_settings.connection_kwargs(command_timeout=60),
     )
     try:
         rows = await conn.fetch(
