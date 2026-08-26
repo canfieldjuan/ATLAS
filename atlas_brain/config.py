@@ -36,6 +36,9 @@ EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV = (
 EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL_ENV = (
     "ATLAS_EOM_MISSED_CALL_RECOVERY_DBA_DATABASE_URL"
 )
+DATABASE_ROLE_TOPOLOGY_DBA_DATABASE_URL_ENV = (
+    "ATLAS_DATABASE_ROLE_TOPOLOGY_DBA_DATABASE_URL"
+)
 _IMAP_PORT_ADAPTER = TypeAdapter(Annotated[int, Field(ge=1, le=65535)])
 _IMAP_SSL_ADAPTER = TypeAdapter(bool)
 
@@ -2600,6 +2603,27 @@ class EOMMissedCallRecoveryDBAConfig(BaseSettings):
         description=(
             "Protected PostgreSQL superuser DSN used only by the controlled "
             "EOM missed-call recovery privilege runner."
+        ),
+    )
+
+
+class DatabaseRoleTopologyDBAConfig(BaseSettings):
+    """Protected DBA-only configuration for the role-topology preflight.
+
+    The normal Atlas runtime does not instantiate this settings boundary. The
+    standalone evidence command is the only consumer of the privileged
+    connection it represents, and it performs no role or ownership mutation.
+    """
+
+    model_config = SettingsConfigDict(env_file=ENV_FILES, extra="ignore")
+
+    database_url: SecretStr = Field(
+        default=SecretStr(""),
+        validation_alias=AliasChoices(DATABASE_ROLE_TOPOLOGY_DBA_DATABASE_URL_ENV),
+        repr=False,
+        description=(
+            "Protected PostgreSQL superuser DSN used only by the read-only "
+            "database role-topology preflight."
         ),
     )
 
