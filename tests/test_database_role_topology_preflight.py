@@ -784,7 +784,21 @@ def test_disposable_role_topology_dsn_rejects_non_test_targets(
 
 
 def _quoted_identifier(value: str) -> str:
-    return f'"{value.replace("\"", "\"\"")}"'
+    return '"' + value.replace('"', '""') + '"'
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("work_log", '"work_log"'),
+        ('work"log', '"work""log"'),
+    ),
+)
+def test_quoted_identifier_uses_postgresql_double_quote_escaping(
+    value: str,
+    expected: str,
+) -> None:
+    assert _quoted_identifier(value) == expected
 
 
 def _runtime_dsn_from_dba_dsn(

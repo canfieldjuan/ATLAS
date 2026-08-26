@@ -102,6 +102,34 @@ Revised non-scope:
 - Normal startup, `DatabaseConfig`, `DatabasePool`, migrations, EOM funnel
   behavior, APIs, and role topology remain outside this revision.
 
+### Contract revision — Python 3.11 test-collection compatibility
+
+New evidence:
+
+- The disposable-test identifier helper embeds escaped quote literals in an
+  f-string expression. GitHub's pinned Python 3.11 parser rejects that form
+  during test collection, before the PostgreSQL integration test can run.
+
+Root cause:
+
+- The test-only identifier helper relies on newer f-string grammar rather than
+  the Python 3.11 grammar the enrolled workflow runs.
+
+Required change surface:
+
+1. Replace only the helper's f-string expression with Python-3.11-compatible
+   string concatenation while retaining doubled-double-quote identifier
+   escaping.
+2. Add a direct focused assertion for ordinary and embedded-double-quote
+   identifiers, and run the focused file through the available Python 3.11
+   interpreter before push.
+
+Must not change:
+
+- Do not change the standalone preflight command, its fixed catalog SQL, the
+  disposable database fixture's role/ACL/policy topology, workflow service
+  topology, runtime configuration, or any production behavior.
+
 ## Scope (this PR)
 
 Ownership lane: eom-crm/runtime-security
@@ -265,27 +293,29 @@ Parked hardening: none.
 
 ## Verification
 
-- Passed locally: `python -m py_compile scripts/check_database_role_topology.py
+- Passed locally after the Python 3.11 correction: `python3.11 -m py_compile
+  tests/test_database_role_topology_preflight.py`; `python -m py_compile
+  scripts/check_database_role_topology.py
   tests/test_database_role_topology_preflight.py atlas_brain/config.py`;
-  `./ops test focused tests/test_database_role_topology_preflight.py
+  `./ops test focused tests/test_database_role_topology_preflight.py -q`
+  (`20 passed, 1 skipped`); `./ops test focused
+  tests/test_database_role_topology_preflight.py
   tests/test_agent_operations_contract.py
-  tests/test_eom_first_clean_completion_dba_runner.py -q` (`140 passed, 1
-  skipped`);
-  `bash scripts/check_ascii_python.sh`; `git diff --cached --check`;
-  `python scripts/sync_pr_plan.py --check
-  plans/PR-Postgres-Role-Topology-Preflight.md origin/main`; and
-  `python scripts/audit_plan_doc.py
-  plans/PR-Postgres-Role-Topology-Preflight.md`.
+  tests/test_eom_first_clean_completion_dba_runner.py -q` (`142 passed, 1
+  skipped`); and `bash scripts/check_ascii_python.sh`.
+- Not locally runnable: `python3.11 -m pytest
+  tests/test_database_role_topology_preflight.py -q` because that isolated
+  Python 3.11 interpreter has no `pytest` module. This is not bypassed; the
+  enrolled GitHub Python 3.11 workflow remains the execution gate.
 - The real PostgreSQL 16 command test skips locally unless the explicitly named,
   loopback-only disposable DBA test DSN is present. The EOM PostgreSQL workflow
   supplies that service and runs the test; it must pass there before merge.
 - Not locally runnable: `gitleaks protect --staged --redact --verbose` because
   the executable is absent in this worktree environment. Do not bypass it; the
   required CI secret scan remains the release gate.
-- Passed after the current follow-up commit: the plan-file and diff-size audits
-  agree that the six declared files and `2137` LOC match `origin/main...HEAD`.
-- Pending before the current branch update: the local PR-review wrapper with
-  its isolated session-state file and current PR body.
+- Pending after the current branch update: rerun the plan-file/diff-size audits
+  and local PR-review wrapper with its isolated session-state file and current
+  PR body.
 - No production database role/configuration/deployment action is part of local
   verification. A real receipt is deferred until a protected DBA DSN is
   provisioned and the deployed runtime has converged.
@@ -297,7 +327,7 @@ Parked hardening: none.
 | `.agent/runbooks/database.md` | 50 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 6 |
 | `atlas_brain/config.py` | 24 |
-| `plans/PR-Postgres-Role-Topology-Preflight.md` | 303 |
+| `plans/PR-Postgres-Role-Topology-Preflight.md` | 333 |
 | `scripts/check_database_role_topology.py` | 783 |
-| `tests/test_database_role_topology_preflight.py` | 971 |
-| **Total** | **2137** |
+| `tests/test_database_role_topology_preflight.py` | 985 |
+| **Total** | **2181** |
