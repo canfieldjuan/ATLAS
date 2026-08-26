@@ -193,6 +193,8 @@ _DATABASE_ACL_QUERY = """
                WHEN database_catalog.datacl IS NULL THEN 'default'
                ELSE 'explicit'
            END AS acl_source,
+           acl.grantor AS grantor_role_oid,
+           grantor_role.rolname AS grantor_role,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
            acl.is_grantable AS is_grantable
@@ -205,12 +207,15 @@ _DATABASE_ACL_QUERY = """
       ) AS acl
       LEFT JOIN pg_catalog.pg_roles AS grantee_role
         ON grantee_role.oid = acl.grantee
+      LEFT JOIN pg_catalog.pg_roles AS grantor_role
+        ON grantor_role.oid = acl.grantor
      WHERE database_catalog.oid = (
          SELECT oid
            FROM pg_catalog.pg_database
           WHERE datname = pg_catalog.current_database()
      )
-     ORDER BY acl_source, grantee_role, acl.privilege_type, acl.is_grantable
+     ORDER BY acl_source, grantor_role.rolname, acl.grantor, grantee_role,
+              acl.privilege_type, acl.is_grantable
 """
 
 _SCHEMA_ACL_QUERY = """
@@ -219,6 +224,8 @@ _SCHEMA_ACL_QUERY = """
                ELSE 'explicit'
            END AS acl_source,
            namespace.nspname AS schema_name,
+           acl.grantor AS grantor_role_oid,
+           grantor_role.rolname AS grantor_role,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
            acl.is_grantable AS is_grantable
@@ -231,10 +238,12 @@ _SCHEMA_ACL_QUERY = """
       ) AS acl
       LEFT JOIN pg_catalog.pg_roles AS grantee_role
         ON grantee_role.oid = acl.grantee
+      LEFT JOIN pg_catalog.pg_roles AS grantor_role
+        ON grantor_role.oid = acl.grantor
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
-     ORDER BY acl_source, namespace.nspname, grantee_role, acl.privilege_type,
-              acl.is_grantable
+     ORDER BY acl_source, namespace.nspname, grantor_role.rolname, acl.grantor,
+              grantee_role, acl.privilege_type, acl.is_grantable
 """
 
 _RELATION_ACL_QUERY = """
@@ -248,6 +257,8 @@ _RELATION_ACL_QUERY = """
            relation.relkind::text AS relation_kind,
            relation.relrowsecurity AS row_security_enabled,
            relation.relforcerowsecurity AS row_security_forced,
+           acl.grantor AS grantor_role_oid,
+           grantor_role.rolname AS grantor_role,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
            acl.is_grantable AS is_grantable
@@ -268,12 +279,15 @@ _RELATION_ACL_QUERY = """
       ) AS acl
       LEFT JOIN pg_catalog.pg_roles AS grantee_role
         ON grantee_role.oid = acl.grantee
+      LEFT JOIN pg_catalog.pg_roles AS grantor_role
+        ON grantor_role.oid = acl.grantor
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
        AND relation.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
      ORDER BY acl_source, namespace.nspname, relation.relname, relation.oid,
               relation.relrowsecurity, relation.relforcerowsecurity,
-              grantee_role, acl.privilege_type, acl.is_grantable
+              grantor_role.rolname, acl.grantor, grantee_role,
+              acl.privilege_type, acl.is_grantable
 """
 
 _FUNCTION_ACL_QUERY = """
@@ -288,6 +302,8 @@ _FUNCTION_ACL_QUERY = """
            pg_catalog.pg_get_function_identity_arguments(procedure.oid)
                AS identity_arguments,
            procedure.prosecdef AS is_security_definer,
+           acl.grantor AS grantor_role_oid,
+           grantor_role.rolname AS grantor_role,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
            acl.is_grantable AS is_grantable
@@ -302,10 +318,12 @@ _FUNCTION_ACL_QUERY = """
       ) AS acl
       LEFT JOIN pg_catalog.pg_roles AS grantee_role
         ON grantee_role.oid = acl.grantee
+      LEFT JOIN pg_catalog.pg_roles AS grantor_role
+        ON grantor_role.oid = acl.grantor
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
      ORDER BY acl_source, namespace.nspname, procedure.proname, procedure.oid,
-              procedure.prosecdef, grantee_role,
+              procedure.prosecdef, grantor_role.rolname, acl.grantor, grantee_role,
               acl.privilege_type, acl.is_grantable
 """
 
@@ -317,6 +335,8 @@ _COLUMN_ACL_QUERY = """
            relation.relkind::text AS relation_kind,
            column_attribute.attnum AS column_number,
            column_attribute.attname AS column_name,
+           acl.grantor AS grantor_role_oid,
+           grantor_role.rolname AS grantor_role,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
            acl.is_grantable AS is_grantable
@@ -328,13 +348,15 @@ _COLUMN_ACL_QUERY = """
       CROSS JOIN LATERAL pg_catalog.aclexplode(column_attribute.attacl) AS acl
       LEFT JOIN pg_catalog.pg_roles AS grantee_role
         ON grantee_role.oid = acl.grantee
+      LEFT JOIN pg_catalog.pg_roles AS grantor_role
+        ON grantor_role.oid = acl.grantor
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
        AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
        AND column_attribute.attnum > 0
        AND NOT column_attribute.attisdropped
      ORDER BY namespace.nspname, relation.relname, relation.oid,
-              column_attribute.attnum, grantee_role,
+              column_attribute.attnum, grantor_role.rolname, acl.grantor, grantee_role,
               acl.privilege_type, acl.is_grantable
 """
 
@@ -373,6 +395,8 @@ _DEFAULT_ACL_QUERY = """
            COALESCE(namespace.nspname, '<database>') AS schema_name,
            owner_role.rolname AS owner_role,
            default_acl.defaclobjtype::text AS object_type,
+           acl.grantor AS grantor_role_oid,
+           grantor_role.rolname AS grantor_role,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
            acl.is_grantable AS is_grantable
@@ -384,13 +408,16 @@ _DEFAULT_ACL_QUERY = """
       CROSS JOIN LATERAL pg_catalog.aclexplode(default_acl.defaclacl) AS acl
       LEFT JOIN pg_catalog.pg_roles AS grantee_role
         ON grantee_role.oid = acl.grantee
+      LEFT JOIN pg_catalog.pg_roles AS grantor_role
+        ON grantor_role.oid = acl.grantor
      WHERE namespace.nspname IS NULL
         OR (
             namespace.nspname !~ '^pg_'
             AND namespace.nspname <> 'information_schema'
         )
-     ORDER BY default_acl.oid, schema_name, owner_role, object_type, grantee_role,
-              acl.privilege_type, acl.is_grantable
+     ORDER BY default_acl.oid, schema_name, owner_role, object_type,
+              grantor_role.rolname, acl.grantor, grantee_role, acl.privilege_type,
+              acl.is_grantable
 """
 
 

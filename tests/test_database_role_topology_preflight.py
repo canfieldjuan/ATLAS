@@ -208,6 +208,8 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
         "database_acl": [
             {
                 "acl_source": "explicit",
+                "grantor_role_oid": 20_010,
+                "grantor_role": "postgres",
                 "grantee_role": "atlas",
                 "privilege_type": "CONNECT",
                 "is_grantable": False,
@@ -217,6 +219,8 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
             {
                 "acl_source": "explicit",
                 "schema_name": "public",
+                "grantor_role_oid": 20_010,
+                "grantor_role": "postgres",
                 "grantee_role": "atlas",
                 "privilege_type": "USAGE",
                 "is_grantable": False,
@@ -231,6 +235,8 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "relation_kind": "r",
                 "row_security_enabled": True,
                 "row_security_forced": False,
+                "grantor_role_oid": 20_006,
+                "grantor_role": "atlas_eom_handoff_owner",
                 "grantee_role": "atlas",
                 "privilege_type": "SELECT",
                 "is_grantable": False,
@@ -245,6 +251,8 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "function_kind": "f",
                 "identity_arguments": "employee_id bigint",
                 "is_security_definer": True,
+                "grantor_role_oid": 20_006,
+                "grantor_role": "atlas_eom_handoff_owner",
                 "grantee_role": "PUBLIC",
                 "privilege_type": "EXECUTE",
                 "is_grantable": False,
@@ -259,6 +267,8 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "relation_kind": "r",
                 "column_number": 2,
                 "column_name": "hours_worked",
+                "grantor_role_oid": 20_006,
+                "grantor_role": "atlas_eom_handoff_owner",
                 "grantee_role": "atlas",
                 "privilege_type": "UPDATE",
                 "is_grantable": False,
@@ -708,6 +718,16 @@ def test_preflight_has_no_apply_or_mutation_command_surface() -> None:
     assert "NULLIF(policy.polroles, ARRAY[]::oid[])" in source
     assert "membership.inherit_option" in source
     assert "membership.set_option" in source
+    acl_queries = (
+        runner._DATABASE_ACL_QUERY,
+        runner._SCHEMA_ACL_QUERY,
+        runner._RELATION_ACL_QUERY,
+        runner._FUNCTION_ACL_QUERY,
+        runner._COLUMN_ACL_QUERY,
+        runner._DEFAULT_ACL_QUERY,
+    )
+    assert all("acl.grantor AS grantor_role_oid" in query for query in acl_queries)
+    assert all("grantor_role.rolname AS grantor_role" in query for query in acl_queries)
     assert "relation.relname AS relation_name" in source
     assert "policy.polname AS policy_name" in source
     assert "count(*)::bigint" not in source
@@ -832,6 +852,7 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
     schema_name = f"role_topology_{suffix}"
     runtime_role = f"role_topology_runtime_{suffix}"
     granted_role = f"role_topology_granted_{suffix}"
+    grantor_role = f"role_topology_grantor_{suffix}"
     relation_name = "work_log"
     function_name = "write_log"
     policy_name = "read_work_log"
@@ -839,14 +860,16 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
     schema = _quoted_identifier(schema_name)
     runtime = _quoted_identifier(runtime_role)
     granted = _quoted_identifier(granted_role)
+    grantor = _quoted_identifier(grantor_role)
     relation = f"{schema}.{_quoted_identifier(relation_name)}"
     function = f"{schema}.{_quoted_identifier(function_name)}(employee_id bigint)"
     policy = _quoted_identifier(policy_name)
 
-    async def exercise() -> dict[str, object]:
+    async def exercise() -> tuple[dict[str, object], int]:
         connection = await asyncpg.connect(dba_database_url)
         runtime_created = False
         granted_created = False
+        grantor_created = False
         try:
             await connection.execute(
                 f"CREATE ROLE {runtime} LOGIN PASSWORD "
@@ -856,6 +879,8 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
             runtime_created = True
             await connection.execute(f"CREATE ROLE {granted} NOLOGIN")
             granted_created = True
+            await connection.execute(f"CREATE ROLE {grantor} NOLOGIN")
+            grantor_created = True
             await connection.execute(
                 f"GRANT {granted} TO {runtime} WITH ADMIN FALSE, "
                 "INHERIT FALSE, SET TRUE"
@@ -865,13 +890,24 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
             await connection.execute(
                 f"CREATE TABLE {relation} (row_id bigint, hours_worked integer)"
             )
+            await connection.execute(f"GRANT USAGE ON SCHEMA {schema} TO {grantor}")
+            await connection.execute(
+                f"GRANT SELECT ON {relation} TO {grantor} WITH GRANT OPTION"
+            )
+            await connection.execute(f"SET ROLE {grantor}")
+            await connection.execute(f"GRANT SELECT ON {relation} TO {runtime}")
+            await connection.execute("RESET ROLE")
+            grantor_role_oid = await connection.fetchval(
+                "SELECT oid FROM pg_catalog.pg_roles WHERE rolname = $1",
+                grantor_role,
+            )
+            assert isinstance(grantor_role_oid, int)
             await connection.execute(f"ALTER TABLE {relation} ENABLE ROW LEVEL SECURITY")
             await connection.execute(
                 f"CREATE POLICY {policy} ON {relation} FOR SELECT TO {runtime} "
                 "USING (true)"
             )
             await connection.execute(f"GRANT USAGE ON SCHEMA {schema} TO {runtime}")
-            await connection.execute(f"GRANT SELECT ON {relation} TO {runtime}")
             await connection.execute(
                 f"GRANT UPDATE (hours_worked) ON {relation} TO {runtime}"
             )
@@ -899,18 +935,23 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
                 check=False,
             )
             assert result.returncode == 0, result.stderr
-            return json.loads(result.stdout)
+            return json.loads(result.stdout), grantor_role_oid
         finally:
+            await connection.execute("RESET ROLE")
             await connection.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            if runtime_created:
+                await connection.execute(f"REVOKE USAGE ON SCHEMA public FROM {runtime}")
             if runtime_created and granted_created:
                 await connection.execute(f"REVOKE {granted} FROM {runtime}")
             if runtime_created:
                 await connection.execute(f"DROP ROLE {runtime}")
             if granted_created:
                 await connection.execute(f"DROP ROLE {granted}")
+            if grantor_created:
+                await connection.execute(f"DROP ROLE {grantor}")
             await connection.close()
 
-    receipt = asyncio.run(exercise())
+    receipt, grantor_role_oid = asyncio.run(exercise())
     catalog = receipt["catalog"]
     membership = next(
         row
@@ -940,6 +981,8 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
         and row["privilege_type"] == "SELECT"
     )
     assert isinstance(relation_acl["relation_oid"], int)
+    assert relation_acl["grantor_role"] == grantor_role
+    assert relation_acl["grantor_role_oid"] == grantor_role_oid
 
     column_acl = next(
         row

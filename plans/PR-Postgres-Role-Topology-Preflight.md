@@ -130,6 +130,42 @@ Must not change:
   disposable database fixture's role/ACL/policy topology, workflow service
   topology, runtime configuration, or any production behavior.
 
+### Contract revision — ACL grantor provenance and disposable cleanup
+
+New evidence:
+
+- Every ACL projection emits its grantee and privilege but omits
+  `aclexplode(...).grantor`, so the receipt cannot distinguish a direct owner
+  grant from a delegated grant that disappears when an intermediate grantor is
+  revoked.
+- The disposable integration fixture grants the temporary runtime role
+  `USAGE` on `public`, but does not revoke that persistent schema ACL before
+  it drops the role.
+
+Root cause:
+
+- The role-topology receipt preserves object identity but not the provenance of
+  ACL authority, and the test fixture leaves one cross-schema dependency owned
+  by its temporary role.
+
+Required change surface:
+
+1. Add stable grantor OID and role-name fields to database, schema, relation,
+   function, column, and default-ACL records, and include those identities in
+   deterministic ordering.
+2. Extend the unit fixture and source-closure assertion for every ACL
+   projection; seed one delegated relation grant in the disposable PostgreSQL
+   16 test and assert its grantor OID/name in the real receipt.
+3. Reset any switched test role and revoke the temporary runtime role's
+   `public` schema `USAGE` before dropping it, so the integration fixture
+   proves cleanup rather than retaining a privilege dependency.
+
+Must not change:
+
+- Do not make the standalone command mutate a database, alter production roles
+  or privileges, add a migration, change normal runtime configuration, or
+  broaden the disposable test target beyond its loopback-only guard.
+
 ## Scope (this PR)
 
 Ownership lane: eom-crm/runtime-security
@@ -293,7 +329,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Passed locally after the Python 3.11 correction: `python3.11 -m py_compile
+- Passed locally after the compatibility, cleanup, and provenance corrections:
+  `python3.11 -m py_compile
   tests/test_database_role_topology_preflight.py`; `python -m py_compile
   scripts/check_database_role_topology.py
   tests/test_database_role_topology_preflight.py atlas_brain/config.py`;
@@ -327,7 +364,7 @@ Parked hardening: none.
 | `.agent/runbooks/database.md` | 50 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 6 |
 | `atlas_brain/config.py` | 24 |
-| `plans/PR-Postgres-Role-Topology-Preflight.md` | 333 |
-| `scripts/check_database_role_topology.py` | 783 |
-| `tests/test_database_role_topology_preflight.py` | 985 |
-| **Total** | **2181** |
+| `plans/PR-Postgres-Role-Topology-Preflight.md` | 370 |
+| `scripts/check_database_role_topology.py` | 810 |
+| `tests/test_database_role_topology_preflight.py` | 1028 |
+| **Total** | **2288** |
