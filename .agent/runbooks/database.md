@@ -129,13 +129,18 @@ break-glass path.
    ```bash
    SERVICE_ENV_FILES='/absolute/first.service.env:/absolute/second.service.env'
    service_db_inspect() {
-     env -u ATLAS_DB_CONNECTION_STRING \
+     env -u ATLAS_DB_ENABLED \
+       -u ATLAS_DB_CONNECTION_STRING \
        -u ATLAS_DB_HOST \
        -u ATLAS_DB_PORT \
        -u ATLAS_DB_DATABASE \
        -u ATLAS_DB_USER \
        -u ATLAS_DB_PASSWORD \
+       -u ATLAS_DB_MIN_POOL_SIZE \
+       -u ATLAS_DB_MAX_POOL_SIZE \
        -u ATLAS_DB_SOCKET_PATH \
+       -u ATLAS_DB_CONNECT_TIMEOUT \
+       -u ATLAS_DB_COMMAND_TIMEOUT \
        ATLAS_OPS_ENV_FILES="$SERVICE_ENV_FILES" \
        ./ops db inspect connectivity
    }

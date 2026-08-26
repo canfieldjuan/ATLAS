@@ -74,8 +74,8 @@ leave its restart procedure with contradictory integrity instructions.
    the service. The procedure must stop on unresolved or remaining loopback TCP
    clients and prove the loaded peer map has exactly the intended mapping. The fixed
    inspection must explicitly select the ordered `atlas-api.service`
-   `EnvironmentFiles` while excluding every case variant of ad hoc known
-   `ATLAS_DB_*` overrides.
+   `EnvironmentFiles` while the helper clears every exact-uppercase
+   `ATLAS_DB_*` override and `ops` excludes every lower/mixed-case variant.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
@@ -191,7 +191,8 @@ Max files: 7
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
     order, and removes every case variant of every consumed `ATLAS_DB_*` value
     before it constructs `DatabaseConfig`; exact-uppercase runtime keys preserve
-    the documented override behavior.
+    the generic documented override behavior, while the service-pinned helper
+    explicitly unsets all of them before its proof.
   - The cutover reconciles every client observed in both initial and final
     loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
     receipt, requires no remaining final client, and requires an exact loaded
@@ -247,9 +248,10 @@ Max files: 7
   inherited database override admitted. Every lower- or mixed-case matching
   alias is removed before `DatabaseConfig` loads the child environment, while
   unrelated keys remain unchanged; this fails closed against inspecting a
-  shadowed target or applying a shadowed timeout. A regression pins the
-  membership equality so a new `DatabaseConfig` field cannot silently escape
-  the scrub set.
+  shadowed target or applying a shadowed timeout. The service-pinned helper
+  clears every canonical key before it invokes the inspector, so it admits no
+  inherited database override. A regression pins the membership equality so a
+  new `DatabaseConfig` field cannot silently escape the scrub set.
 
 ### Files touched
 
@@ -311,6 +313,8 @@ blocks the socket-peer path.
   'database_runtime_environment'` — 3 passed, 40 deselected (local); proves
   the canonical override, case-variant rejection, and complete key-set closure.
 - `bash scripts/check_ascii_python.sh` — passed (local).
+- `service_db_inspect` shell block extracted from
+  `.agent/runbooks/database.md` and checked with `bash -n` — passed (local).
 - `git diff --check` — passed (local).
 - `python scripts/sync_pr_plan.py
   plans/PR-Postgres-Loopback-Scram-Hardening.md --check` — passed (local).
@@ -331,14 +335,14 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 401 |
+| `.agent/runbooks/database.md` | 406 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 346 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 350 |
 | `tests/test_agent_operations_contract.py` | 50 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **904** |
+| **Total** | **913** |
 
 ## Diff budget
 
