@@ -84,7 +84,9 @@ leave its restart procedure with contradictory integrity instructions.
 6. Update `ops` to admit only canonical uppercase runtime database overrides,
    remove every case-insensitive alias for every `DatabaseConfig` setting before
    its inspection child constructs that configuration, and add a regression that
-   proves the selected service file wins for both target and timeout settings.
+   proves the selected service file wins for both target and timeout settings,
+   plus a closure test that fails when a future `DatabaseConfig` field is not
+   added to that scrub set.
 
 #### Explicit non-scope
 
@@ -115,7 +117,8 @@ leave its restart procedure with contradictory integrity instructions.
   default inspector context, while an ordered `ATLAS_OPS_ENV_FILES` override
   selects the intended service configuration and lower/mixed-case inherited
   aliases for every consumed database setting cannot supersede it in the
-  inspection child.
+  inspection child; the `DATABASE_CONFIG_KEYS` set must exactly match the
+  current `DatabaseConfig` fields.
 - Cheap local gates: focused test target, `bash scripts/check_ascii_python.sh`,
   `git diff --check`, and `python scripts/sync_pr_plan.py ... --check`.
 - GitHub remains the complete unit gate.
@@ -244,7 +247,9 @@ Max files: 7
   inherited database override admitted. Every lower- or mixed-case matching
   alias is removed before `DatabaseConfig` loads the child environment, while
   unrelated keys remain unchanged; this fails closed against inspecting a
-  shadowed target or applying a shadowed timeout.
+  shadowed target or applying a shadowed timeout. A regression pins the
+  membership equality so a new `DatabaseConfig` field cannot silently escape
+  the scrub set.
 
 ### Files touched
 
@@ -303,8 +308,8 @@ blocks the socket-peer path.
   database_file_context_honors_explicit_override_order'` — 2 passed, 39
   deselected (local).
 - `./ops test focused tests/test_agent_operations_contract.py -q -k
-  'database_runtime_environment'` — 2 passed, 40 deselected (local); proves
-  both the canonical override and case-variant rejection boundaries.
+  'database_runtime_environment'` — 3 passed, 40 deselected (local); proves
+  the canonical override, case-variant rejection, and complete key-set closure.
 - `bash scripts/check_ascii_python.sh` — passed (local).
 - `git diff --check` — passed (local).
 - `python scripts/sync_pr_plan.py
@@ -330,10 +335,10 @@ blocks the socket-peer path.
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 341 |
-| `tests/test_agent_operations_contract.py` | 42 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 346 |
+| `tests/test_agent_operations_contract.py` | 50 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **891** |
+| **Total** | **904** |
 
 ## Diff budget
 

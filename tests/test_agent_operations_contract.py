@@ -63,6 +63,14 @@ def test_database_surface_contains_only_fixed_inspections() -> None:
         assert DATABASE_INSPECTIONS[name] not in command
 
 
+def test_database_runtime_environment_covers_every_database_config_key() -> None:
+    from atlas_brain.storage.config import DatabaseConfig
+
+    assert DATABASE_CONFIG_KEYS == frozenset(
+        f"ATLAS_DB_{field_name.upper()}" for field_name in DatabaseConfig.model_fields
+    )
+
+
 @pytest.mark.parametrize(
     "args",
     (
