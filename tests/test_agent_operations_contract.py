@@ -82,6 +82,38 @@ def test_service_db_inspect_clears_every_database_config_key() -> None:
 
     assert cleared_keys == DATABASE_CONFIG_KEYS
     assert "pre-existing ATLAS_DB_SOCKET_PATH found" in runbook
+    assert "sudo grep -Eqi" in runbook
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode"),
+    (
+        ("ATLAS_DB_SOCKET_PATH=/var/run/postgresql\n", 0),
+        ("atlas_db_socket_path=/var/run/postgresql\n", 0),
+        ("export AtLaS_Db_SoCkEt_PaTh = /var/run/postgresql\n", 0),
+        ("ATLAS_DB_SOCKET_PATH_BACKUP=/var/run/postgresql\n", 1),
+        ("ATLAS_DB_SOCKET_PATH\n", 1),
+    ),
+)
+def test_service_db_inspect_socket_precondition_matches_case_variants_only(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    match = re.search(r"sudo grep -Eqi '([^']+)'", runbook)
+    assert match is not None
+
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+    result = subprocess.run(
+        ["grep", "-Eqi", match.group(1), str(env_file)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == expected_returncode
 
 
 @pytest.mark.parametrize(

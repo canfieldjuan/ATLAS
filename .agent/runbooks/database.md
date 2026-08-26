@@ -211,10 +211,10 @@ break-glass path.
    part of this procedure; that needs a separate configuration-migration slice.
 
    This procedure supports only a **new** socket setting. Before any edit, stop
-   if any selected service file already assigns `ATLAS_DB_SOCKET_PATH`, including
-   an empty or different value. Do not replace, remove, or preserve an existing
-   assignment here: its original behavior needs a separate configuration
-   migration with an exact restoration receipt.
+   if any selected service file already assigns `ATLAS_DB_SOCKET_PATH` in any
+   case variant, including an empty or different value. Do not replace, remove,
+   or preserve an existing assignment here: its original behavior needs a
+   separate configuration migration with an exact restoration receipt.
 
    ```bash
    while IFS= read -r service_env_file; do
@@ -223,7 +223,7 @@ break-glass path.
        printf '%s\n' 'service EnvironmentFile is unreadable; do not add a socket setting' >&2
        exit 1
      fi
-     if sudo grep -Eq '^[[:space:]]*(export[[:space:]]+)?ATLAS_DB_SOCKET_PATH[[:space:]]*=' "$service_env_file"; then
+     if sudo grep -Eqi '^[[:space:]]*(export[[:space:]]+)?ATLAS_DB_SOCKET_PATH[[:space:]]*=' "$service_env_file"; then
        printf '%s\n' 'pre-existing ATLAS_DB_SOCKET_PATH found; use a separate configuration migration' >&2
        exit 1
      else
