@@ -106,6 +106,7 @@ Revised non-scope:
 
 Ownership lane: eom-crm/runtime-security
 Slice phase: Production hardening
+Max files: 6
 
 1. Add a fail-closed, read-only catalog receipt that establishes the live
    PostgreSQL role/ownership topology before any authority separation is
@@ -282,7 +283,7 @@ Parked hardening: none.
   the executable is absent in this worktree environment. Do not bypass it; the
   required CI secret scan remains the release gate.
 - Passed after the current follow-up commit: the plan-file and diff-size audits
-  agree that the six declared files and `2136` LOC match `origin/main...HEAD`.
+  agree that the six declared files and `2137` LOC match `origin/main...HEAD`.
 - Pending before the current branch update: the local PR-review wrapper with
   its isolated session-state file and current PR body.
 - No production database role/configuration/deployment action is part of local
@@ -296,7 +297,7 @@ Parked hardening: none.
 | `.agent/runbooks/database.md` | 50 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 6 |
 | `atlas_brain/config.py` | 24 |
-| `plans/PR-Postgres-Role-Topology-Preflight.md` | 302 |
+| `plans/PR-Postgres-Role-Topology-Preflight.md` | 303 |
 | `scripts/check_database_role_topology.py` | 783 |
 | `tests/test_database_role_topology_preflight.py` | 971 |
-| **Total** | **2136** |
+| **Total** | **2137** |
