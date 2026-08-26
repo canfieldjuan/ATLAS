@@ -96,10 +96,11 @@ incorrectly said that admissible state could contain no `missing_source`.
   health, an authenticated EOM CRM read, the application's Unix-socket backend,
   and fixed inspection selected from the service `EnvironmentFiles`.
 - Only then replace every loopback TCP `trust` rule with `scram-sha-256`,
-  reload PostgreSQL, prove the loaded HBA result is `4|0|0` (four loopback
-  SCRAM rows, zero trust rows, zero parser errors), repeat the proofs, prove
-  passwordless TCP rejection, and prove `sudo -u postgres psql -h
-  /var/run/postgresql -p 5433 -d atlas -Atc 'SELECT current_user'` succeeds.
+  reload PostgreSQL, prove the loaded HBA result is `2|2|0|0` (two application
+  and two replication loopback SCRAM rows, zero trust rows, zero parser
+  errors), repeat the proofs, prove passwordless TCP rejection, and prove
+  `sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc 'SELECT
+  current_user'` succeeds.
 
 ## Scope (this PR)
 
@@ -147,9 +148,9 @@ Max files: 5
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
     order, and removes ad hoc `ATLAS_DB_*` values before it constructs
     `DatabaseConfig`.
-  - The post-conversion HBA receipt requires four loopback SCRAM rows, no
-    remaining trust row, and no parser error before an IPv4-only negative probe
-    can be treated as sufficient.
+  - The post-conversion HBA receipt requires two application and two
+    replication loopback SCRAM rows, no remaining trust row, and no parser
+    error before an IPv4-only negative probe can be treated as sufficient.
   - Cutover order is peer proof before removal of any trust rule; rollback
     restores TCP configuration before restarting the application.
 
@@ -222,12 +223,12 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 227 |
+| `.agent/runbooks/database.md` | 234 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 238 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 239 |
 | `tests/test_eom_render_profile.py` | 60 |
-| **Total** | **556** |
+| **Total** | **564** |
 
 ## Diff budget
 

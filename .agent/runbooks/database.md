@@ -84,7 +84,7 @@ break-glass path.
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
      "SELECT count(*) FROM pg_stat_replication;"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
-     "SELECT type, address, netmask, auth_method \
+     "SELECT type, database, user_name, address, netmask, auth_method \
       FROM pg_hba_file_rules \
       WHERE auth_method = 'trust' \
       ORDER BY line_number;"
@@ -95,10 +95,10 @@ break-glass path.
    identity-map file is `/etc/postgresql/16/main/pg_ident.conf`, and the socket
    directory is `/var/run/postgresql`. Stop if the live results differ; derive
    the map/rules from the returned topology rather than copying these values
-   blindly. The final query must show exactly four `host` trust rows: two for
-   `127.0.0.1` and two for `::1`, one application and one replication row for
-   each address. Stop if any other trust row exists; this runbook does not
-   generalize a different HBA topology.
+   blindly. The final query must show exactly four `host` trust rows: two
+   `{all}` application rows and two `{replication}` rows, one for each of
+   `127.0.0.1` and `::1`. Stop if any other trust row exists; this runbook does
+   not generalize a different HBA topology.
 
    Set `SERVICE_ENV_FILES` to the absolute `EnvironmentFiles` paths printed by
    `./ops env systemd`, joined with `:` in that same order. Use this shell-local
@@ -234,17 +234,24 @@ break-glass path.
         count(*) FILTER ( \
           WHERE type = 'host' \
             AND address IN ('127.0.0.1', '::1') \
+            AND database = ARRAY['all']::text[] \
             AND auth_method = 'scram-sha-256' \
-        ) AS loopback_scram_rules, \
+        ) AS application_loopback_scram_rules, \
+        count(*) FILTER ( \
+          WHERE type = 'host' \
+            AND address IN ('127.0.0.1', '::1') \
+            AND database = ARRAY['replication']::text[] \
+            AND auth_method = 'scram-sha-256' \
+        ) AS replication_loopback_scram_rules, \
         count(*) FILTER (WHERE auth_method = 'trust') AS remaining_trust_rules, \
         count(*) FILTER (WHERE error IS NOT NULL) AS hba_errors \
       FROM pg_hba_file_rules;"
    ```
 
-   The query must return `4|0|0`: all four recorded loopback host rules use
-   SCRAM, no trust rule remains, and PostgreSQL loaded the file without errors.
-   Otherwise restore the saved files and stop. Then repeat the service,
-   `service_db_inspect`, and authenticated CRM proofs from step 3.
+   The query must return `2|2|0|0`: both application and replication channels
+   use SCRAM on IPv4 and IPv6, no trust rule remains, and PostgreSQL loaded the
+   file without errors. Otherwise restore the saved files and stop. Then repeat
+   the service, `service_db_inspect`, and authenticated CRM proofs from step 3.
 
 5. Verify both sides of the new boundary. The passwordless TCP probe must fail;
    the retained `postgres` socket peer probe must succeed:
