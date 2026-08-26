@@ -128,7 +128,52 @@ break-glass path.
 
    ```bash
    SERVICE_ENV_FILES='/absolute/first.service.env:/absolute/second.service.env'
+   service_db_has_case_variant_key() {
+     sudo awk '
+       BEGIN { found = 0 }
+       {
+         line = $0
+         sub(/^[[:space:]]*/, "", line)
+         sub(/^export[[:space:]]+/, "", line)
+         if (line ~ /^[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/) {
+           key = line
+           sub(/[[:space:]]*=.*/, "", key)
+           if (tolower(key) ~ /^atlas_db_/ && key != toupper(key)) {
+             found = 1
+             exit
+           }
+         }
+       }
+       END { exit(found ? 0 : 1) }
+     ' "$1"
+   }
+   service_db_require_canonical_keys() {
+     saw_service_env=0
+     while IFS= read -r service_env_file; do
+       [ -n "$service_env_file" ] || continue
+       saw_service_env=1
+       if ! sudo test -r "$service_env_file"; then
+         printf '%s\n' 'service EnvironmentFile is unreadable; do not inspect it' >&2
+         return 1
+       fi
+       if service_db_has_case_variant_key "$service_env_file"; then
+         printf '%s\n' 'case-variant ATLAS_DB_* key found; normalize it before inspection' >&2
+         return 1
+       else
+         case_variant_status=$?
+         if [ "$case_variant_status" -ne 1 ]; then
+           printf '%s\n' 'could not inspect service EnvironmentFile keys; do not inspect it' >&2
+           return 1
+         fi
+       fi
+     done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
+     if [ "$saw_service_env" -ne 1 ]; then
+       printf '%s\n' 'no service EnvironmentFiles selected; do not inspect a fallback context' >&2
+       return 1
+     fi
+   }
    service_db_inspect() {
+     service_db_require_canonical_keys || return 1
      env -u ATLAS_DB_ENABLED \
        -u ATLAS_DB_CONNECTION_STRING \
        -u ATLAS_DB_HOST \
@@ -202,13 +247,20 @@ break-glass path.
    this point, so a valid scoped peer rule can be proved without removing the
    existing path.
 
-3. In the effective service configuration selected by `SERVICE_ENV_FILES`, use
-   `./ops env keys --file <each service file>` and an editor to identify the
-   final `ATLAS_DB_*` assignment in service-file order. Verify that the
-   effective `ATLAS_DB_CONNECTION_STRING` is absent or empty. A nonblank full
-   DSN deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this
+3. Re-run `service_db_require_canonical_keys`; it rejects an empty service-file
+   set and any case-variant `ATLAS_DB_*` key before either fixed inspection or
+   this edit step can use a different configuration from `atlas-api.service`.
+   Then, in the effective service configuration selected by `SERVICE_ENV_FILES`,
+   use `./ops env keys --file <each service file>` and an editor to identify the
+   final canonical `ATLAS_DB_*` assignment in service-file order. Verify that
+   the effective `ATLAS_DB_CONNECTION_STRING` is absent or empty. A nonblank
+   full DSN deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this
    cutover must stop if one is effective. Do not remove or rewrite a full DSN as
    part of this procedure; that needs a separate configuration-migration slice.
+
+   ```bash
+   service_db_require_canonical_keys || exit 1
+   ```
 
    This procedure supports only a **new** socket setting. Before any edit, stop
    if any selected service file already assigns `ATLAS_DB_SOCKET_PATH` in any

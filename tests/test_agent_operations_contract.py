@@ -83,6 +83,124 @@ def test_service_db_inspect_clears_every_database_config_key() -> None:
     assert cleared_keys == DATABASE_CONFIG_KEYS
     assert "pre-existing ATLAS_DB_SOCKET_PATH found" in runbook
     assert "sudo grep -Eqi" in runbook
+    assert "service_db_require_canonical_keys || return 1" in helper
+
+
+def _run_runbook_function(
+    runbook: str,
+    function_names: tuple[str, ...],
+    *,
+    argument: Path | None = None,
+    service_env_files: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    functions = []
+    for function_name in function_names:
+        function_body = runbook.split(f"{function_name}() {{", maxsplit=1)[1].split(
+            "\n   }", maxsplit=1
+        )[0]
+        functions.append(f"{function_name}() {{{function_body}\n}}")
+    call = f'{function_names[-1]} "$1"' if argument is not None else function_names[-1]
+    script = "\n".join(
+        (
+            'sudo() { "$@"; }',
+            *functions,
+            "env() { printf '%s\\n' 'unexpected env invocation' >&2; return 99; }",
+            f"SERVICE_ENV_FILES={service_env_files!r}"
+            if service_env_files is not None
+            else "",
+            call,
+        )
+    )
+    command = ["bash", "-c", script, "runbook-test"]
+    if argument is not None:
+        command.append(str(argument))
+    return subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode"),
+    (
+        ("ATLAS_DB_HOST=canonical.example\n", 1),
+        ("ATLAS_DB_SOCKET_PATH_BACKUP=/var/run/postgresql\n", 1),
+        ("atlas_db_connection_string=postgresql://shadow.example/atlas\n", 0),
+        ("AtLaS_Db_SoCkEt_PaTh=/var/run/postgresql\n", 0),
+        ("export atLaS_dB_CoNnEcT_tImEoUt=0.01\n", 0),
+    ),
+)
+def test_service_db_case_variant_preflight_matches_database_aliases(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        ("service_db_has_case_variant_key",),
+        argument=env_file,
+    )
+
+    assert result.returncode == expected_returncode
+
+
+def test_service_db_inspect_rejects_empty_service_environment_file_set() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_inspect",
+        ),
+        service_env_files="",
+    )
+
+    assert result.returncode == 1
+    assert "no service EnvironmentFiles selected" in result.stderr
+    assert "unexpected env invocation" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode", "expected_stderr"),
+    (
+        ("ATLAS_DB_HOST=canonical.example\n", 99, "unexpected env invocation"),
+        (
+            "atlas_db_connection_string=postgresql://shadow.example/atlas\n",
+            1,
+            "case-variant ATLAS_DB_* key found",
+        ),
+    ),
+)
+def test_service_db_inspect_preflight_controls_ops_invocation(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+    expected_stderr: str,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_require_canonical_keys",
+            "service_db_inspect",
+        ),
+        service_env_files=str(env_file),
+    )
+
+    assert result.returncode == expected_returncode
+    assert expected_stderr in result.stderr
 
 
 @pytest.mark.parametrize(
