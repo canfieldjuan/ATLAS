@@ -123,6 +123,34 @@ def test_runbook_refuses_hba_sources_outside_the_backed_up_file() -> None:
     assert "loopback_rules_outside_backup" in runbook
 
 
+def test_runbook_defines_loopback_cte_in_each_final_hba_receipt() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    final_receipts = runbook.split("4. Only after the socket-peer proof succeeds", 1)[1].split(
+        "The first query must return `4`", 1
+    )[0]
+
+    standalone_receipts = re.findall(
+        r'"WITH hba AS .*?FROM hba;"', final_receipts, flags=re.DOTALL
+    )
+
+    assert len(standalone_receipts) == 2
+    assert all("END AS covers_loopback" in receipt for receipt in standalone_receipts)
+    assert "loopback_rules_outside_backup" in standalone_receipts[1]
+
+
+def test_runbook_admits_new_socket_configuration_before_hba_mutation() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    admission = "service_db_require_new_socket_configuration || exit 1"
+    first_hba_backup = (
+        "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf"
+    )
+
+    assert runbook.count(admission) == 1
+    assert runbook.index(admission) < runbook.index(first_hba_backup)
+    assert "nonblank ATLAS_DB_CONNECTION_STRING assignment found" in runbook
+
+
 def _run_runbook_function(
     runbook: str,
     function_names: tuple[str, ...],
@@ -271,6 +299,52 @@ def test_service_db_no_socket_guard_checks_every_selected_file(
     )
 
     assert result.returncode == expected_returncode
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode", "expected_stderr"),
+    (
+        ("ATLAS_DB_CONNECTION_STRING=\n", 0, ""),
+        ('ATLAS_DB_CONNECTION_STRING="" # intentionally empty\n', 0, ""),
+        ("ATLAS_DB_CONNECTION_STRING=''\n", 0, ""),
+        ("ATLAS_DB_CONNECTION_STRING= # intentionally empty\n", 0, ""),
+        (
+            "ATLAS_DB_CONNECTION_STRING=postgresql://db.example/atlas\n",
+            1,
+            "nonblank ATLAS_DB_CONNECTION_STRING assignment found",
+        ),
+        (
+            "ATLAS_DB_CONNECTION_STRING=${ATLAS_DATABASE_URL}\n",
+            1,
+            "nonblank ATLAS_DB_CONNECTION_STRING assignment found",
+        ),
+    ),
+)
+def test_new_socket_configuration_admission_rejects_nonempty_complete_dsn(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+    expected_stderr: str,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_has_nonempty_connection_string_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+            "service_db_require_new_socket_configuration",
+        ),
+        service_env_files=str(env_file),
+    )
+
+    assert result.returncode == expected_returncode
+    assert expected_stderr in result.stderr
 
 
 def test_rollback_refuses_a_surviving_socket_assignment_before_hba_restore(

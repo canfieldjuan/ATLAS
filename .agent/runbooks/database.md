@@ -165,6 +165,33 @@ break-glass path.
    service_db_has_socket_assignment() {
      sudo grep -Eqi '^[[:space:]]*(export[[:space:]]+)?ATLAS_DB_SOCKET_PATH[[:space:]]*=' "$1"
    }
+   service_db_has_nonempty_connection_string_assignment() {
+     sudo awk '
+       BEGIN { found = 0 }
+       {
+         line = $0
+         sub(/^[[:space:]]*/, "", line)
+         sub(/^export[[:space:]]+/, "", line)
+         if (line !~ /^ATLAS_DB_CONNECTION_STRING[[:space:]]*=/) {
+           next
+         }
+         sub(/^ATLAS_DB_CONNECTION_STRING[[:space:]]*=/, "", line)
+         sub(/^[[:space:]]*/, "", line)
+         if (line ~ /^#/) {
+           line = ""
+         } else {
+           sub(/[[:space:]]+#.*/, "", line)
+           sub(/[[:space:]]*$/, "", line)
+         }
+         if (line == "" || line == "\"\"" || line == sprintf("%c%c", 39, 39)) {
+           next
+         }
+         found = 1
+         exit
+       }
+       END { exit(found ? 0 : 1) }
+     ' "$1"
+   }
    service_db_require_canonical_keys() {
      saw_service_env=0
      while IFS= read -r service_env_file; do
@@ -206,6 +233,22 @@ break-glass path.
        fi
      done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
    }
+   service_db_require_new_socket_configuration() {
+     service_db_require_no_socket_assignments || return 1
+     while IFS= read -r service_env_file; do
+       [ -n "$service_env_file" ] || continue
+       if service_db_has_nonempty_connection_string_assignment "$service_env_file"; then
+         printf '%s\n' 'nonblank ATLAS_DB_CONNECTION_STRING assignment found; use a separate configuration migration' >&2
+         return 1
+       else
+         connection_string_status=$?
+         if [ "$connection_string_status" -ne 1 ]; then
+           printf '%s\n' 'could not inspect service EnvironmentFile connection-string assignments; do not continue' >&2
+           return 1
+         fi
+       fi
+     done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
+   }
    service_db_inspect() {
      service_db_require_canonical_keys || return 1
      env -u ATLAS_DB_ENABLED \
@@ -223,17 +266,23 @@ break-glass path.
        ATLAS_OPS_ENV_FILES="$SERVICE_ENV_FILES" \
        ./ops db inspect connectivity
    }
+   service_db_require_new_socket_configuration || exit 1
    service_db_inspect
    ```
 
    Do not run a bare `./ops db inspect connectivity` in this procedure: a
    worktree `.env` takes precedence over the service files. If the service has
    no readable `EnvironmentFiles`, stop rather than substituting a worktree or
-   shared configuration.
+   shared configuration. The admission command must succeed before the first
+   backup, HBA/identity edit, or PostgreSQL reload. It rejects an empty
+   service-file set, any case-variant `ATLAS_DB_*` key, every existing socket
+   assignment, and every nonblank complete-DSN assignment without printing a
+   value. A complete DSN deliberately takes precedence over
+   `ATLAS_DB_SOCKET_PATH`; do not remove or rewrite one as part of this
+   procedure. That needs a separate configuration-migration slice.
 
-2. The source receipt above proves every loopback `trust` rule this procedure
-   will replace lives in the top-level HBA file, so preserve only the two
-   PostgreSQL authentication files before editing them:
+2. Only after both the source and service-configuration receipts succeed,
+   preserve the two PostgreSQL authentication files before editing them:
 
    ```bash
    if sudo test -e /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer \
@@ -312,25 +361,10 @@ break-glass path.
    still uses TCP at this point, so a valid scoped peer rule can be proved
    without removing the existing path.
 
-3. Re-run `service_db_require_no_socket_assignments`; it rejects an empty
-   service-file set, any case-variant `ATLAS_DB_*` key, and every existing
-   socket assignment before either fixed inspection or this edit step can use a
-   different configuration from `atlas-api.service`. Then, in the effective
-   service configuration selected by `SERVICE_ENV_FILES`, use `./ops env keys
-   --file <each service file>` and an editor to identify the final canonical
-   `ATLAS_DB_*` assignment in service-file order. Verify that the effective
-   `ATLAS_DB_CONNECTION_STRING` is absent or empty. A nonblank full DSN
-   deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this cutover
-   must stop if one is effective. Do not remove or rewrite a full DSN as part of
-   this procedure; that needs a separate configuration-migration slice.
-
-   ```bash
-   service_db_require_no_socket_assignments || exit 1
-   ```
-
-   This procedure supports only a **new** socket setting. Do not replace,
-   remove, or preserve an existing assignment here: its original behavior needs
-   a separate configuration migration with an exact restoration receipt.
+3. The pre-mutation admission receipt means this procedure supports only a
+   **new** socket setting. Do not replace, remove, or preserve an existing
+   socket assignment or complete DSN here: its original behavior needs a
+   separate configuration migration with an exact restoration receipt.
 
    Set `EFFECTIVE_DB_ENV_FILE` to the final file in service-file order, confirm
    it is one of the paths in `SERVICE_ENV_FILES`, and add exactly this non-secret
@@ -482,7 +516,24 @@ break-glass path.
       ) AS loopback_network_rule_count \
       FROM hba;"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
-     "SELECT \
+     "WITH hba AS ( \
+        SELECT *, \
+          CASE \
+            WHEN address IS NULL OR netmask IS NULL THEN TRUE \
+            WHEN NOT pg_input_is_valid(address, 'inet') \
+              OR NOT pg_input_is_valid(netmask, 'inet') THEN TRUE \
+            WHEN family(address::inet) <> family(netmask::inet) THEN TRUE \
+            WHEN family(address::inet) = 4 THEN \
+              host(address::inet & netmask::inet) \
+                = host('127.0.0.1'::inet & netmask::inet) \
+            WHEN family(address::inet) = 6 THEN \
+              host(address::inet & netmask::inet) \
+                = host('::1'::inet & netmask::inet) \
+            ELSE TRUE \
+          END AS covers_loopback \
+        FROM pg_hba_file_rules \
+      ) \
+      SELECT \
         count(*) FILTER ( \
           WHERE type = 'host' \
             AND database = ARRAY['all']::text[] \
@@ -548,7 +599,7 @@ break-glass path.
             AND covers_loopback \
             AND file_name IS DISTINCT FROM '/etc/postgresql/16/main/pg_hba.conf' \
         ) AS loopback_rules_outside_backup \
-      FROM pg_hba_file_rules;"
+      FROM hba;"
    ```
 
    The first query must return `4`: it derives every non-local HBA rule whose
