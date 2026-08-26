@@ -170,6 +170,12 @@ break-glass path.
        *) return 1 ;;
      esac
    }
+   eom_audit_environment_has_psql_bin_override() {
+     case "$1" in
+       *'ATLAS_EOM_AUDIT_PSQL_BIN='*) return 0 ;;
+       *) return 1 ;;
+     esac
+   }
    eom_audit_require_unit_contract() {
      if ! systemctl --user is-enabled --quiet "$EOM_AUDIT_TIMER" \
        || ! systemctl --user is-active --quiet "$EOM_AUDIT_TIMER"; then
@@ -221,10 +227,23 @@ break-glass path.
        printf '%s\n' 'EOM audit DSN override found; migrate and prove it separately before cutover' >&2
        return 1
      fi
+     if eom_audit_environment_has_psql_bin_override "$eom_audit_service_environment" \
+       || eom_audit_environment_has_psql_bin_override "$eom_audit_manager_environment"; then
+       printf '%s\n' 'EOM audit psql executable override found; remove it before cutover' >&2
+       return 1
+     fi
+   }
+   eom_audit_require_stage_inputs() {
+     if ! test -f "$EOM_AUDIT_SOURCE" || ! test -r "$EOM_AUDIT_SOURCE" \
+       || ! test -f "$EOM_AUDIT_INSTALLED" || ! test -r "$EOM_AUDIT_INSTALLED"; then
+       printf '%s\n' 'EOM audit source or installed script is unreadable; do not remove loopback trust' >&2
+       return 1
+     fi
    }
    eom_audit_require_socket_default() {
      eom_audit_require_unit_contract || return 1
-     if ! test -r "$EOM_AUDIT_SOURCE" || ! cmp -s "$EOM_AUDIT_SOURCE" "$EOM_AUDIT_INSTALLED"; then
+     eom_audit_require_stage_inputs || return 1
+     if ! cmp -s "$EOM_AUDIT_SOURCE" "$EOM_AUDIT_INSTALLED"; then
        printf '%s\n' 'installed EOM audit script does not match deployed source; stage it after peer authentication' >&2
        return 1
      fi
@@ -234,6 +253,7 @@ break-glass path.
        printf '%s\n' 'pre-peer EOM audit source backup already exists; inspect it before retrying' >&2
        return 1
      fi
+     eom_audit_require_stage_inputs || return 1
      if ! cp --preserve=mode,ownership,timestamps "$EOM_AUDIT_INSTALLED" "$EOM_AUDIT_PRE_PEER_SOURCE"; then
        printf '%s\n' 'could not preserve the pre-peer EOM audit source; do not replace it' >&2
        return 1
@@ -388,6 +408,7 @@ break-glass path.
        ./ops db inspect connectivity
    }
    eom_audit_require_unit_contract || exit 1
+   eom_audit_require_stage_inputs || exit 1
    service_db_require_new_socket_configuration || exit 1
    service_db_inspect
    ```
@@ -399,13 +420,15 @@ break-glass path.
    backup, HBA/identity edit, or PostgreSQL reload. It rejects an empty
    service-file set, any case-variant `ATLAS_DB_*` key, every existing socket
    assignment, and every nonblank complete-DSN assignment without printing a
-   value. The dormant monitor admission must also succeed before the first
-   backup, HBA/identity edit, or PostgreSQL reload. A complete DSN deliberately takes precedence over
+   value. The dormant monitor admission and source-stage input receipt must
+   also succeed before the first backup, HBA/identity edit, or PostgreSQL
+   reload. A complete DSN deliberately takes precedence over
    `ATLAS_DB_SOCKET_PATH`; do not remove or rewrite one as part of this
    procedure. That needs a separate configuration-migration slice.
 
-2. Only after the timer-contract and service-configuration receipts succeed,
-   preserve the two PostgreSQL authentication files before editing them:
+2. Only after the timer-contract, source-stage, and service-configuration
+   receipts succeed, preserve the two PostgreSQL authentication files before
+   editing them:
 
    ```bash
    if sudo test -e /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer \
@@ -593,7 +616,8 @@ break-glass path.
      rollback_peer_cutover
      exit 1
    }
-   EOM_AUDIT_DRY_RUN_OUTPUT="$(env -u ATLAS_EOM_AUDIT_ATLAS_DSN "$EOM_AUDIT_INSTALLED" \
+   EOM_AUDIT_DRY_RUN_OUTPUT="$(env -u ATLAS_EOM_AUDIT_ATLAS_DSN \
+     -u ATLAS_EOM_AUDIT_PSQL_BIN "$EOM_AUDIT_INSTALLED" \
      --state-dir "$EOM_AUDIT_DRY_RUN_DIR" \
      --ntfy-topic cutover-dry-run \
      --no-alert)"

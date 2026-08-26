@@ -22,15 +22,25 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
+def _rebuild_pool_connection_kwargs(connection_kwargs: dict[str, object]) -> dict[str, object]:
+    """Keep the normalized target while preserving this script's pool defaults."""
+    return {
+        key: value
+        for key, value in connection_kwargs.items()
+        if key not in {"timeout", "command_timeout"}
+    }
+
+
 async def main(limit: int, dry_run: bool, topic_type_filter: str | None):
     from atlas_brain.storage.config import db_settings
 
     import asyncpg
 
+    pool_kwargs = _rebuild_pool_connection_kwargs(db_settings.connection_kwargs())
     pool = await asyncpg.create_pool(
         min_size=2,
         max_size=4,
-        **db_settings.connection_kwargs(),
+        **pool_kwargs,
     )
 
     from atlas_brain.autonomous.tasks.b2b_blog_post_generation import (

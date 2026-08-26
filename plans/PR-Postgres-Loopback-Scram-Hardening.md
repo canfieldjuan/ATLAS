@@ -100,6 +100,13 @@ leave its restart procedure with contradictory integrity instructions.
   `juan-canfield` but the generic peer rule cannot authenticate it as `atlas`.
   A later rollback would also strand that new source if it restored the old HBA
   and identity files without restoring the pre-cutover installed monitor.
+- The dormant-monitor admission rejects a scheduled DSN override but not its
+  environment-selected `psql` executable, so the operator-shell dry run can
+  prove a different binary from the one the next timer run invokes.
+- That admission also reaches the first HBA/identity backup without verifying
+  that both the installed monitor and the source it must stage are readable.
+  A predictable staging failure is therefore discovered only after
+  authentication mutation and leaves retry-blocking pre-peer backups behind.
 - Clearing every inherited libpq setting for an explicit owner-provided audit
   DSN removes non-target TLS inputs such as root/client certificate paths that
   the prior monitor preserved, regressing supported explicit-DSN deployments.
@@ -107,6 +114,10 @@ leave its restart procedure with contradictory integrity instructions.
   `db_settings.host` directly rather than the corrected socket-aware
   `connection_kwargs()`/`dsn` seams, so they remain TCP clients after loopback
   trust is removed.
+- Routing the chart rebuild through `connection_kwargs()` also injects its
+  configured connection and command timeouts, although the prior `create_pool`
+  call omitted both options; a long-running existing rebuild can therefore fail
+  solely from this transport refactor.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
@@ -180,16 +191,20 @@ leave its restart procedure with contradictory integrity instructions.
    environment behavior. The cutover runbook must admit the dormant scheduled
    client before HBA mutation using its exact effective Python/script argv, an
    active timer/service identity, no `EnvironmentFile`, and no unit/user-manager
-   DSN override without printing environment values. It must stage the new
-   installed monitor only after the scoped peer map/rule is loaded, retain a
-   restorable pre-cutover copy through the cutover, and dry-run the admitted
-   source with no alert/state mutation before trust replacement. Regression
-   tests must cover the command-argument, source-stage/rollback, default-versus-
-   explicit-libpq, and unreadable-route boundaries.
+   DSN or `psql`-executable override without printing environment values, and
+   verify both source-stage inputs are readable before the first authentication
+   backup. It must stage the new installed monitor only after the scoped peer
+   map/rule is loaded, retain a restorable pre-cutover copy through the cutover,
+   and dry-run the admitted source with no alert/state mutation before trust
+   replacement. Regression tests must cover the command-argument,
+   environment-executable, source-stage/rollback, default-versus-explicit-
+   libpq, and unreadable-route boundaries.
 8. Route every repository-owned typed `DatabaseConfig` maintenance caller that
    still passes `db_settings.host` directly through `connection_kwargs()` while
-   retaining its current command-timeout/pool-size intent, and pin those two
-   caller seams with socket-path regressions.
+   retaining its current command-timeout/pool-size intent. In particular, the
+   chart-rebuild pool must omit the connection and command timeout options just
+   as it did before this transport change, while retaining its existing pool
+   bounds. Pin those two caller seams with socket-path regressions.
 
 #### Explicit non-scope
 
@@ -213,10 +228,11 @@ leave its restart procedure with contradictory integrity instructions.
 - Recheck the peer map and local replication activity before changing HBA.
 - HBA/ident/shared configuration changes occur only after this source revision
   is deployed.
-- The deployed audit unit executes the documented installed script path and no
-  `EnvironmentFile` or `ATLAS_EOM_AUDIT_ATLAS_DSN` value is inherited from its
-  unit or user manager; otherwise the cutover stops rather than inferring its
-  transport.
+- The deployed audit unit executes the documented installed script path, both
+  source-stage files are readable, and no `EnvironmentFile`,
+  `ATLAS_EOM_AUDIT_ATLAS_DSN`, or `ATLAS_EOM_AUDIT_PSQL_BIN` value is inherited
+  from its unit or user manager; otherwise the cutover stops rather than
+  inferring its transport or executable.
 
 #### Verification plan
 
@@ -240,8 +256,9 @@ leave its restart procedure with contradictory integrity instructions.
   the ordered selected service-file list and stops before the gate otherwise.
 - Monitor regressions must prove both default-socket selection and preserved
   explicit-override selection, including hostile inherited `PG*` settings, and
-  the runbook guard must reject service and user-manager DSN overrides plus a
-  stale installed monitor copy before the first HBA backup.
+  the runbook guard must reject service and user-manager DSN and executable
+  overrides plus a missing source or installed monitor before the first HBA
+  backup.
 - GitHub remains the complete unit gate.
 - Post-merge proof while existing TCP trust remains: deploy source; configure
   `ATLAS_DB_SOCKET_PATH` only when no complete DSN overrides it; add/reload the
@@ -283,9 +300,9 @@ Max files: 12
      admits only selected service values or exact-uppercase runtime database
      overrides rather than case-variant inherited aliases.
   4. The operational procedure rejects an overriding complete DSN, independently
-     admits the dormant EOM audit monitor's installed source, service/timer
-     identity, no `EnvironmentFile`, and no-override default socket route before
-     HBA mutation, then
+     admits the dormant EOM audit monitor's readable source and installed copy,
+     service/timer identity, no `EnvironmentFile`, and no DSN or executable
+     override on its default socket route before HBA mutation, then
      records its no-alert socket dry-run receipt before trust replacement,
      authenticates
      the specific service OS account as `atlas` over the Unix socket before
@@ -525,18 +542,19 @@ the read-only proof observes the same database target as `atlas-api.service`.
 
 The independent EOM audit monitor gains a source-owned passwordless socket
 default without importing or depending on `atlas-api`. The cutover first
-proves the timer's exact target-free command and no hidden DSN override while
-the prior monitor remains live over TCP; after the scoped peer map/rule is
-loaded it atomically stages the installed source, retains a rollback copy, and
-then takes a measurement-only socket receipt. Its subprocess removes every
-inherited `PG*` setting only for the source-owned default, while explicit
-owner-provided DSNs retain their existing libpq/TLS inputs and remain excluded
-from this socket cutover.
+proves the timer's exact target-free command, readable staging inputs, and no
+hidden DSN or executable override while the prior monitor remains live over
+TCP; after the scoped peer map/rule is loaded it atomically stages the installed
+source, retains a rollback copy, and then takes a measurement-only socket
+receipt. Its subprocess removes every inherited `PG*` setting only for the
+source-owned default, while explicit owner-provided DSNs retain their existing
+libpq/TLS inputs and remain excluded from this socket cutover.
 
 The two typed maintenance scripts that bypassed the shared connection seam now
 use `DatabaseConfig.connection_kwargs()` with their existing timeout/pool-size
 intent, so the same configured socket reaches application and maintenance
-callers.
+callers. The chart rebuild retains its previous no-explicit-timeout pool
+behavior while it adopts only the corrected target construction.
 
 The migration-runbook change is documentation only: raw discrepancies stay
 visible and retain their forensic nonzero status.
@@ -554,7 +572,8 @@ visible and retain their forensic nonzero status.
 - The EOM audit's timer, signals, notification delivery, state persistence, and
   explicit DSN override precedence remain unchanged; only its source-owned
   absent-override default moves to the socket after peer authentication is
-  staged.
+  staged. The scheduled cutover rejects rather than repurposes unit- or
+  manager-level executable overrides.
 
 ## Deferred
 
@@ -571,9 +590,11 @@ blocks the socket-peer path.
 
 - `./ops test focused tests/test_eom_write_boundary_audit.py
   tests/test_agent_operations_contract.py tests/test_eom_render_profile.py -q`
-  — 190 passed, 2 skipped (local). This covers the source-owned default versus
-  explicit TLS/libpq behavior, exact timer argv boundaries, post-peer source
-  staging and rollback restoration, and both typed maintenance caller seams.
+  — 197 passed, 2 skipped (local). This covers the source-owned default versus
+  explicit TLS/libpq behavior, exact timer argv and service/user-manager
+  executable-override boundaries, readable and unreadable source-stage inputs,
+  post-peer source staging and rollback restoration, and both typed maintenance
+  caller seams.
 - `bash scripts/check_ascii_python.sh` — passed (local).
 - `python scripts/check_guard_class_closure.py --base origin/main --strict` —
   passed (local advisory guard-closure lint).
@@ -610,19 +631,19 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 769 |
+| `.agent/runbooks/database.md` | 793 |
 | `atlas_brain/storage/config.py` | 13 |
 | `config/eom-write-boundary-audit.service` | 2 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 630 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 651 |
 | `scripts/backfill_community_buying_stage_defaults.py` | 8 |
 | `scripts/eom_write_boundary_audit.py` | 59 |
-| `scripts/rebuild_blog_charts.py` | 6 |
-| `tests/test_agent_operations_contract.py` | 718 |
-| `tests/test_eom_render_profile.py` | 99 |
+| `scripts/rebuild_blog_charts.py` | 16 |
+| `tests/test_agent_operations_contract.py` | 795 |
+| `tests/test_eom_render_profile.py` | 122 |
 | `tests/test_eom_write_boundary_audit.py` | 112 |
-| **Total** | **2451** |
+| **Total** | **2606** |
 
 ## Diff budget
 

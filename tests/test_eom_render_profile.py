@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import os
+import runpy
 import string
 import subprocess
 import sys
@@ -973,6 +974,28 @@ def test_typed_maintenance_scripts_use_socket_aware_database_kwargs():
     assert "db_settings.connection_kwargs(command_timeout=60)" in backfill
     assert "db_settings.host" not in rebuild
     assert "db_settings.connection_kwargs()" in rebuild
+    assert "min_size=2" in rebuild
+    assert "max_size=4" in rebuild
+
+    rebuild_module = runpy.run_path(str(repo_root / "scripts/rebuild_blog_charts.py"))
+    pool_kwargs = rebuild_module["_rebuild_pool_connection_kwargs"](
+        {
+            "host": "/var/run/postgresql",
+            "port": 5433,
+            "database": "atlas",
+            "user": "atlas",
+            "password": "secret",
+            "timeout": 10.0,
+            "command_timeout": 30.0,
+        }
+    )
+    assert pool_kwargs == {
+        "host": "/var/run/postgresql",
+        "port": 5433,
+        "database": "atlas",
+        "user": "atlas",
+        "password": "secret",
+    }
 
 
 def test_database_config_percent_encodes_socket_path_in_dsn_query():
