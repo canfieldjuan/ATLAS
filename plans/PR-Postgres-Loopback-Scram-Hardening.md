@@ -40,6 +40,10 @@ leave its restart procedure with contradictory integrity instructions.
   previously selected only canonical service-file keys; an alias or empty file
   list could therefore make fixed inspection use a fallback/different target
   from `atlas-api.service` before the cutover safety checks run.
+- Rollback previously checked only one exact socket-assignment spelling in one
+  file. A surviving case- or spacing-variant could keep the service on peer
+  authentication after its identity map was restored, while fixed inspection
+  would not necessarily observe that residual configuration.
 - `DatabaseConfig` resolves environment names case-insensitively, but `ops`
   previously removed only a subset of canonical uppercase database keys. A
   lower- or mixed-case inherited alias for any setting the inspector consumes
@@ -90,7 +94,9 @@ leave its restart procedure with contradictory integrity instructions.
    and its precondition's positive/negative matching boundaries. The helper
    must refuse an empty file set and any noncanonical-cased `ATLAS_DB_*` key
    before fixed inspection, so the full-DSN gate applies to the same source as
-   the service.
+   the service. A shared no-socket-assignment guard must gate both the initial
+   edit and rollback across every selected service file, including case and
+   spacing variants, before rollback restores HBA/identity configuration.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
@@ -218,6 +224,9 @@ Max files: 7
     readable, the selected set must be nonempty, and all `ATLAS_DB_*` keys must
     be canonical uppercase. This makes the `ops` configuration parser and the
     service's case-insensitive `DatabaseConfig` agree without exposing values.
+  - The same full-service-file socket-assignment guard gates both adding and
+    rollback. It permits restored HBA/identity configuration only after no
+    canonical, case-variant, or spacing-variant socket assignment remains.
   - The cutover reconciles every client observed in both initial and final
     loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
     receipt, requires no remaining final client, and requires an exact loaded
@@ -279,6 +288,12 @@ Max files: 7
   fixed inspection or the full-DSN precondition. The safe default is to
   normalize configuration in a separate migration, not to inspect a fallback
   or choose between alias collisions.
+- **Rollback socket assignments — CLOSED / DERIVED before HBA restore.**
+  Membership is every case-variant `ATLAS_DB_SOCKET_PATH` assignment in every
+  ordered selected `EnvironmentFile`, regardless of value or spacing. The only
+  admitted set is empty. A remaining assignment stops before HBA/identity
+  restore; the safe default is to remove only the cutover-created assignment or
+  use a separate configuration migration with an exact baseline receipt.
 - **Database environment-key aliases — CLOSED / DERIVED for fixed inspection.**
   Membership is every canonical `ATLAS_DB_*` setting consumed by
   `DatabaseConfig`, listed as `DATABASE_CONFIG_KEYS` in `ops`; its case-folded
@@ -348,15 +363,17 @@ blocks the socket-peer path.
   database_file_context_honors_explicit_override_order'` — 2 passed, 39
   deselected (local).
 - `./ops test focused tests/test_agent_operations_contract.py -q -k
-  'database_runtime_environment or service_db_inspect'` — 17 passed, 40
-  deselected (local); proves the canonical override, case-variant rejection,
-  complete key-set closure, the service-helper unset-set closure, socket and
-  full-DSN alias/near-miss boundaries, empty-service-set rejection, and that
-  the preflight prevents a lower-case DSN from reaching `ops`.
-- `./ops test focused tests/test_agent_operations_contract.py -q` — 57 passed
+  'database_runtime_environment or service_db_inspect or
+  service_db_case_variant_preflight or service_db_no_socket_guard or
+  rollback_refuses'` — 21 passed, 40 deselected (local); proves the canonical
+  override, case-variant rejection, complete key-set closure, the service-helper
+  unset-set closure, socket/full-DSN alias and near-miss boundaries,
+  empty-service-set rejection, and that a surviving spacing-variant socket
+  assignment cannot reach HBA restoration.
+- `./ops test focused tests/test_agent_operations_contract.py -q` — 61 passed
   (local).
 - `bash scripts/check_ascii_python.sh` — passed (local).
-- `service_db_inspect`, canonical-key, and pre-existing-socket guard blocks
+- `service_db_inspect`, canonical-key/no-socket, and rollback guard blocks
   extracted from `.agent/runbooks/database.md` and checked with `bash -n` —
   passed (local).
 - `git diff --check` — passed (local).
@@ -380,14 +397,14 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 485 |
+| `.agent/runbooks/database.md` | 480 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 395 |
-| `tests/test_agent_operations_contract.py` | 213 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 412 |
+| `tests/test_agent_operations_contract.py` | 278 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **1200** |
+| **Total** | **1277** |
 
 ## Diff budget
 

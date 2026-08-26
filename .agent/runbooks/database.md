@@ -147,6 +147,9 @@ break-glass path.
        END { exit(found ? 0 : 1) }
      ' "$1"
    }
+   service_db_has_socket_assignment() {
+     sudo grep -Eqi '^[[:space:]]*(export[[:space:]]+)?ATLAS_DB_SOCKET_PATH[[:space:]]*=' "$1"
+   }
    service_db_require_canonical_keys() {
      saw_service_env=0
      while IFS= read -r service_env_file; do
@@ -171,6 +174,22 @@ break-glass path.
        printf '%s\n' 'no service EnvironmentFiles selected; do not inspect a fallback context' >&2
        return 1
      fi
+   }
+   service_db_require_no_socket_assignments() {
+     service_db_require_canonical_keys || return 1
+     while IFS= read -r service_env_file; do
+       [ -n "$service_env_file" ] || continue
+       if service_db_has_socket_assignment "$service_env_file"; then
+         printf '%s\n' 'ATLAS_DB_SOCKET_PATH assignment remains; do not continue' >&2
+         return 1
+       else
+         socket_status=$?
+         if [ "$socket_status" -ne 1 ]; then
+           printf '%s\n' 'could not inspect service EnvironmentFile socket assignments; do not continue' >&2
+           return 1
+         fi
+       fi
+     done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
    }
    service_db_inspect() {
      service_db_require_canonical_keys || return 1
@@ -247,46 +266,25 @@ break-glass path.
    this point, so a valid scoped peer rule can be proved without removing the
    existing path.
 
-3. Re-run `service_db_require_canonical_keys`; it rejects an empty service-file
-   set and any case-variant `ATLAS_DB_*` key before either fixed inspection or
-   this edit step can use a different configuration from `atlas-api.service`.
-   Then, in the effective service configuration selected by `SERVICE_ENV_FILES`,
-   use `./ops env keys --file <each service file>` and an editor to identify the
-   final canonical `ATLAS_DB_*` assignment in service-file order. Verify that
-   the effective `ATLAS_DB_CONNECTION_STRING` is absent or empty. A nonblank
-   full DSN deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this
-   cutover must stop if one is effective. Do not remove or rewrite a full DSN as
-   part of this procedure; that needs a separate configuration-migration slice.
+3. Re-run `service_db_require_no_socket_assignments`; it rejects an empty
+   service-file set, any case-variant `ATLAS_DB_*` key, and every existing
+   socket assignment before either fixed inspection or this edit step can use a
+   different configuration from `atlas-api.service`. Then, in the effective
+   service configuration selected by `SERVICE_ENV_FILES`, use `./ops env keys
+   --file <each service file>` and an editor to identify the final canonical
+   `ATLAS_DB_*` assignment in service-file order. Verify that the effective
+   `ATLAS_DB_CONNECTION_STRING` is absent or empty. A nonblank full DSN
+   deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this cutover
+   must stop if one is effective. Do not remove or rewrite a full DSN as part of
+   this procedure; that needs a separate configuration-migration slice.
 
    ```bash
-   service_db_require_canonical_keys || exit 1
+   service_db_require_no_socket_assignments || exit 1
    ```
 
-   This procedure supports only a **new** socket setting. Before any edit, stop
-   if any selected service file already assigns `ATLAS_DB_SOCKET_PATH` in any
-   case variant, including an empty or different value. Do not replace, remove,
-   or preserve an existing assignment here: its original behavior needs a
-   separate configuration migration with an exact restoration receipt.
-
-   ```bash
-   while IFS= read -r service_env_file; do
-     [ -n "$service_env_file" ] || continue
-     if ! sudo test -r "$service_env_file"; then
-       printf '%s\n' 'service EnvironmentFile is unreadable; do not add a socket setting' >&2
-       exit 1
-     fi
-     if sudo grep -Eqi '^[[:space:]]*(export[[:space:]]+)?ATLAS_DB_SOCKET_PATH[[:space:]]*=' "$service_env_file"; then
-       printf '%s\n' 'pre-existing ATLAS_DB_SOCKET_PATH found; use a separate configuration migration' >&2
-       exit 1
-     else
-       grep_status=$?
-       if [ "$grep_status" -ne 1 ]; then
-         printf '%s\n' 'could not inspect service EnvironmentFile; do not add a socket setting' >&2
-         exit 1
-       fi
-     fi
-   done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
-   ```
+   This procedure supports only a **new** socket setting. Do not replace,
+   remove, or preserve an existing assignment here: its original behavior needs
+   a separate configuration migration with an exact restoration receipt.
 
    Set `EFFECTIVE_DB_ENV_FILE` to the final file in service-file order, confirm
    it is one of the paths in `SERVICE_ENV_FILES`, and add exactly this non-secret
@@ -304,9 +302,9 @@ break-glass path.
 
    Define this shell-local rollback helper before the restart. It is the only
    rollback path after the socket setting exists; when it opens the editor,
-   remove only the exact `ATLAS_DB_SOCKET_PATH=/var/run/postgresql` line just
-   added, save, and exit before the function restores the two authentication
-   files:
+   remove the added `ATLAS_DB_SOCKET_PATH` assignment entirely without changing
+   any other database key. The helper refuses to restore authentication while
+   any case-variant socket assignment remains in any selected service file:
 
    ```bash
    rollback_peer_cutover() {
@@ -315,10 +313,7 @@ break-glass path.
        *) printf '%s\n' 'effective database environment file is not a service EnvironmentFile' >&2; return 1 ;;
      esac
      sudoedit "$EFFECTIVE_DB_ENV_FILE" || return 1
-     if sudo grep -Eq '^[[:space:]]*ATLAS_DB_SOCKET_PATH=/var/run/postgresql[[:space:]]*$' "$EFFECTIVE_DB_ENV_FILE"; then
-       printf '%s\n' 'remove only the added ATLAS_DB_SOCKET_PATH line before rollback can continue' >&2
-       return 1
-     fi
+     service_db_require_no_socket_assignments || return 1
      sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer \
        /etc/postgresql/16/main/pg_hba.conf || return 1
      sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_ident.conf.pre-atlas-peer \

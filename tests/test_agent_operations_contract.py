@@ -81,9 +81,10 @@ def test_service_db_inspect_clears_every_database_config_key() -> None:
     )
 
     assert cleared_keys == DATABASE_CONFIG_KEYS
-    assert "pre-existing ATLAS_DB_SOCKET_PATH found" in runbook
+    assert "ATLAS_DB_SOCKET_PATH assignment remains; do not continue" in runbook
     assert "sudo grep -Eqi" in runbook
     assert "service_db_require_canonical_keys || return 1" in helper
+    assert "service_db_require_no_socket_assignments || return 1" in runbook
 
 
 def _run_runbook_function(
@@ -92,6 +93,7 @@ def _run_runbook_function(
     *,
     argument: Path | None = None,
     service_env_files: str | None = None,
+    shell_stubs: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     functions = []
     for function_name in function_names:
@@ -108,6 +110,7 @@ def _run_runbook_function(
             f"SERVICE_ENV_FILES={service_env_files!r}"
             if service_env_files is not None
             else "",
+            *shell_stubs,
             call,
         )
     )
@@ -201,6 +204,68 @@ def test_service_db_inspect_preflight_controls_ops_invocation(
 
     assert result.returncode == expected_returncode
     assert expected_stderr in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("assignment", "expected_returncode"),
+    (
+        ("ATLAS_DB_HOST=canonical.example\n", 0),
+        ("ATLAS_DB_SOCKET_PATH = /var/run/postgresql\n", 1),
+        ("ATLAS_DB_SOCKET_PATH_BACKUP=/var/run/postgresql\n", 0),
+    ),
+)
+def test_service_db_no_socket_guard_checks_every_selected_file(
+    tmp_path: Path,
+    assignment: str,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(assignment, encoding="utf-8")
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+        ),
+        service_env_files=str(env_file),
+    )
+
+    assert result.returncode == expected_returncode
+
+
+def test_rollback_refuses_a_surviving_socket_assignment_before_hba_restore(
+    tmp_path: Path,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    env_file = tmp_path / "atlas-api.env"
+    env_file.write_text(
+        "ATLAS_DB_SOCKET_PATH = /var/run/postgresql\n",
+        encoding="utf-8",
+    )
+
+    result = _run_runbook_function(
+        runbook,
+        (
+            "service_db_has_case_variant_key",
+            "service_db_has_socket_assignment",
+            "service_db_require_canonical_keys",
+            "service_db_require_no_socket_assignments",
+            "rollback_peer_cutover",
+        ),
+        service_env_files=str(env_file),
+        shell_stubs=(
+            "sudoedit() { return 0; }",
+            f"EFFECTIVE_DB_ENV_FILE={str(env_file)!r}",
+        ),
+    )
+
+    assert result.returncode == 1
+    assert "ATLAS_DB_SOCKET_PATH assignment remains" in result.stderr
+    assert "unexpected env invocation" not in result.stderr
 
 
 @pytest.mark.parametrize(
