@@ -209,10 +209,37 @@ break-glass path.
    DSN deliberately takes precedence over `ATLAS_DB_SOCKET_PATH`, so this
    cutover must stop if one is effective. Do not remove or rewrite a full DSN as
    part of this procedure; that needs a separate configuration-migration slice.
-   Set `EFFECTIVE_DB_ENV_FILE` to that one effective file, confirm it is one of
-   the paths in `SERVICE_ENV_FILES`, and add exactly this non-secret setting
-   with `sudoedit "$EFFECTIVE_DB_ENV_FILE"`; do not copy or print the rest of
-   any file:
+
+   This procedure supports only a **new** socket setting. Before any edit, stop
+   if any selected service file already assigns `ATLAS_DB_SOCKET_PATH`, including
+   an empty or different value. Do not replace, remove, or preserve an existing
+   assignment here: its original behavior needs a separate configuration
+   migration with an exact restoration receipt.
+
+   ```bash
+   while IFS= read -r service_env_file; do
+     [ -n "$service_env_file" ] || continue
+     if ! sudo test -r "$service_env_file"; then
+       printf '%s\n' 'service EnvironmentFile is unreadable; do not add a socket setting' >&2
+       exit 1
+     fi
+     if sudo grep -Eq '^[[:space:]]*(export[[:space:]]+)?ATLAS_DB_SOCKET_PATH[[:space:]]*=' "$service_env_file"; then
+       printf '%s\n' 'pre-existing ATLAS_DB_SOCKET_PATH found; use a separate configuration migration' >&2
+       exit 1
+     else
+       grep_status=$?
+       if [ "$grep_status" -ne 1 ]; then
+         printf '%s\n' 'could not inspect service EnvironmentFile; do not add a socket setting' >&2
+         exit 1
+       fi
+     fi
+   done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
+   ```
+
+   Set `EFFECTIVE_DB_ENV_FILE` to the final file in service-file order, confirm
+   it is one of the paths in `SERVICE_ENV_FILES`, and add exactly this non-secret
+   setting with `sudoedit "$EFFECTIVE_DB_ENV_FILE"`; do not copy or print the
+   rest of any file:
 
    ```bash
    EFFECTIVE_DB_ENV_FILE='/absolute/path/to/the-effective.service.env'

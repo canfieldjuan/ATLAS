@@ -32,6 +32,10 @@ leave its restart procedure with contradictory integrity instructions.
   inspection call it rather than `DatabaseConfig.dsn`.
 - A bare fixed inspection can select a worktree `.env` instead of the
   service's `EnvironmentFiles`, even when the worktree omits database keys.
+- The cutover rollback assumes that it created `ATLAS_DB_SOCKET_PATH`, but a
+  pre-existing assignment in any selected service file has no baseline receipt;
+  deleting or overriding it during rollback could change the service's original
+  connection path.
 - `DatabaseConfig` resolves environment names case-insensitively, but `ops`
   previously removed only a subset of canonical uppercase database keys. A
   lower- or mixed-case inherited alias for any setting the inspector consumes
@@ -75,7 +79,10 @@ leave its restart procedure with contradictory integrity instructions.
    clients and prove the loaded peer map has exactly the intended mapping. The fixed
    inspection must explicitly select the ordered `atlas-api.service`
    `EnvironmentFiles` while the helper clears every exact-uppercase
-   `ATLAS_DB_*` override and `ops` excludes every lower/mixed-case variant.
+   `ATLAS_DB_*` override and `ops` excludes every lower/mixed-case variant. It
+   must reject a pre-existing `ATLAS_DB_SOCKET_PATH` in every selected service
+   file before adding its single reversible assignment, and a static regression
+   must pin the helper's unset set to every `DatabaseConfig` field.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
    currently attested evidence for every raw mismatch **and** missing-source
    item while preserving the raw report and its forensic nonzero exit.
@@ -163,7 +170,9 @@ Max files: 7
      every initial/final loopback client a Unix-socket or verified-SCRAM receipt,
      leaves no TCP client, derives every loopback-covering HBA network rule,
      proves every exact tuple, retains `postgres` peer recovery, and reloads
-     restored TCP authentication before a rollback restart.
+     restored TCP authentication before a rollback restart. It also stops before
+     editing when any selected service file already assigns the socket path, so
+     rollback removes only an assignment created by this cutover.
   5. The migration runbook accurately distinguishes raw forensic output from
      attested admission without changing runner behavior.
 - Reachability proof: `atlas_brain/storage/database.py` initializes the pool
@@ -193,6 +202,9 @@ Max files: 7
     before it constructs `DatabaseConfig`; exact-uppercase runtime keys preserve
     the generic documented override behavior, while the service-pinned helper
     explicitly unsets all of them before its proof.
+  - A pre-existing socket-path assignment in any selected service file is a
+    stop condition; this cutover adds exactly one new assignment only after the
+    absence precondition, so rollback never rewrites an earlier configuration.
   - The cutover reconciles every client observed in both initial and final
     loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
     receipt, requires no remaining final client, and requires an exact loaded
@@ -241,6 +253,12 @@ Max files: 7
   systemd`. An absent, unreadable, or unlisted effective configuration file
   stops fixed inspection and HBA mutation, the safer side over inspecting or
   changing a guessed database target.
+- **Pre-existing socket-path assignments — CLOSED / DERIVED before cutover.**
+  Membership is every assignment matching `ATLAS_DB_SOCKET_PATH` in the ordered
+  selected `EnvironmentFiles`. The only admitted set is empty; unreadable files
+  or any empty, different, or matching-value assignment stop before editing.
+  The safe default is a separate configuration migration with an exact baseline
+  receipt, not an implicit overwrite or rollback rewrite.
 - **Database environment-key aliases — CLOSED / DERIVED for fixed inspection.**
   Membership is every canonical `ATLAS_DB_*` setting consumed by
   `DatabaseConfig`, listed as `DATABASE_CONFIG_KEYS` in `ops`; its case-folded
@@ -310,8 +328,11 @@ blocks the socket-peer path.
   database_file_context_honors_explicit_override_order'` — 2 passed, 39
   deselected (local).
 - `./ops test focused tests/test_agent_operations_contract.py -q -k
-  'database_runtime_environment'` — 3 passed, 40 deselected (local); proves
-  the canonical override, case-variant rejection, and complete key-set closure.
+  'database_runtime_environment or service_db_inspect'` — 4 passed, 40
+  deselected (local); proves the canonical override, case-variant rejection,
+  complete key-set closure, and the service-helper unset-set closure.
+- `./ops test focused tests/test_agent_operations_contract.py -q` — 44 passed
+  (local).
 - `bash scripts/check_ascii_python.sh` — passed (local).
 - `service_db_inspect` shell block extracted from
   `.agent/runbooks/database.md` and checked with `bash -n` — passed (local).
@@ -335,14 +356,14 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 406 |
+| `.agent/runbooks/database.md` | 433 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 350 |
-| `tests/test_agent_operations_contract.py` | 50 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 371 |
+| `tests/test_agent_operations_contract.py` | 63 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **913** |
+| **Total** | **974** |
 
 ## Diff budget
 

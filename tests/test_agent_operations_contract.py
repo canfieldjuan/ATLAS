@@ -71,6 +71,19 @@ def test_database_runtime_environment_covers_every_database_config_key() -> None
     )
 
 
+def test_service_db_inspect_clears_every_database_config_key() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    helper = runbook.split("service_db_inspect() {", maxsplit=1)[1].split(
+        "\n   }", maxsplit=1
+    )[0]
+    cleared_keys = set(
+        re.findall(r"(?m)^\s*(?:env\s+)?-u\s+(ATLAS_DB_[A-Z_]+)\s+\\$", helper)
+    )
+
+    assert cleared_keys == DATABASE_CONFIG_KEYS
+    assert "pre-existing ATLAS_DB_SOCKET_PATH found" in runbook
+
+
 @pytest.mark.parametrize(
     "args",
     (
