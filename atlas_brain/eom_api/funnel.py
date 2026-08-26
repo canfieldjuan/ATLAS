@@ -163,6 +163,39 @@ class EOMFirstCleanCompletionRequest(BaseModel):
         return self
 
 
+class EOMPostCleanOnboardingCandidateItem(BaseModel):
+    """Non-sendable candidate derived from actual first-clean evidence."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    candidate_id: UUID = Field(serialization_alias="candidateId")
+    completion_receipt_id: UUID = Field(serialization_alias="completionReceiptId")
+    contact_id: UUID = Field(serialization_alias="contactId")
+    handoff_id: UUID = Field(serialization_alias="handoffId")
+    status: Literal["pending"]
+    full_name: str = Field(serialization_alias="fullName")
+    recipient_email: str | None = Field(serialization_alias="recipientEmail")
+    blocker: Literal["inactive_customer", "not_residential", "no_email"] | None
+    tracker_service_kind: Literal["job", "planned_visit"] = Field(
+        serialization_alias="trackerServiceKind"
+    )
+    tracker_service_id: int = Field(serialization_alias="trackerServiceId")
+    completed_at: datetime = Field(serialization_alias="completedAt")
+    created_at: datetime = Field(serialization_alias="createdAt")
+
+
+class EOMPostCleanOnboardingCandidateResponse(BaseModel):
+    """Bounded Atlas-owned queue for the future CRM consumer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidates: list[EOMPostCleanOnboardingCandidateItem]
+    limit: Annotated[int, Field(ge=1, le=_MAX_LEAD_REVIEW_LIMIT)]
+    cursor: str | None = None
+    has_more: bool = Field(serialization_alias="hasMore")
+    next_cursor: str | None = Field(default=None, serialization_alias="nextCursor")
+
+
 class EOMPublicOnboardingSessionRequest(BaseModel):
     """Opaque bearer supplied by the tracker after the Website reads a fragment."""
 
@@ -860,6 +893,16 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "POST",
         "/eom-funnel/customer-handoffs/{contact_id}/first-clean-completions",
     ),
+    # Same completion route, but a semantic capability: this build atomically
+    # creates/reuses a distinct non-sendable post-clean candidate.
+    "customer.post_clean_onboarding_candidate.create": (
+        "POST",
+        "/eom-funnel/customer-handoffs/{contact_id}/first-clean-completions",
+    ),
+    "customer.post_clean_onboarding_candidate.list": (
+        "GET",
+        "/eom-funnel/post-clean-onboarding-candidates",
+    ),
     "contact.operator_mutation": ("POST", "/eom-funnel/operator-contacts"),
     # Same route as contact.operator_mutation ON PURPOSE: this name versions
     # the route's SEMANTICS, not its existence. A build advertises it only by
@@ -1549,7 +1592,7 @@ async def record_eom_first_clean_completion(
         _first_clean_completion_dependency
     ),
 ) -> JSONResponse:
-    """Record actual first-clean evidence; no email or card flow starts here."""
+    """Record actual first-clean evidence and its non-sendable candidate."""
 
     try:
         await completion.require_schema_ready()
@@ -1573,6 +1616,58 @@ async def record_eom_first_clean_completion(
             else status.HTTP_201_CREATED
         ),
         content={"success": True, **result},
+    )
+
+
+@router.get(
+    "/post-clean-onboarding-candidates",
+    response_model=EOMPostCleanOnboardingCandidateResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def list_eom_post_clean_onboarding_candidates(
+    limit: Annotated[
+        int,
+        Query(ge=1, le=_MAX_LEAD_REVIEW_LIMIT),
+    ] = _DEFAULT_LEAD_REVIEW_LIMIT,
+    cursor: Annotated[str | None, Query(min_length=16, max_length=512)] = None,
+    _actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    completion: EOMFirstCleanCompletionService = Depends(
+        _first_clean_completion_dependency
+    ),
+) -> EOMPostCleanOnboardingCandidateResponse:
+    """List pending candidates; reading never creates customer side effects."""
+
+    decoded_cursor = _decode_lead_review_cursor(cursor)
+    try:
+        rows = await completion.list_candidates(
+            limit=limit + 1,
+            cursor_created_at=(
+                decoded_cursor["created_at"] if decoded_cursor is not None else None
+            ),
+            cursor_candidate_id=(
+                decoded_cursor["contact_id"] if decoded_cursor is not None else None
+            ),
+        )
+    except EOMFirstCleanCompletionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    page_rows = rows[:limit]
+    has_more = len(rows) > limit
+    next_cursor = None
+    if has_more and page_rows:
+        last_row = EOMPostCleanOnboardingCandidateItem.model_validate(page_rows[-1])
+        next_cursor = _encode_lead_review_cursor(
+            created_at=last_row.created_at,
+            contact_id=last_row.candidate_id,
+        )
+    return EOMPostCleanOnboardingCandidateResponse(
+        candidates=[
+            EOMPostCleanOnboardingCandidateItem.model_validate(row)
+            for row in page_rows
+        ],
+        limit=limit,
+        cursor=cursor,
+        has_more=has_more,
+        next_cursor=next_cursor,
     )
 
 

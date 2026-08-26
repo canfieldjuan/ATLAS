@@ -140,7 +140,12 @@ def _utc_iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _receipt_result(row: Mapping[str, Any], *, idempotent: bool) -> dict[str, Any]:
+def _receipt_result(
+    row: Mapping[str, Any],
+    *,
+    candidate: Mapping[str, Any],
+    idempotent: bool,
+) -> dict[str, Any]:
     completed_at = row["completed_at"]
     created_at = row["created_at"]
     if not isinstance(completed_at, datetime) or not isinstance(created_at, datetime):
@@ -157,6 +162,8 @@ def _receipt_result(row: Mapping[str, Any], *, idempotent: bool) -> dict[str, An
         "trackerServiceId": int(row["tracker_service_id"]),
         "completedAt": _utc_iso(completed_at),
         "recordedAt": _utc_iso(created_at),
+        "postCleanOnboardingCandidateId": str(candidate["id"]),
+        "postCleanOnboardingCandidateStatus": str(candidate["status"]),
         "idempotent": idempotent,
     }
 
@@ -173,6 +180,76 @@ async def first_clean_completion_schema_ready(pool: Any) -> bool:
                    AND to_regclass('eom_first_clean_completion_operation_receipts')
                        IS NOT NULL
                    AND to_regclass('eom_first_clean_completion_receipts') IS NOT NULL
+                   AND to_regclass('eom_post_clean_onboarding_candidates') IS NOT NULL
+                   AND (
+                       SELECT COUNT(*) = 1
+                         FROM pg_class AS relation
+                         JOIN pg_namespace AS namespace
+                           ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relkind = 'r'
+                          AND relation.relname =
+                              'eom_post_clean_onboarding_candidates'
+                          AND relation.relowner = (
+                              SELECT oid FROM pg_roles WHERE rolname = 'atlas'
+                          )
+                   )
+                   -- Candidate identity is the at-most-once boundary. Attest
+                   -- the actual constrained columns rather than trusting the
+                   -- migration or constraint names as evidence.
+                   AND (
+                       SELECT COUNT(*) = 4
+                         FROM pg_constraint AS candidate_constraint
+                        WHERE candidate_constraint.conrelid = to_regclass(
+                                  format(
+                                      '%I.eom_post_clean_onboarding_candidates',
+                                      current_schema()
+                                  )
+                              )
+                          AND candidate_constraint.contype IN ('p', 'u')
+                          AND candidate_constraint.convalidated
+                          AND candidate_constraint.conkey IN (
+                              ARRAY[(SELECT attnum FROM pg_attribute
+                                      WHERE attrelid = candidate_constraint.conrelid
+                                        AND attname = 'id')]::smallint[],
+                              ARRAY[(SELECT attnum FROM pg_attribute
+                                      WHERE attrelid = candidate_constraint.conrelid
+                                        AND attname = 'completion_receipt_id')]::smallint[],
+                              ARRAY[(SELECT attnum FROM pg_attribute
+                                      WHERE attrelid = candidate_constraint.conrelid
+                                        AND attname = 'contact_id')]::smallint[],
+                              ARRAY[(SELECT attnum FROM pg_attribute
+                                      WHERE attrelid = candidate_constraint.conrelid
+                                        AND attname = 'handoff_id')]::smallint[]
+                          )
+                   )
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_constraint AS candidate_contact_fk
+                        WHERE candidate_contact_fk.conrelid = to_regclass(
+                                  format(
+                                      '%I.eom_post_clean_onboarding_candidates',
+                                      current_schema()
+                                  )
+                              )
+                          AND candidate_contact_fk.contype = 'f'
+                          AND candidate_contact_fk.confrelid = to_regclass(
+                                  format('%I.contacts', current_schema())
+                              )
+                          AND candidate_contact_fk.convalidated
+                          AND NOT candidate_contact_fk.condeferrable
+                          AND candidate_contact_fk.confdeltype = 'r'
+                          AND candidate_contact_fk.conkey = ARRAY[(
+                              SELECT attnum FROM pg_attribute
+                               WHERE attrelid = candidate_contact_fk.conrelid
+                                 AND attname = 'contact_id'
+                          )]::smallint[]
+                          AND candidate_contact_fk.confkey = ARRAY[(
+                              SELECT attnum FROM pg_attribute
+                               WHERE attrelid = candidate_contact_fk.confrelid
+                                 AND attname = 'id'
+                          )]::smallint[]
+                   )
                    -- The pool must be a direct, least-privilege Atlas login.
                    -- A DBA session that SET ROLE atlas could RESET ROLE and
                    -- bypass the protected-object ACL boundary after readiness.
@@ -966,6 +1043,107 @@ class EOMFirstCleanCompletionService:
             )
         return row
 
+    async def _ensure_candidate_for_receipt(
+        self,
+        conn: Any,
+        *,
+        receipt: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        """Create or recover the one non-sendable candidate for a receipt."""
+
+        await conn.execute(
+            """
+            INSERT INTO eom_post_clean_onboarding_candidates (
+                completion_receipt_id, contact_id, handoff_id
+            ) VALUES ($1, $2, $3)
+            ON CONFLICT (completion_receipt_id) DO NOTHING
+            """,
+            receipt["id"],
+            receipt["contact_id"],
+            receipt["handoff_id"],
+        )
+        candidate = await conn.fetchrow(
+            """
+            SELECT id, completion_receipt_id, contact_id, handoff_id, status
+            FROM eom_post_clean_onboarding_candidates
+            WHERE completion_receipt_id = $1
+            FOR UPDATE
+            """,
+            receipt["id"],
+        )
+        if candidate is None or (
+            _uuid(candidate["contact_id"], "Candidate contact id")
+            != _uuid(receipt["contact_id"], "Receipt contact id")
+            or _uuid(candidate["handoff_id"], "Candidate handoff id")
+            != _uuid(receipt["handoff_id"], "Receipt handoff id")
+            or str(candidate["status"]) != "pending"
+        ):
+            raise EOMFirstCleanCompletionUnavailableError(
+                "Post-clean onboarding candidate is inconsistent"
+            )
+        return candidate
+
+    async def list_candidates(
+        self,
+        *,
+        limit: int,
+        cursor_created_at: datetime | None = None,
+        cursor_candidate_id: UUID | None = None,
+    ) -> list[dict[str, Any]]:
+        """Read pending candidates with blockers derived from current CRM state."""
+
+        await self.require_schema_ready()
+        try:
+            rows = await self.pool.fetch(
+                """
+                SELECT candidate.id AS candidate_id,
+                       candidate.completion_receipt_id,
+                       candidate.contact_id,
+                       candidate.handoff_id,
+                       candidate.status,
+                       candidate.created_at,
+                       contact.full_name,
+                       contact.email AS recipient_email,
+                       receipt.tracker_service_kind,
+                       receipt.tracker_service_id,
+                       receipt.completed_at,
+                       CASE
+                           WHEN contact.status <> 'active'
+                             OR contact.contact_type <> 'customer'
+                               THEN 'inactive_customer'
+                           WHEN contact.customer_type <> 'residential'
+                               THEN 'not_residential'
+                           WHEN contact.email IS NULL OR btrim(contact.email) = ''
+                               THEN 'no_email'
+                           ELSE NULL
+                       END AS blocker
+                FROM eom_post_clean_onboarding_candidates AS candidate
+                JOIN contacts AS contact ON contact.id = candidate.contact_id
+                JOIN eom_first_clean_completion_receipts AS receipt
+                  ON receipt.id = candidate.completion_receipt_id
+                 AND receipt.contact_id = candidate.contact_id
+                 AND receipt.handoff_id = candidate.handoff_id
+                WHERE candidate.business_context_id = $1
+                  AND contact.business_context_id = $1
+                  AND candidate.status = 'pending'
+                  AND (
+                      $2::timestamptz IS NULL
+                      OR (candidate.created_at, candidate.id) < ($2, $3::uuid)
+                  )
+                ORDER BY candidate.created_at DESC, candidate.id DESC
+                LIMIT $4
+                """,
+                _EOM_CONTEXT,
+                cursor_created_at,
+                cursor_candidate_id,
+                limit,
+            )
+        except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            raise EOMFirstCleanCompletionUnavailableError(
+                "Post-clean onboarding candidates are unavailable"
+            ) from exc
+        return [dict(row) for row in rows]
+
     async def _contact_for_update(
         self, conn: Any, contact_id: UUID
     ) -> Mapping[str, Any]:
@@ -1117,7 +1295,10 @@ class EOMFirstCleanCompletionService:
                 # attestation so a concurrent DROP TABLE contacts CASCADE
                 # cannot remove protected foreign keys between readiness and
                 # receipt admission.
-                await conn.execute("LOCK TABLE contacts IN ACCESS SHARE MODE")
+                await conn.execute(
+                    "LOCK TABLE contacts, eom_post_clean_onboarding_candidates "
+                    "IN ACCESS SHARE MODE"
+                )
                 if not await first_clean_completion_schema_ready(conn):
                     raise EOMFirstCleanCompletionUnavailableError(
                         "First-clean completion schema is unavailable"
@@ -1144,10 +1325,15 @@ class EOMFirstCleanCompletionService:
                     fingerprint=fingerprint,
                 )
                 if replayed:
+                    receipt = await self._receipt_for_operation(
+                        conn, operation_key=operation_key
+                    )
+                    candidate = await self._ensure_candidate_for_receipt(
+                        conn, receipt=receipt
+                    )
                     return _receipt_result(
-                        await self._receipt_for_operation(
-                            conn, operation_key=operation_key
-                        ),
+                        receipt,
+                        candidate=candidate,
                         idempotent=True,
                     )
 
@@ -1227,7 +1413,14 @@ class EOMFirstCleanCompletionService:
                     raise EOMFirstCleanCompletionUnavailableError(
                         "First-clean completion receipt could not be recorded"
                     )
-                return _receipt_result(receipt, idempotent=False)
+                candidate = await self._ensure_candidate_for_receipt(
+                    conn, receipt=receipt
+                )
+                return _receipt_result(
+                    receipt,
+                    candidate=candidate,
+                    idempotent=False,
+                )
         except EOMFirstCleanCompletionError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:

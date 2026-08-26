@@ -40,7 +40,7 @@ DBA_DATABASE_URL_ENV = "ATLAS_EOM_FIRST_CLEAN_DBA_DATABASE_URL"
 _NOW = datetime(2026, 8, 24, 20, 0, tzinfo=timezone.utc)
 _EOM_CONTEXT = "effingham_maids"
 _TRACKER_IDS = count(10_000)
-_COMPLETION_SCHEMA_MIGRATIONS = (
+_PRE_COMPLETION_SCHEMA_MIGRATIONS = (
     "035_contacts",
     "256_contact_interaction_dedupe",
     "346_contact_lead_pipeline",
@@ -49,7 +49,10 @@ _COMPLETION_SCHEMA_MIGRATIONS = (
     "354_eom_customer_handoff_privileges",
     "363_eom_lead_lifecycle_sequence",
     "366_contacts_customer_type",
+)
+_COMPLETION_SCHEMA_MIGRATIONS = _PRE_COMPLETION_SCHEMA_MIGRATIONS + (
     "394_eom_first_clean_completion_receipts",
+    "395_eom_post_clean_onboarding_candidates",
 )
 _PREREQUISITE_INTEGRITY_TRIGGERS = (
     ("eom_customer_handoffs", "trg_require_eom_customer_handoff_finalization"),
@@ -117,6 +120,9 @@ class _ConnectionPool:
 
     async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
         return await self._runtime_connection.fetchval(*args, **kwargs)
+
+    async def fetch(self, *args: Any, **kwargs: Any) -> Any:
+        return await self._runtime_connection.fetch(*args, **kwargs)
 
 
 def _database_url_or_skip() -> str:
@@ -340,9 +346,11 @@ async def _insert_customer(
     await pool._connection.execute(
         """
         INSERT INTO contacts (
-            id, full_name, business_context_id, contact_type, status,
+            id, full_name, email, business_context_id, contact_type, status,
             customer_type, created_at
-        ) VALUES ($1, 'First Completion Test Customer', $2, 'customer', $3, $4, $5)
+        ) VALUES (
+            $1, 'First Completion Test Customer', NULL, $2, 'customer', $3, $4, $5
+        )
         """,
         contact_id,
         _EOM_CONTEXT,
@@ -822,7 +830,7 @@ async def test_completion_migration_refuses_preexisting_runtime_receipt_relation
     """Migration 394 never adopts a runtime-created receipt lookalike."""
 
     async with _test_store(
-        migrations=_COMPLETION_SCHEMA_MIGRATIONS[:-1]
+        migrations=_PRE_COMPLETION_SCHEMA_MIGRATIONS
     ) as (pool, _schema):
         await pool._runtime_connection.execute(
             f"CREATE TABLE {_quote_ident(relation_name)} (id BIGINT PRIMARY KEY)"
@@ -846,7 +854,7 @@ async def test_completion_migration_rebuilds_lifecycle_guard_before_transfer() -
     """A pre-394 permissive lifecycle guard cannot survive the DBA migration."""
 
     async with _test_store(
-        migrations=_COMPLETION_SCHEMA_MIGRATIONS[:-1]
+        migrations=_PRE_COMPLETION_SCHEMA_MIGRATIONS
     ) as (pool, _schema):
         await pool._connection.execute(
             """
@@ -881,6 +889,11 @@ async def test_completion_migration_rebuilds_lifecycle_guard_before_transfer() -
         ).read_text()
         async with pool._connection.transaction():
             await pool._connection.execute(completion_sql)
+        await pool._runtime_connection.execute(
+            (
+                MIGRATIONS / "395_eom_post_clean_onboarding_candidates.sql"
+            ).read_text()
+        )
 
         assert await first_clean_completion_schema_ready(pool) is True
         assert await pool._connection.fetchval(
@@ -914,7 +927,7 @@ async def test_completion_migration_rebuilds_handoff_guards_before_trusting_them
     """A permissive handoff boundary cannot survive the DBA completion migration."""
 
     async with _test_store(
-        migrations=_COMPLETION_SCHEMA_MIGRATIONS[:-1]
+        migrations=_PRE_COMPLETION_SCHEMA_MIGRATIONS
     ) as (pool, schema):
         await pool._connection.execute(
             """
@@ -967,6 +980,11 @@ async def test_completion_migration_rebuilds_handoff_guards_before_trusting_them
         ).read_text()
         async with pool._connection.transaction():
             await pool._connection.execute(completion_sql)
+        await pool._runtime_connection.execute(
+            (
+                MIGRATIONS / "395_eom_post_clean_onboarding_candidates.sql"
+            ).read_text()
+        )
 
         assert await first_clean_completion_schema_ready(pool) is True
         handoff_guard_properties = await pool._connection.fetch(
@@ -2602,9 +2620,19 @@ async def test_record_completion_persists_one_receipt_and_lifecycle_evidence() -
         assert result["contactId"] == str(contact_id)
         assert result["trackerServiceKind"] == "job"
         assert result["completedAt"] == "2026-08-24T19:00:00Z"
+        assert result["postCleanOnboardingCandidateStatus"] == "pending"
         assert (
             await pool.fetchval(
                 "SELECT COUNT(*) FROM eom_first_clean_completion_receipts"
+            )
+            == 1
+        )
+        assert (
+            await pool.fetchval(
+                "SELECT COUNT(*) FROM eom_post_clean_onboarding_candidates "
+                "WHERE id = $1::uuid AND completion_receipt_id = $2::uuid",
+                result["postCleanOnboardingCandidateId"],
+                result["receiptId"],
             )
             == 1
         )
@@ -2645,11 +2673,21 @@ async def test_unchanged_retry_returns_original_receipt_without_second_write() -
         replay = await service.record_completion(**kwargs)
 
         assert first["receiptId"] == replay["receiptId"]
+        assert (
+            first["postCleanOnboardingCandidateId"]
+            == replay["postCleanOnboardingCandidateId"]
+        )
         assert first["idempotent"] is False
         assert replay["idempotent"] is True
         assert (
             await pool.fetchval(
                 "SELECT COUNT(*) FROM eom_first_clean_completion_receipts"
+            )
+            == 1
+        )
+        assert (
+            await pool.fetchval(
+                "SELECT COUNT(*) FROM eom_post_clean_onboarding_candidates"
             )
             == 1
         )
@@ -2843,8 +2881,18 @@ async def test_concurrent_same_operation_creates_one_receipt() -> None:
         assert sorted((first["idempotent"], second["idempotent"])) == [False, True]
         assert first["receiptId"] == second["receiptId"]
         assert (
+            first["postCleanOnboardingCandidateId"]
+            == second["postCleanOnboardingCandidateId"]
+        )
+        assert (
             await pool.fetchval(
                 "SELECT COUNT(*) FROM eom_first_clean_completion_receipts"
+            )
+            == 1
+        )
+        assert (
+            await pool.fetchval(
+                "SELECT COUNT(*) FROM eom_post_clean_onboarding_candidates"
             )
             == 1
         )
@@ -2919,6 +2967,8 @@ async def test_private_route_forwards_only_the_closed_completion_contract() -> N
                 "trackerServiceId": kwargs["tracker_service_id"],
                 "completedAt": "2026-08-24T19:00:00Z",
                 "recordedAt": "2026-08-24T20:00:00Z",
+                "postCleanOnboardingCandidateId": str(uuid4()),
+                "postCleanOnboardingCandidateStatus": "pending",
                 "idempotent": False,
             }
 
@@ -2975,6 +3025,10 @@ async def test_private_route_reaches_persisted_completion_without_email_or_strip
                 headers=headers,
                 json=_payload(customer_id, site_id),
             )
+            listed = await client.get(
+                "/api/v1/eom-funnel/post-clean-onboarding-candidates",
+                params={"limit": 1},
+            )
 
         assert created.status_code == 201
         assert created.json()["success"] is True
@@ -2982,11 +3036,84 @@ async def test_private_route_reaches_persisted_completion_without_email_or_strip
         assert replay.json()["idempotent"] is True
         assert created.json()["receiptId"] == replay.json()["receiptId"]
         assert (
+            created.json()["postCleanOnboardingCandidateId"]
+            == replay.json()["postCleanOnboardingCandidateId"]
+        )
+        assert listed.status_code == 200
+        assert listed.json()["hasMore"] is False
+        assert listed.json()["candidates"] == [
+            {
+                "candidateId": created.json()["postCleanOnboardingCandidateId"],
+                "completionReceiptId": created.json()["receiptId"],
+                "contactId": str(contact_id),
+                "handoffId": created.json()["handoffId"],
+                "status": "pending",
+                "fullName": "First Completion Test Customer",
+                "recipientEmail": None,
+                "blocker": "no_email",
+                "trackerServiceKind": "job",
+                "trackerServiceId": 6001,
+                "completedAt": "2026-08-24T19:00:00Z",
+                "createdAt": created.json()["recordedAt"],
+            }
+        ]
+        await pool._connection.execute(
+            "UPDATE contacts SET status = 'inactive' WHERE id = $1", contact_id
+        )
+        assert (await _service(pool).list_candidates(limit=1))[0]["blocker"] == (
+            "inactive_customer"
+        )
+        await pool._connection.execute(
+            "UPDATE contacts SET status = 'active', customer_type = 'commercial', "
+            "email = 'candidate@example.test' WHERE id = $1",
+            contact_id,
+        )
+        assert (await _service(pool).list_candidates(limit=1))[0]["blocker"] == (
+            "not_residential"
+        )
+        assert (
             await pool.fetchval(
                 "SELECT COUNT(*) FROM eom_first_clean_completion_receipts"
             )
             == 1
         )
+
+
+@pytest.mark.asyncio
+async def test_candidate_migration_backfills_an_existing_completion_receipt() -> None:
+    async with _test_store() as (pool, _schema):
+        contact_id, customer_id, site_id = await _insert_customer(pool)
+        assert customer_id is not None and site_id is not None
+        result = await _service(pool).record_completion(
+            **_completion_kwargs(
+                contact_id=contact_id,
+                tracker_customer_id=customer_id,
+                tracker_site_id=site_id,
+                operation_key=_operation_key("backfill"),
+            )
+        )
+        await pool._runtime_connection.execute(
+            "DELETE FROM eom_post_clean_onboarding_candidates"
+        )
+        await pool._runtime_connection.execute(
+            (MIGRATIONS / "395_eom_post_clean_onboarding_candidates.sql").read_text()
+        )
+        assert await pool.fetchval(
+            "SELECT COUNT(*) FROM eom_post_clean_onboarding_candidates "
+            "WHERE completion_receipt_id = $1::uuid",
+            result["receiptId"],
+        ) == 1
+
+
+@pytest.mark.asyncio
+async def test_schema_readiness_rejects_missing_candidate_uniqueness() -> None:
+    async with _test_store() as (pool, _schema):
+        assert await first_clean_completion_schema_ready(pool) is True
+        await pool._runtime_connection.execute(
+            "ALTER TABLE eom_post_clean_onboarding_candidates DROP CONSTRAINT "
+            "eom_post_clean_onboarding_candidates_completion_receipt_id_key"
+        )
+        assert await first_clean_completion_schema_ready(pool) is False
 
 
 @pytest.mark.asyncio
@@ -3352,3 +3479,24 @@ def test_funnel_advertises_completion_only_with_its_registered_route() -> None:
     assert funnel_mod._CAPABILITY_ROUTES[capability] == route
     assert route in registered
     assert capability in funnel_mod.served_capabilities()
+
+
+def test_funnel_advertises_post_clean_candidate_semantics_only_with_routes() -> None:
+    create_capability = "customer.post_clean_onboarding_candidate.create"
+    list_capability = "customer.post_clean_onboarding_candidate.list"
+    create_route = (
+        "POST",
+        "/eom-funnel/customer-handoffs/{contact_id}/first-clean-completions",
+    )
+    list_route = ("GET", "/eom-funnel/post-clean-onboarding-candidates")
+    registered = {
+        (method, item.path)
+        for item in funnel_mod.router.routes
+        for method in (item.methods or ())
+    }
+    assert funnel_mod._CAPABILITY_ROUTES[create_capability] == create_route
+    assert funnel_mod._CAPABILITY_ROUTES[list_capability] == list_route
+    assert {create_route, list_route} <= registered
+    assert {create_capability, list_capability} <= set(
+        funnel_mod.served_capabilities()
+    )
