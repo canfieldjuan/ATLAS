@@ -247,7 +247,31 @@ break-glass path.
    ```bash
    sudo systemctl reload postgresql@16-main
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
-     "SELECT \
+     "WITH intended_peer_rule AS ( \
+        SELECT line_number \
+        FROM pg_hba_file_rules \
+        WHERE error IS NULL \
+          AND type = 'local' \
+          AND database = ARRAY['atlas']::text[] \
+          AND user_name = ARRAY['atlas']::text[] \
+          AND auth_method = 'peer' \
+          AND options = ARRAY['map=atlas_app']::text[] \
+      ), \
+      preceding_local_rules AS ( \
+        SELECT rules.line_number \
+        FROM pg_hba_file_rules AS rules \
+        JOIN intended_peer_rule AS intended \
+          ON rules.line_number < intended.line_number \
+        WHERE rules.error IS NULL \
+          AND rules.type = 'local' \
+          AND NOT ( \
+            rules.database = ARRAY['all']::text[] \
+            AND rules.user_name = ARRAY['postgres']::text[] \
+            AND rules.auth_method = 'peer' \
+            AND COALESCE(rules.options, ARRAY[]::text[]) = ARRAY[]::text[] \
+          ) \
+      ) \
+      SELECT \
         (SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL), \
         count(*) FILTER ( \
           WHERE map_name = 'atlas_app' \
@@ -255,16 +279,20 @@ break-glass path.
             AND pg_username = 'atlas' \
         ), \
         count(*) FILTER (WHERE map_name = 'atlas_app'), \
-        count(*) FILTER (WHERE error IS NOT NULL) \
+        count(*) FILTER (WHERE error IS NOT NULL), \
+        (SELECT count(*) FROM intended_peer_rule), \
+        (SELECT count(*) FROM preceding_local_rules) \
       FROM pg_ident_file_mappings;"
    ```
 
-   The final query must return `0|1|1|0`: no HBA parser error, exactly one
+   The final query must return `0|1|1|0|1|0`: no HBA parser error, exactly one
    intended `atlas_app | juan-canfield | atlas` mapping, no additional
-   `atlas_app` mapping, and no identity-map error. Otherwise restore both saved
-   files and reload PostgreSQL before continuing. The service still uses TCP at
-   this point, so a valid scoped peer rule can be proved without removing the
-   existing path.
+   `atlas_app` mapping, no identity-map error, exactly one loaded
+   `local atlas atlas peer map=atlas_app` rule, and no preceding local rule
+   other than the retained `local all postgres peer` recovery rule. Otherwise
+   restore both saved files and reload PostgreSQL before continuing. The service
+   still uses TCP at this point, so a valid scoped peer rule can be proved
+   without removing the existing path.
 
 3. Re-run `service_db_require_no_socket_assignments`; it rejects an empty
    service-file set, any case-variant `ATLAS_DB_*` key, and every existing

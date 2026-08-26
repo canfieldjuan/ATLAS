@@ -87,6 +87,18 @@ def test_service_db_inspect_clears_every_database_config_key() -> None:
     assert "service_db_require_no_socket_assignments || return 1" in runbook
 
 
+def test_peer_hba_receipt_requires_the_intended_first_applicable_rule() -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+
+    assert "WITH intended_peer_rule AS" in runbook
+    assert "database = ARRAY['atlas']::text[]" in runbook
+    assert "user_name = ARRAY['atlas']::text[]" in runbook
+    assert "options = ARRAY['map=atlas_app']::text[]" in runbook
+    assert "ON rules.line_number < intended.line_number" in runbook
+    assert "rules.user_name = ARRAY['postgres']::text[]" in runbook
+    assert "0|1|1|0|1|0" in runbook
+
+
 def _run_runbook_function(
     runbook: str,
     function_names: tuple[str, ...],
