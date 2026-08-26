@@ -407,9 +407,9 @@ Parked hardening: none.
 - Not locally runnable: `gitleaks protect --staged --redact --verbose` because
   the executable is absent in this worktree environment. Do not bypass it; the
   required CI secret scan remains the release gate.
-- Pending after the current branch update: rerun the plan-file/diff-size audits
-  and local PR-review wrapper with its isolated session-state file and current
-  PR body.
+- Current-head plan-file/diff-size audits and the local PR-review wrapper pass
+  with the synchronized PR body. GitHub remains the required full-unit,
+  PostgreSQL-16, and secret-scan execution authority.
 - No production database role/configuration/deployment action is part of local
   verification. A real receipt is deferred until a protected DBA DSN is
   provisioned and the deployed runtime has converged.
