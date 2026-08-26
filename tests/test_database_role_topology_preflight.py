@@ -117,10 +117,10 @@ class _Connection:
             return self._state.catalog["column_acl"]
         if "pg_catalog.pg_policy AS policy" in query:
             return self._state.catalog["row_security_policies"]
-        if "pg_catalog.pg_roles AS role" in query:
-            return self._state.catalog["roles"]
-        if "pg_catalog.pg_auth_members AS membership" in query:
+        if "SELECT membership.oid AS membership_oid" in query:
             return self._state.catalog["memberships"]
+        if "SELECT role.rolname AS role_name" in query:
+            return self._state.catalog["roles"]
         if "namespace.nspowner" in query:
             return self._state.catalog["schema_owners"]
         if "relation.relowner" in query:
@@ -167,7 +167,27 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "can_create_databases": False,
                 "can_replicate": False,
                 "bypasses_row_security": False,
-            }
+            },
+            {
+                "role_name": "pg_monitor",
+                "can_login": False,
+                "is_superuser": False,
+                "inherits_privileges": True,
+                "can_create_roles": False,
+                "can_create_databases": False,
+                "can_replicate": False,
+                "bypasses_row_security": False,
+            },
+            {
+                "role_name": "pg_read_all_settings",
+                "can_login": False,
+                "is_superuser": False,
+                "inherits_privileges": True,
+                "can_create_roles": False,
+                "can_create_databases": False,
+                "can_replicate": False,
+                "bypasses_row_security": False,
+            },
         ],
         "memberships": [
             {
@@ -178,7 +198,25 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "admin_option": False,
                 "inherit_option": False,
                 "set_option": True,
-            }
+            },
+            {
+                "membership_oid": 20_007,
+                "granted_role": "pg_monitor",
+                "member_role": "atlas",
+                "grantor_role": "postgres",
+                "admin_option": False,
+                "inherit_option": True,
+                "set_option": True,
+            },
+            {
+                "membership_oid": 20_008,
+                "granted_role": "pg_read_all_settings",
+                "member_role": "pg_monitor",
+                "grantor_role": "postgres",
+                "admin_option": False,
+                "inherit_option": True,
+                "set_option": True,
+            },
         ],
         "schema_owners": [
             {"schema_name": "public", "owner_role": "atlas_eom_handoff_owner"}
@@ -192,6 +230,7 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "owner_role": "atlas_eom_handoff_owner",
                 "row_security_enabled": True,
                 "row_security_forced": False,
+                "is_security_invoker": False,
             }
         ],
         "function_owners": [
@@ -235,6 +274,7 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "relation_kind": "r",
                 "row_security_enabled": True,
                 "row_security_forced": False,
+                "is_security_invoker": False,
                 "grantor_role_oid": 20_006,
                 "grantor_role": "atlas_eom_handoff_owner",
                 "grantee_role": "atlas",
@@ -282,6 +322,8 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "relation_kind": "r",
                 "command": "r",
                 "is_permissive": True,
+                "using_expression": "(CURRENT_USER = 'atlas'::name)",
+                "with_check_expression": "(CURRENT_USER = 'atlas'::name)",
                 "policy_oid": 20_004,
                 "policy_name": "atlas_work_log_read",
                 "role_name": "atlas",
@@ -666,6 +708,64 @@ def test_preflight_rejects_non_superuser_dba_session_before_report(
     assert all(dba_state.readonly_transactions)
 
 
+@pytest.mark.parametrize(
+    ("runtime_overrides", "message"),
+    (
+        (
+            {
+                "current_user": "postgres",
+                "session_user": "postgres",
+                "current_user_is_superuser": True,
+            },
+            "authenticated identity",
+        ),
+        (
+            {
+                "current_user": "postgres",
+                "session_user": "atlas_runtime_login",
+                "current_user_is_superuser": True,
+            },
+            "effective identity",
+        ),
+    ),
+)
+def test_preflight_rejects_reused_runtime_and_dba_identity_before_catalog_reporting(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime_overrides: dict[str, object],
+    message: str,
+) -> None:
+    runner = _load_preflight_module()
+    runtime_state = _state(**runtime_overrides)
+    dba_state = _state(
+        current_user="postgres",
+        session_user="postgres",
+        current_user_is_superuser=True,
+    )
+    runtime_pool = _Pool(runtime_state)
+    dba_pool = _Pool(dba_state)
+    calls = 0
+
+    async def create_pool(_connection_kwargs: object) -> _Pool:
+        nonlocal calls
+        calls += 1
+        return runtime_pool if calls == 1 else dba_pool
+
+    with pytest.raises(runner.PreflightError, match=message):
+        asyncio.run(
+            runner._run(
+                create_pool=create_pool,
+                dba_config_factory=lambda: _dba_config(runner, monkeypatch),
+                runtime_config_factory=_RuntimeConfig,
+            )
+        )
+
+    assert dba_state.catalog_fetches == 0
+    assert runtime_state.advisory_lock_attempts == 0
+    assert dba_state.advisory_lock_attempts == 0
+    assert all(runtime_state.readonly_transactions)
+    assert all(dba_state.readonly_transactions)
+
+
 def test_preflight_rejects_a_target_that_does_not_share_the_lock_namespace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -718,6 +818,13 @@ def test_preflight_has_no_apply_or_mutation_command_surface() -> None:
     assert "NULLIF(policy.polroles, ARRAY[]::oid[])" in source
     assert "membership.inherit_option" in source
     assert "membership.set_option" in source
+    assert "WITH RECURSIVE reported_role_closure(role_oid)" in source
+    assert "JOIN reported_role_closure AS granted_closure" in source
+    assert "JOIN reported_role_closure AS member_closure" in source
+    assert "pg_catalog.pg_get_expr(policy.polqual, policy.polrelid)" in source
+    assert "pg_catalog.pg_get_expr(policy.polwithcheck, policy.polrelid)" in source
+    assert "security_invoker=true" in runner._RELATION_OWNERS_QUERY
+    assert "security_invoker=true" in runner._RELATION_ACL_QUERY
     acl_queries = (
         runner._DATABASE_ACL_QUERY,
         runner._SCHEMA_ACL_QUERY,
@@ -854,6 +961,7 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
     granted_role = f"role_topology_granted_{suffix}"
     grantor_role = f"role_topology_grantor_{suffix}"
     relation_name = "work_log"
+    view_name = "work_log_view"
     function_name = "write_log"
     policy_name = "read_work_log"
     runtime_password = f"runtime-{suffix}"
@@ -862,6 +970,7 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
     granted = _quoted_identifier(granted_role)
     grantor = _quoted_identifier(grantor_role)
     relation = f"{schema}.{_quoted_identifier(relation_name)}"
+    view = f"{schema}.{_quoted_identifier(view_name)}"
     function = f"{schema}.{_quoted_identifier(function_name)}(employee_id bigint)"
     policy = _quoted_identifier(policy_name)
 
@@ -881,6 +990,7 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
             granted_created = True
             await connection.execute(f"CREATE ROLE {grantor} NOLOGIN")
             grantor_created = True
+            await connection.execute(f"GRANT pg_monitor TO {runtime}")
             await connection.execute(
                 f"GRANT {granted} TO {runtime} WITH ADMIN FALSE, "
                 "INHERIT FALSE, SET TRUE"
@@ -889,6 +999,10 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
             await connection.execute(f"CREATE SCHEMA {schema}")
             await connection.execute(
                 f"CREATE TABLE {relation} (row_id bigint, hours_worked integer)"
+            )
+            await connection.execute(
+                f"CREATE VIEW {view} WITH (security_invoker = true) AS "
+                f"SELECT row_id, hours_worked FROM {relation}"
             )
             await connection.execute(f"GRANT USAGE ON SCHEMA {schema} TO {grantor}")
             await connection.execute(
@@ -904,8 +1018,9 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
             assert isinstance(grantor_role_oid, int)
             await connection.execute(f"ALTER TABLE {relation} ENABLE ROW LEVEL SECURITY")
             await connection.execute(
-                f"CREATE POLICY {policy} ON {relation} FOR SELECT TO {runtime} "
-                "USING (true)"
+                f"CREATE POLICY {policy} ON {relation} FOR ALL TO {runtime} "
+                f"USING (CURRENT_USER = '{runtime_role}'::name) "
+                f"WITH CHECK (CURRENT_USER = '{runtime_role}'::name)"
             )
             await connection.execute(f"GRANT USAGE ON SCHEMA {schema} TO {runtime}")
             await connection.execute(
@@ -943,6 +1058,7 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
                 await connection.execute(
                     f"REVOKE USAGE ON SCHEMA public FROM {runtime}"
                 )
+                await connection.execute(f"REVOKE pg_monitor FROM {runtime}")
             if runtime_created and granted_created:
                 await connection.execute(f"REVOKE {granted} FROM {runtime}")
             if runtime_created:
@@ -965,6 +1081,21 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
     assert membership["admin_option"] is False
     assert membership["inherit_option"] is False
     assert membership["set_option"] is True
+    predefined_membership = next(
+        row
+        for row in catalog["memberships"]
+        if row["granted_role"] == "pg_monitor" and row["member_role"] == runtime_role
+    )
+    assert predefined_membership["grantor_role"]
+    predefined_chain = next(
+        row
+        for row in catalog["memberships"]
+        if row["granted_role"] == "pg_read_all_settings"
+        and row["member_role"] == "pg_monitor"
+    )
+    assert predefined_chain["grantor_role"]
+    role_names = {row["role_name"] for row in catalog["roles"]}
+    assert {"pg_monitor", "pg_read_all_settings"} <= role_names
 
     relation_owner = next(
         row
@@ -973,6 +1104,14 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
         and row["relation_name"] == relation_name
     )
     assert isinstance(relation_owner["relation_oid"], int)
+
+    security_invoker_view = next(
+        row
+        for row in catalog["relation_owners"]
+        if row["schema_name"] == schema_name and row["relation_name"] == view_name
+    )
+    assert security_invoker_view["relation_kind"] == "v"
+    assert security_invoker_view["is_security_invoker"] is True
 
     relation_acl = next(
         row
@@ -1028,3 +1167,8 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
     )
     assert isinstance(policy_row["policy_oid"], int)
     assert isinstance(policy_row["relation_oid"], int)
+    for expression_name in ("using_expression", "with_check_expression"):
+        expression = policy_row[expression_name]
+        assert isinstance(expression, str)
+        assert "CURRENT_USER" in expression
+        assert runtime_role in expression

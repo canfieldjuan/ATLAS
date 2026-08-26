@@ -96,7 +96,20 @@ _DATABASE_OWNER_QUERY = """
      )
 """
 
-_ROLES_QUERY = """
+_REPORTED_ROLE_CLOSURE_CTE = """
+    WITH RECURSIVE reported_role_closure(role_oid) AS (
+        SELECT role.oid
+          FROM pg_catalog.pg_roles AS role
+         WHERE role.rolname !~ '^pg_'
+        UNION
+        SELECT membership.roleid
+          FROM pg_catalog.pg_auth_members AS membership
+          JOIN reported_role_closure AS member_closure
+            ON member_closure.role_oid = membership.member
+    )
+"""
+
+_ROLES_QUERY = _REPORTED_ROLE_CLOSURE_CTE + """
     SELECT role.rolname AS role_name,
            role.rolcanlogin AS can_login,
            role.rolsuper AS is_superuser,
@@ -106,19 +119,12 @@ _ROLES_QUERY = """
            role.rolreplication AS can_replicate,
            role.rolbypassrls AS bypasses_row_security
       FROM pg_catalog.pg_roles AS role
-     WHERE role.rolname !~ '^pg_'
-        OR EXISTS (
-            SELECT 1
-              FROM pg_catalog.pg_auth_members AS membership
-              JOIN pg_catalog.pg_roles AS member_role
-                ON member_role.oid = membership.member
-             WHERE membership.roleid = role.oid
-               AND member_role.rolname !~ '^pg_'
-        )
-     ORDER BY role.rolname
+      JOIN reported_role_closure AS role_closure
+        ON role_closure.role_oid = role.oid
+     ORDER BY role.rolname, role.oid
 """
 
-_ROLE_MEMBERSHIPS_QUERY = """
+_ROLE_MEMBERSHIPS_QUERY = _REPORTED_ROLE_CLOSURE_CTE + """
     SELECT membership.oid AS membership_oid,
            granted_role.rolname AS granted_role,
            member_role.rolname AS member_role,
@@ -129,12 +135,14 @@ _ROLE_MEMBERSHIPS_QUERY = """
       FROM pg_catalog.pg_auth_members AS membership
       JOIN pg_catalog.pg_roles AS granted_role
         ON granted_role.oid = membership.roleid
+      JOIN reported_role_closure AS granted_closure
+        ON granted_closure.role_oid = granted_role.oid
       JOIN pg_catalog.pg_roles AS member_role
         ON member_role.oid = membership.member
+      JOIN reported_role_closure AS member_closure
+        ON member_closure.role_oid = member_role.oid
       JOIN pg_catalog.pg_roles AS grantor_role
         ON grantor_role.oid = membership.grantor
-     WHERE granted_role.rolname !~ '^pg_'
-        OR member_role.rolname !~ '^pg_'
      ORDER BY granted_role.rolname, member_role.rolname, grantor_role.rolname,
               membership.oid
 """
@@ -157,7 +165,9 @@ _RELATION_OWNERS_QUERY = """
            relation.relkind::text AS relation_kind,
            owner_role.rolname AS owner_role,
            relation.relrowsecurity AS row_security_enabled,
-           relation.relforcerowsecurity AS row_security_forced
+           relation.relforcerowsecurity AS row_security_forced,
+           COALESCE(relation.reloptions, ARRAY[]::text[])
+               @> ARRAY['security_invoker=true']::text[] AS is_security_invoker
       FROM pg_catalog.pg_class AS relation
       JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = relation.relnamespace
@@ -257,6 +267,8 @@ _RELATION_ACL_QUERY = """
            relation.relkind::text AS relation_kind,
            relation.relrowsecurity AS row_security_enabled,
            relation.relforcerowsecurity AS row_security_forced,
+           COALESCE(relation.reloptions, ARRAY[]::text[])
+               @> ARRAY['security_invoker=true']::text[] AS is_security_invoker,
            acl.grantor AS grantor_role_oid,
            grantor_role.rolname AS grantor_role,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
@@ -367,6 +379,10 @@ _ROW_SECURITY_POLICIES_QUERY = """
            relation.relkind::text AS relation_kind,
            policy.polcmd::text AS command,
            policy.polpermissive AS is_permissive,
+           pg_catalog.pg_get_expr(policy.polqual, policy.polrelid)
+               AS using_expression,
+           pg_catalog.pg_get_expr(policy.polwithcheck, policy.polrelid)
+               AS with_check_expression,
            policy.oid AS policy_oid,
            policy.polname AS policy_name,
            COALESCE(role.rolname, 'PUBLIC') AS role_name,
@@ -578,6 +594,24 @@ def _require_direct_dba_superuser(target: _TargetIdentity) -> None:
         )
 
 
+def _require_independent_dba_identity(
+    runtime_target: _TargetIdentity,
+    dba_target: _TargetIdentity,
+) -> None:
+    """Reject a DBA session that reuses the runtime authentication context."""
+
+    if runtime_target.session_user == dba_target.session_user:
+        raise PreflightError(
+            "Configured DBA connection must not reuse the Atlas runtime "
+            "authenticated identity"
+        )
+    if runtime_target.current_user == dba_target.current_user:
+        raise PreflightError(
+            "Configured DBA connection must not reuse the Atlas runtime "
+            "effective identity"
+        )
+
+
 async def _attest_shared_database_lock(
     runtime_connection: Any,
     dba_connection: Any,
@@ -766,6 +800,10 @@ async def _run(
                             )
                             _require_matching_target(runtime_target, dba_target)
                             _require_direct_dba_superuser(dba_target)
+                            _require_independent_dba_identity(
+                                runtime_target,
+                                dba_target,
+                            )
                             await _attest_shared_database_lock(
                                 runtime_connection,
                                 dba_connection,

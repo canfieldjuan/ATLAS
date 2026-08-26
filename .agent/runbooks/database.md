@@ -74,7 +74,8 @@ DSN argument and has no apply mode.
    `ATLAS_DB_*` application credentials. The normal runtime target continues to
    come only from `DatabaseConfig`; the command pins both connections in
    read-only repeatable-read transactions and rejects a missing DBA value, a
-   different database/schema/cluster, a switched `SET ROLE` session, or a
+   different database/schema/cluster, a DBA session that reuses the runtime
+   authenticated or effective identity, a switched `SET ROLE` session, or a
    non-superuser session before it reads the catalog.
 
 3. From the Atlas worktree that supplies the intended runtime configuration,
@@ -85,9 +86,11 @@ DSN argument and has no apply mode.
    ```
 
    It prints a redacted JSON receipt with target labels, role attributes and
-   membership options, database/schema ownership, per-object owner and ACL
-   records (including PostgreSQL defaults and column grants), plus RLS policy
-   role bindings. It never prints a password or DSN query values, but role and
+   complete reachable membership options (including referenced predefined
+   roles), database/schema ownership, per-object owner and ACL records
+   (including PostgreSQL defaults, column grants, and security-invoker view
+   state), plus RLS policy role bindings and deparsed `USING`/`WITH CHECK`
+   expressions. It never prints a password or DSN query values, but role and
    ownership metadata is still operationally sensitive: retain it in the
    protected cutover record rather than pasting it into public issues.
 
