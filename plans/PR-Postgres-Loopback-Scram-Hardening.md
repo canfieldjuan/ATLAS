@@ -306,7 +306,9 @@ Max files: 7
   use a separate configuration migration with an exact baseline receipt.
 - **Peer-HBA precedence — CLOSED / DERIVED before socket configuration.**
   Membership is the ordered loaded `local` HBA rows preceding the exact
-  `atlas | atlas | peer | map=atlas_app` row. The receipt admits exactly one
+  `atlas | atlas | peer | map=atlas_app` row, ordered by
+  `pg_hba_file_rules.rule_number` rather than source-local `line_number`. The
+  receipt admits exactly one
   intended row and only the `all | postgres | peer` recovery row before it;
   every other preceding local rule stops the cutover for a separate HBA-policy
   migration.
@@ -418,14 +420,14 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 508 |
+| `.agent/runbooks/database.md` | 509 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 433 |
-| `tests/test_agent_operations_contract.py` | 290 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 435 |
+| `tests/test_agent_operations_contract.py` | 292 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **1338** |
+| **Total** | **1343** |
 
 ## Diff budget
 

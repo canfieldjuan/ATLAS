@@ -248,7 +248,7 @@ break-glass path.
    sudo systemctl reload postgresql@16-main
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -c \
      "WITH intended_peer_rule AS ( \
-        SELECT line_number \
+        SELECT rule_number \
         FROM pg_hba_file_rules \
         WHERE error IS NULL \
           AND type = 'local' \
@@ -258,10 +258,10 @@ break-glass path.
           AND options = ARRAY['map=atlas_app']::text[] \
       ), \
       preceding_local_rules AS ( \
-        SELECT rules.line_number \
+        SELECT rules.rule_number \
         FROM pg_hba_file_rules AS rules \
         JOIN intended_peer_rule AS intended \
-          ON rules.line_number < intended.line_number \
+          ON rules.rule_number < intended.rule_number \
         WHERE rules.error IS NULL \
           AND rules.type = 'local' \
           AND NOT ( \
@@ -288,7 +288,8 @@ break-glass path.
    The final query must return `0|1|1|0|1|0`: no HBA parser error, exactly one
    intended `atlas_app | juan-canfield | atlas` mapping, no additional
    `atlas_app` mapping, no identity-map error, exactly one loaded
-   `local atlas atlas peer map=atlas_app` rule, and no preceding local rule
+   `local atlas atlas peer map=atlas_app` rule, and no preceding local rule in
+   loaded `rule_number` order
    other than the retained `local all postgres peer` recovery rule. Otherwise
    restore both saved files and reload PostgreSQL before continuing. The service
    still uses TCP at this point, so a valid scoped peer rule can be proved

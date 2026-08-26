@@ -94,7 +94,9 @@ def test_peer_hba_receipt_requires_the_intended_first_applicable_rule() -> None:
     assert "database = ARRAY['atlas']::text[]" in runbook
     assert "user_name = ARRAY['atlas']::text[]" in runbook
     assert "options = ARRAY['map=atlas_app']::text[]" in runbook
-    assert "ON rules.line_number < intended.line_number" in runbook
+    assert "SELECT rule_number" in runbook
+    assert "ON rules.rule_number < intended.rule_number" in runbook
+    assert "ON rules.line_number < intended.line_number" not in runbook
     assert "rules.user_name = ARRAY['postgres']::text[]" in runbook
     assert "0|1|1|0|1|0" in runbook
 
