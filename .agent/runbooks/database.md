@@ -72,7 +72,8 @@ DSN argument and has no apply mode.
    PostgreSQL-superuser DSN under
    `ATLAS_DATABASE_ROLE_TOPOLOGY_DBA_DATABASE_URL`. Do not reuse the normal
    `ATLAS_DB_*` application credentials. The normal runtime target continues to
-   come only from `DatabaseConfig`; the command rejects a missing DBA value, a
+   come only from `DatabaseConfig`; the command pins both connections in
+   read-only repeatable-read transactions and rejects a missing DBA value, a
    different database/schema/cluster, a switched `SET ROLE` session, or a
    non-superuser session before it reads the catalog.
 
@@ -83,9 +84,9 @@ DSN argument and has no apply mode.
    python scripts/check_database_role_topology.py
    ```
 
-   It prints a redacted JSON receipt with target labels, role attributes,
-   memberships, database/schema ownership, owner summaries, and effective ACL
-   summaries (including PostgreSQL defaults and column grants), plus RLS policy
+   It prints a redacted JSON receipt with target labels, role attributes and
+   membership options, database/schema ownership, per-object owner and ACL
+   records (including PostgreSQL defaults and column grants), plus RLS policy
    role bindings. It never prints a password or DSN query values, but role and
    ownership metadata is still operationally sensitive: retain it in the
    protected cutover record rather than pasting it into public issues.

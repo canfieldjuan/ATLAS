@@ -119,17 +119,24 @@ _ROLES_QUERY = """
 """
 
 _ROLE_MEMBERSHIPS_QUERY = """
-    SELECT granted_role.rolname AS granted_role,
+    SELECT membership.oid AS membership_oid,
+           granted_role.rolname AS granted_role,
            member_role.rolname AS member_role,
-           membership.admin_option AS admin_option
+           grantor_role.rolname AS grantor_role,
+           membership.admin_option AS admin_option,
+           membership.inherit_option AS inherit_option,
+           membership.set_option AS set_option
       FROM pg_catalog.pg_auth_members AS membership
       JOIN pg_catalog.pg_roles AS granted_role
         ON granted_role.oid = membership.roleid
       JOIN pg_catalog.pg_roles AS member_role
         ON member_role.oid = membership.member
+      JOIN pg_catalog.pg_roles AS grantor_role
+        ON grantor_role.oid = membership.grantor
      WHERE granted_role.rolname !~ '^pg_'
         OR member_role.rolname !~ '^pg_'
-     ORDER BY granted_role.rolname, member_role.rolname
+     ORDER BY granted_role.rolname, member_role.rolname, grantor_role.rolname,
+              membership.oid
 """
 
 _SCHEMA_OWNERS_QUERY = """
@@ -143,13 +150,14 @@ _SCHEMA_OWNERS_QUERY = """
      ORDER BY namespace.nspname
 """
 
-_RELATION_OWNER_SUMMARY_QUERY = """
+_RELATION_OWNERS_QUERY = """
     SELECT namespace.nspname AS schema_name,
+           relation.oid AS relation_oid,
+           relation.relname AS relation_name,
            relation.relkind::text AS relation_kind,
            owner_role.rolname AS owner_role,
            relation.relrowsecurity AS row_security_enabled,
-           relation.relforcerowsecurity AS row_security_forced,
-           count(*)::bigint AS object_count
+           relation.relforcerowsecurity AS row_security_forced
       FROM pg_catalog.pg_class AS relation
       JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = relation.relnamespace
@@ -158,17 +166,18 @@ _RELATION_OWNER_SUMMARY_QUERY = """
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
        AND relation.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
-     GROUP BY namespace.nspname, relation.relkind, owner_role.rolname,
-              relation.relrowsecurity, relation.relforcerowsecurity
-     ORDER BY namespace.nspname, relation.relkind, owner_role.rolname,
-              relation.relrowsecurity, relation.relforcerowsecurity
+     ORDER BY namespace.nspname, relation.relname, relation.oid
 """
 
-_FUNCTION_OWNER_SUMMARY_QUERY = """
+_FUNCTION_OWNERS_QUERY = """
     SELECT namespace.nspname AS schema_name,
+           procedure.oid AS function_oid,
+           procedure.proname AS function_name,
+           procedure.prokind::text AS function_kind,
+           pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+               AS identity_arguments,
            owner_role.rolname AS owner_role,
-           procedure.prosecdef AS is_security_definer,
-           count(*)::bigint AS function_count
+           procedure.prosecdef AS is_security_definer
       FROM pg_catalog.pg_proc AS procedure
       JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = procedure.pronamespace
@@ -176,8 +185,7 @@ _FUNCTION_OWNER_SUMMARY_QUERY = """
         ON owner_role.oid = procedure.proowner
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
-     GROUP BY namespace.nspname, owner_role.rolname, procedure.prosecdef
-     ORDER BY namespace.nspname, owner_role.rolname, procedure.prosecdef
+     ORDER BY namespace.nspname, procedure.proname, procedure.oid
 """
 
 _DATABASE_ACL_QUERY = """
@@ -229,19 +237,20 @@ _SCHEMA_ACL_QUERY = """
               acl.is_grantable
 """
 
-_RELATION_ACL_SUMMARY_QUERY = """
+_RELATION_ACL_QUERY = """
     SELECT CASE
                WHEN relation.relacl IS NULL THEN 'default'
                ELSE 'explicit'
            END AS acl_source,
            namespace.nspname AS schema_name,
+           relation.oid AS relation_oid,
+           relation.relname AS relation_name,
            relation.relkind::text AS relation_kind,
            relation.relrowsecurity AS row_security_enabled,
            relation.relforcerowsecurity AS row_security_forced,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
-           acl.is_grantable AS is_grantable,
-           count(*)::bigint AS object_count
+           acl.is_grantable AS is_grantable
       FROM pg_catalog.pg_class AS relation
       JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = relation.relnamespace
@@ -262,25 +271,26 @@ _RELATION_ACL_SUMMARY_QUERY = """
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
        AND relation.relkind IN ('r', 'p', 'v', 'm', 'S', 'f')
-     GROUP BY relation.relacl IS NULL, namespace.nspname, relation.relkind,
-              relation.relrowsecurity, relation.relforcerowsecurity,
-              grantee_role, acl.privilege_type, acl.is_grantable
-     ORDER BY acl_source, namespace.nspname, relation.relkind,
+     ORDER BY acl_source, namespace.nspname, relation.relname, relation.oid,
               relation.relrowsecurity, relation.relforcerowsecurity,
               grantee_role, acl.privilege_type, acl.is_grantable
 """
 
-_FUNCTION_ACL_SUMMARY_QUERY = """
+_FUNCTION_ACL_QUERY = """
     SELECT CASE
                WHEN procedure.proacl IS NULL THEN 'default'
                ELSE 'explicit'
            END AS acl_source,
            namespace.nspname AS schema_name,
+           procedure.oid AS function_oid,
+           procedure.proname AS function_name,
+           procedure.prokind::text AS function_kind,
+           pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+               AS identity_arguments,
            procedure.prosecdef AS is_security_definer,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
-           acl.is_grantable AS is_grantable,
-           count(*)::bigint AS function_count
+           acl.is_grantable AS is_grantable
       FROM pg_catalog.pg_proc AS procedure
       JOIN pg_catalog.pg_namespace AS namespace
         ON namespace.oid = procedure.pronamespace
@@ -294,21 +304,22 @@ _FUNCTION_ACL_SUMMARY_QUERY = """
         ON grantee_role.oid = acl.grantee
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
-     GROUP BY procedure.proacl IS NULL, namespace.nspname,
-              procedure.prosecdef, grantee_role, acl.privilege_type,
-              acl.is_grantable
-     ORDER BY acl_source, namespace.nspname, procedure.prosecdef, grantee_role,
+     ORDER BY acl_source, namespace.nspname, procedure.proname, procedure.oid,
+              procedure.prosecdef, grantee_role,
               acl.privilege_type, acl.is_grantable
 """
 
-_COLUMN_ACL_SUMMARY_QUERY = """
+_COLUMN_ACL_QUERY = """
     SELECT 'explicit_column' AS acl_source,
            namespace.nspname AS schema_name,
+           relation.oid AS relation_oid,
+           relation.relname AS relation_name,
            relation.relkind::text AS relation_kind,
+           column_attribute.attnum AS column_number,
+           column_attribute.attname AS column_name,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
            acl.privilege_type AS privilege_type,
-           acl.is_grantable AS is_grantable,
-           count(*)::bigint AS column_count
+           acl.is_grantable AS is_grantable
       FROM pg_catalog.pg_attribute AS column_attribute
       JOIN pg_catalog.pg_class AS relation
         ON relation.oid = column_attribute.attrelid
@@ -322,19 +333,22 @@ _COLUMN_ACL_SUMMARY_QUERY = """
        AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
        AND column_attribute.attnum > 0
        AND NOT column_attribute.attisdropped
-     GROUP BY namespace.nspname, relation.relkind, grantee_role,
-              acl.privilege_type, acl.is_grantable
-     ORDER BY namespace.nspname, relation.relkind, grantee_role,
+     ORDER BY namespace.nspname, relation.relname, relation.oid,
+              column_attribute.attnum, grantee_role,
               acl.privilege_type, acl.is_grantable
 """
 
-_ROW_SECURITY_POLICY_SUMMARY_QUERY = """
+_ROW_SECURITY_POLICIES_QUERY = """
     SELECT namespace.nspname AS schema_name,
+           relation.oid AS relation_oid,
+           relation.relname AS relation_name,
            relation.relkind::text AS relation_kind,
            policy.polcmd::text AS command,
            policy.polpermissive AS is_permissive,
+           policy.oid AS policy_oid,
+           policy.polname AS policy_name,
            COALESCE(role.rolname, 'PUBLIC') AS role_name,
-           count(*)::bigint AS policy_count
+           policy_role.role_oid AS role_oid
       FROM pg_catalog.pg_policy AS policy
       JOIN pg_catalog.pg_class AS relation
         ON relation.oid = policy.polrelid
@@ -350,14 +364,13 @@ _ROW_SECURITY_POLICY_SUMMARY_QUERY = """
         ON role.oid = policy_role.role_oid
      WHERE namespace.nspname !~ '^pg_'
        AND namespace.nspname <> 'information_schema'
-     GROUP BY namespace.nspname, relation.relkind, policy.polcmd,
-              policy.polpermissive, role.rolname
-     ORDER BY namespace.nspname, relation.relkind, policy.polcmd,
-              policy.polpermissive, role_name
+     ORDER BY namespace.nspname, relation.relname, relation.oid, policy.polname,
+              policy.oid, role_name, policy_role.role_oid
 """
 
-_DEFAULT_ACL_SUMMARY_QUERY = """
-    SELECT COALESCE(namespace.nspname, '<database>') AS schema_name,
+_DEFAULT_ACL_QUERY = """
+    SELECT default_acl.oid AS default_acl_oid,
+           COALESCE(namespace.nspname, '<database>') AS schema_name,
            owner_role.rolname AS owner_role,
            default_acl.defaclobjtype::text AS object_type,
            COALESCE(grantee_role.rolname, 'PUBLIC') AS grantee_role,
@@ -376,7 +389,7 @@ _DEFAULT_ACL_SUMMARY_QUERY = """
             namespace.nspname !~ '^pg_'
             AND namespace.nspname <> 'information_schema'
         )
-     ORDER BY schema_name, owner_role, object_type, grantee_role,
+     ORDER BY default_acl.oid, schema_name, owner_role, object_type, grantee_role,
               acl.privilege_type, acl.is_grantable
 """
 
@@ -478,12 +491,10 @@ async def _create_pool(connection_kwargs: Mapping[str, object]) -> Any:
     return await asyncpg.create_pool(**pool_kwargs)
 
 
-async def _target_identity(pool: Any, *, source: str) -> _TargetIdentity:
-    """Read one session's database/schema/role identity in a read-only tx."""
+async def _target_identity(connection: Any, *, source: str) -> _TargetIdentity:
+    """Read one pinned session's database/schema/role identity."""
 
-    async with pool.acquire() as connection:
-        async with connection.transaction(readonly=True):
-            row = await connection.fetchrow(_TARGET_IDENTITY_QUERY)
+    row = await connection.fetchrow(_TARGET_IDENTITY_QUERY)
     if row is None:
         raise PreflightError(f"Missing or invalid database identity from {source}")
     return _TargetIdentity(
@@ -540,35 +551,34 @@ def _require_direct_dba_superuser(target: _TargetIdentity) -> None:
         )
 
 
-async def _attest_shared_database_lock(runtime_pool: Any, dba_pool: Any) -> None:
-    """Prove both pools contend on one live database-cluster lock namespace."""
+async def _attest_shared_database_lock(
+    runtime_connection: Any,
+    dba_connection: Any,
+) -> None:
+    """Prove pinned runtime and DBA sessions share one lock namespace."""
 
     for _attempt in range(3):
         lock_key = secrets.randbits(63)
-        async with runtime_pool.acquire() as runtime_connection:
-            async with runtime_connection.transaction(readonly=True):
-                runtime_acquired = bool(
-                    await runtime_connection.fetchval(
-                        "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
-                        lock_key,
-                    )
-                )
-                if not runtime_acquired:
-                    continue
-                async with dba_pool.acquire() as dba_connection:
-                    async with dba_connection.transaction(readonly=True):
-                        dba_acquired = bool(
-                            await dba_connection.fetchval(
-                                "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
-                                lock_key,
-                            )
-                        )
-                if dba_acquired:
-                    raise PreflightError(
-                        "Configured DBA connection does not share the Atlas "
-                        "runtime database cluster"
-                    )
-                return
+        runtime_acquired = bool(
+            await runtime_connection.fetchval(
+                "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                lock_key,
+            )
+        )
+        if not runtime_acquired:
+            continue
+        dba_acquired = bool(
+            await dba_connection.fetchval(
+                "SELECT pg_catalog.pg_try_advisory_xact_lock($1)",
+                lock_key,
+            )
+        )
+        if dba_acquired:
+            raise PreflightError(
+                "Configured DBA connection does not share the Atlas "
+                "runtime database cluster"
+            )
+        return
     raise PreflightError(
         "Could not reserve a fresh runtime target-attestation advisory lock"
     )
@@ -601,26 +611,22 @@ def _json_catalog_row(row: object, *, source: str) -> dict[str, object]:
     }
 
 
-async def _catalog_receipt(pool: Any) -> dict[str, object]:
-    """Return the fixed catalog facts required for later role design only."""
+async def _catalog_receipt(connection: Any) -> dict[str, object]:
+    """Return fixed catalog facts from the DBA connection that passed admission."""
 
-    async with pool.acquire() as connection:
-        async with connection.transaction(readonly=True):
-            database_owner = await connection.fetchrow(_DATABASE_OWNER_QUERY)
-            roles = await connection.fetch(_ROLES_QUERY)
-            memberships = await connection.fetch(_ROLE_MEMBERSHIPS_QUERY)
-            schemas = await connection.fetch(_SCHEMA_OWNERS_QUERY)
-            relation_owners = await connection.fetch(_RELATION_OWNER_SUMMARY_QUERY)
-            function_owners = await connection.fetch(_FUNCTION_OWNER_SUMMARY_QUERY)
-            database_acl = await connection.fetch(_DATABASE_ACL_QUERY)
-            schema_acl = await connection.fetch(_SCHEMA_ACL_QUERY)
-            relation_acl = await connection.fetch(_RELATION_ACL_SUMMARY_QUERY)
-            function_acl = await connection.fetch(_FUNCTION_ACL_SUMMARY_QUERY)
-            column_acl = await connection.fetch(_COLUMN_ACL_SUMMARY_QUERY)
-            row_security_policies = await connection.fetch(
-                _ROW_SECURITY_POLICY_SUMMARY_QUERY
-            )
-            default_acl = await connection.fetch(_DEFAULT_ACL_SUMMARY_QUERY)
+    database_owner = await connection.fetchrow(_DATABASE_OWNER_QUERY)
+    roles = await connection.fetch(_ROLES_QUERY)
+    memberships = await connection.fetch(_ROLE_MEMBERSHIPS_QUERY)
+    schemas = await connection.fetch(_SCHEMA_OWNERS_QUERY)
+    relation_owners = await connection.fetch(_RELATION_OWNERS_QUERY)
+    function_owners = await connection.fetch(_FUNCTION_OWNERS_QUERY)
+    database_acl = await connection.fetch(_DATABASE_ACL_QUERY)
+    schema_acl = await connection.fetch(_SCHEMA_ACL_QUERY)
+    relation_acl = await connection.fetch(_RELATION_ACL_QUERY)
+    function_acl = await connection.fetch(_FUNCTION_ACL_QUERY)
+    column_acl = await connection.fetch(_COLUMN_ACL_QUERY)
+    row_security_policies = await connection.fetch(_ROW_SECURITY_POLICIES_QUERY)
+    default_acl = await connection.fetch(_DEFAULT_ACL_QUERY)
 
     if database_owner is None:
         raise PreflightError("Catalog receipt is missing the current database owner")
@@ -641,11 +647,11 @@ async def _catalog_receipt(pool: Any) -> dict[str, object]:
             _json_catalog_row(row, source="schema owners")
             for row in schemas
         ],
-        "relation_owner_summary": [
+        "relation_owners": [
             _json_catalog_row(row, source="relation owners")
             for row in relation_owners
         ],
-        "function_owner_summary": [
+        "function_owners": [
             _json_catalog_row(row, source="function owners")
             for row in function_owners
         ],
@@ -657,23 +663,23 @@ async def _catalog_receipt(pool: Any) -> dict[str, object]:
             _json_catalog_row(row, source="schema ACL")
             for row in schema_acl
         ],
-        "relation_acl_summary": [
+        "relation_acl": [
             _json_catalog_row(row, source="relation ACL")
             for row in relation_acl
         ],
-        "function_acl_summary": [
+        "function_acl": [
             _json_catalog_row(row, source="function ACL")
             for row in function_acl
         ],
-        "column_acl_summary": [
+        "column_acl": [
             _json_catalog_row(row, source="column ACL")
             for row in column_acl
         ],
-        "row_security_policy_summary": [
+        "row_security_policies": [
             _json_catalog_row(row, source="row security policy")
             for row in row_security_policies
         ],
-        "default_acl_summary": [
+        "default_acl": [
             _json_catalog_row(row, source="default ACL")
             for row in default_acl
         ],
@@ -711,27 +717,43 @@ async def _run(
     runtime_config = runtime_config_factory()
     runtime_pool = await create_pool(_runtime_connection_kwargs(runtime_config))
     try:
-        runtime_target = await _target_identity(runtime_pool, source="Atlas runtime")
         dba_pool = await create_pool({"dsn": dba_database_url})
         try:
-            dba_target = await _target_identity(
-                dba_pool,
-                source="configured DBA connection",
-            )
-            _require_matching_target(runtime_target, dba_target)
-            _require_direct_dba_superuser(dba_target)
-            await _attest_shared_database_lock(runtime_pool, dba_pool)
-            catalog = await _catalog_receipt(dba_pool)
-            return {
-                "receipt_version": RECEIPT_VERSION,
-                "mode": "read-only",
-                "runtime_target": _runtime_target_label(runtime_config),
-                "dba_target": _safe_target_label(dba_database_url),
-                "target_attested": True,
-                "runtime_session": _identity_receipt(runtime_target),
-                "dba_session": _identity_receipt(dba_target),
-                "catalog": catalog,
-            }
+            async with runtime_pool.acquire() as runtime_connection:
+                async with dba_pool.acquire() as dba_connection:
+                    async with runtime_connection.transaction(
+                        isolation="repeatable_read",
+                        readonly=True,
+                    ):
+                        runtime_target = await _target_identity(
+                            runtime_connection,
+                            source="Atlas runtime",
+                        )
+                        async with dba_connection.transaction(
+                            isolation="repeatable_read",
+                            readonly=True,
+                        ):
+                            dba_target = await _target_identity(
+                                dba_connection,
+                                source="configured DBA connection",
+                            )
+                            _require_matching_target(runtime_target, dba_target)
+                            _require_direct_dba_superuser(dba_target)
+                            await _attest_shared_database_lock(
+                                runtime_connection,
+                                dba_connection,
+                            )
+                            catalog = await _catalog_receipt(dba_connection)
+                            return {
+                                "receipt_version": RECEIPT_VERSION,
+                                "mode": "read-only",
+                                "runtime_target": _runtime_target_label(runtime_config),
+                                "dba_target": _safe_target_label(dba_database_url),
+                                "target_attested": True,
+                                "runtime_session": _identity_receipt(runtime_target),
+                                "dba_session": _identity_receipt(dba_target),
+                                "catalog": catalog,
+                            }
         finally:
             await dba_pool.close()
     finally:

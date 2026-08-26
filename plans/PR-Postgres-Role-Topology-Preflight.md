@@ -19,10 +19,11 @@ change production roles, ownership, credentials, or startup behavior.
 
 This slice intentionally exceeds the 400-LOC soft cap. Its typed privileged
 configuration, two-target admission checks, fixed catalog projection,
-fail-closed boundary fixtures, and operator procedure are one atomic safety
-surface: splitting them would either publish an unverified privileged reader
-or leave the operator without a usable, documented receipt. It does not carry
-the later role/grant/ownership cutover, which remains a separate slice.
+fail-closed boundary fixtures, disposable PostgreSQL 16 integration proof, and
+operator procedure are one atomic safety surface: splitting them would either
+publish an unverified privileged reader or leave the operator without a usable,
+documented receipt. It does not carry the later role/grant/ownership cutover,
+which remains a separate slice.
 
 ### Problem-derived contract
 
@@ -41,8 +42,9 @@ the later role/grant/ownership cutover, which remains a separate slice.
   2. Add a fixed-query, read-only preflight that opens the normal runtime
      target and the DBA target, proves that both reach the same PostgreSQL
      database/cluster, rejects an insufficient DBA identity, and reports the
-     role, membership, database-owner, schema-owner, relation-owner, and ACL
-     facts needed for a later cutover without customer rows or credentials.
+     role, membership, database-owner, schema-owner, and per-object ownership
+     and ACL facts needed for a later cutover without customer rows or
+     credentials.
   3. Add focused unit coverage for successful target attestation and each
      fail-closed admission path; prove every connection enters a read-only
      transaction and no apply/mutation path exists.
@@ -60,6 +62,45 @@ the later role/grant/ownership cutover, which remains a separate slice.
      maintenance-script refactor.
   4. Do not expose a generic SQL runner, print DSNs/passwords, or add a
      production role change disguised as a preflight.
+
+### Contract revision — current-head review findings
+
+New evidence:
+
+- The fixed membership projection records only `admin_option`, while PostgreSQL
+  16 stores distinct `inherit_option` and `set_option` authority on each
+  membership edge.
+- Runtime identity, DBA identity, lock attestation, and the catalog projection
+  currently use separate acquired transactions. A receipt needs one pinned
+  runtime connection and one pinned DBA connection, with the DBA catalog facts
+  taken from the same stable snapshot that passed attestation.
+- Relation/function owner and ACL records, column grants, and RLS-policy roles
+  are aggregated into counts, losing the object identity required to design a
+  least-privilege cutover.
+- The focused unit double checks query routing but does not execute the catalog
+  SQL through PostgreSQL 16.
+
+Revised required change surface:
+
+1. Record each PostgreSQL 16 membership row's grantor and `admin_option`,
+   `inherit_option`, and `set_option` fields.
+2. Pin target identity, shared-lock attestation, and all catalog reads to the
+   same acquired runtime/DBA connections, in read-only repeatable-read
+   transactions, before rendering a receipt.
+3. Replace lossy object-level counts with stable relation, function, column,
+   and policy identities alongside their owner, ACL, and RLS metadata.
+4. Add a disposable PostgreSQL 16 integration test that seeds only test roles,
+   objects, grants, and a policy; invokes the real command through asyncpg; and
+   is enrolled in its PostgreSQL-backed GitHub workflow.
+
+Revised non-scope:
+
+- The command remains evidence-only. No production database action is added.
+  The integration fixture may create and tear down only uniquely named roles,
+  schema objects, grants, and policies inside the disposable GitHub PostgreSQL
+  16 service; it must never receive a production or operator DSN.
+- Normal startup, `DatabaseConfig`, `DatabasePool`, migrations, EOM funnel
+  behavior, APIs, and role topology remain outside this revision.
 
 ## Scope (this PR)
 
@@ -142,11 +183,11 @@ Required because this slice adds a DBA-only configuration boundary.
   command does not maintain a copied role or object inventory.
 - The projection classes are **CLOSED for this slice**: target identity, role
   attributes, membership edges, current-database ownership/ACL, non-system
-  schema ownership/ACL, relation and function owner/effective-ACL summaries
-  with row-security and security-definer flags, explicit column-ACL and
-  row-security-policy role summaries, and explicit default-ACL overrides. Their
-  canonical definition is this problem-derived contract and the static query
-  constants in the command.
+  schema ownership/ACL, per-object relation and function ownership/effective
+  ACL records with row-security and security-definer flags, explicit
+  column-ACL and row-security-policy role records, and explicit default-ACL
+  overrides. Their canonical definition is this problem-derived contract and
+  the static query constants in the command.
 - Catalog classes outside that closed projection, plus `pg_*` and
   `information_schema` objects, are deliberately not interpreted as permission
   to proceed. Incomplete, malformed, mismatched, or unrecognized evidence
@@ -157,6 +198,7 @@ Required because this slice adds a DBA-only configuration boundary.
 ### Files touched
 
 - `.agent/runbooks/database.md`
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/config.py`
 - `plans/PR-Postgres-Role-Topology-Preflight.md`
 - `scripts/check_database_role_topology.py`
@@ -167,18 +209,20 @@ Required because this slice adds a DBA-only configuration boundary.
 The command uses the ordinary `DatabaseConfig` only to open the same runtime
 target that Atlas would use. A separate typed `SecretStr` DBA configuration is
 loaded only inside the command. It opens bounded, statement-cache-free pools,
-attests that the runtime and DBA sessions name the same database/schema and
+pins one runtime and one DBA connection in read-only repeatable-read
+transactions, attests that those sessions name the same database/schema and
 share a transaction-scoped advisory-lock namespace, then verifies the DBA
-session is a superuser before reading a fixed catalog projection.
+session is a superuser before reading a fixed catalog projection from that same
+DBA transaction.
 
 The projection contains no business rows and no DSN text. It reports only
-database/current-schema ownership, relevant roles and memberships, protected
-EOM guard isolation, runtime privilege flags, relation/sequence/function owner
-summaries with row-security and security-definer flags, and effective ACL
-summaries (including PostgreSQL defaults, explicit column grants, and RLS policy
-role bindings) needed to design the next role-separation slice. The JSON
-renderer redacts targets to host/port/database labels and never serializes a
-`SecretStr` value.
+database/current-schema ownership, relevant roles and PostgreSQL 16 membership
+options, protected EOM guard isolation, runtime privilege flags, per-object
+relation/sequence/function ownership with row-security and security-definer
+flags, and effective ACL records (including PostgreSQL defaults, explicit
+column grants, and RLS policy role bindings) needed to design the next
+role-separation slice. The JSON renderer redacts targets to host/port/database
+labels and never serializes a `SecretStr` value.
 
 The command has no `--apply` option and never calls `execute` for DDL/DML. It
 does not extend `./ops db inspect`, so the ordinary operator surface remains
@@ -224,22 +268,23 @@ Parked hardening: none.
   tests/test_database_role_topology_preflight.py atlas_brain/config.py`;
   `./ops test focused tests/test_database_role_topology_preflight.py
   tests/test_agent_operations_contract.py
-  tests/test_eom_first_clean_completion_dba_runner.py -q` (`137 passed`);
+  tests/test_eom_first_clean_completion_dba_runner.py -q` (`140 passed, 1
+  skipped`);
   `bash scripts/check_ascii_python.sh`; `git diff --cached --check`;
   `python scripts/sync_pr_plan.py --check
   plans/PR-Postgres-Role-Topology-Preflight.md origin/main`; and
   `python scripts/audit_plan_doc.py
   plans/PR-Postgres-Role-Topology-Preflight.md`.
+- The real PostgreSQL 16 command test skips locally unless the explicitly named,
+  loopback-only disposable DBA test DSN is present. The EOM PostgreSQL workflow
+  supplies that service and runs the test; it must pass there before merge.
 - Not locally runnable: `gitleaks protect --staged --redact --verbose` because
   the executable is absent in this worktree environment. Do not bypass it; the
   required CI secret scan remains the release gate.
-- Passed after the first commit: `python scripts/audit_plan_doc_files_touched.py
-  plans/PR-Postgres-Role-Topology-Preflight.md origin/main` and
-  `python scripts/audit_plan_doc_diff_size.py
-  plans/PR-Postgres-Role-Topology-Preflight.md origin/main` (the plan's five
-  files and `1757` LOC match `origin/main...HEAD`).
-- Passed before push: the local PR-review wrapper completed successfully with
-  its isolated session-state file and the current PR body.
+- Passed after the current follow-up commit: the plan-file and diff-size audits
+  agree that the six declared files and `2136` LOC match `origin/main...HEAD`.
+- Pending before the current branch update: the local PR-review wrapper with
+  its isolated session-state file and current PR body.
 - No production database role/configuration/deployment action is part of local
   verification. A real receipt is deferred until a protected DBA DSN is
   provisioned and the deployed runtime has converged.
@@ -248,9 +293,10 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 49 |
+| `.agent/runbooks/database.md` | 50 |
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 6 |
 | `atlas_brain/config.py` | 24 |
-| `plans/PR-Postgres-Role-Topology-Preflight.md` | 256 |
-| `scripts/check_database_role_topology.py` | 761 |
-| `tests/test_database_role_topology_preflight.py` | 667 |
-| **Total** | **1757** |
+| `plans/PR-Postgres-Role-Topology-Preflight.md` | 302 |
+| `scripts/check_database_role_topology.py` | 783 |
+| `tests/test_database_role_topology_preflight.py` | 971 |
+| **Total** | **2136** |

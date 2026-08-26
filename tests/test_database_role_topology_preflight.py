@@ -5,9 +5,13 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
+from urllib.parse import quote, urlsplit, urlunsplit
+from uuid import uuid4
 
 import pytest
 
@@ -38,12 +42,20 @@ class _Acquire:
 
 
 class _Transaction:
-    def __init__(self, state: SimpleNamespace, *, readonly: bool) -> None:
+    def __init__(
+        self,
+        state: SimpleNamespace,
+        *,
+        readonly: bool,
+        isolation: str | None,
+    ) -> None:
         self._state = state
         self._readonly = readonly
+        self._isolation = isolation
 
     async def __aenter__(self) -> None:
         self._state.readonly_transactions.append(self._readonly)
+        self._state.transaction_isolations.append(self._isolation)
         self._state.transaction_depth += 1
         return None
 
@@ -56,8 +68,13 @@ class _Connection:
     def __init__(self, state: SimpleNamespace) -> None:
         self._state = state
 
-    def transaction(self, *, readonly: bool = False) -> _Transaction:
-        return _Transaction(self._state, readonly=readonly)
+    def transaction(
+        self,
+        *,
+        readonly: bool = False,
+        isolation: str | None = None,
+    ) -> _Transaction:
+        return _Transaction(self._state, readonly=readonly, isolation=isolation)
 
     def _require_readonly_transaction(self) -> None:
         if self._state.transaction_depth < 1:
@@ -95,11 +112,11 @@ class _Connection:
         self._require_readonly_transaction()
         self._state.catalog_fetches += 1
         if "procedure.proacl" in query:
-            return self._state.catalog["function_acl_summary"]
+            return self._state.catalog["function_acl"]
         if "pg_catalog.pg_attribute AS column_attribute" in query:
-            return self._state.catalog["column_acl_summary"]
+            return self._state.catalog["column_acl"]
         if "pg_catalog.pg_policy AS policy" in query:
-            return self._state.catalog["row_security_policy_summary"]
+            return self._state.catalog["row_security_policies"]
         if "pg_catalog.pg_roles AS role" in query:
             return self._state.catalog["roles"]
         if "pg_catalog.pg_auth_members AS membership" in query:
@@ -107,17 +124,17 @@ class _Connection:
         if "namespace.nspowner" in query:
             return self._state.catalog["schema_owners"]
         if "relation.relowner" in query:
-            return self._state.catalog["relation_owner_summary"]
+            return self._state.catalog["relation_owners"]
         if "pg_catalog.pg_proc AS procedure" in query:
-            return self._state.catalog["function_owner_summary"]
+            return self._state.catalog["function_owners"]
         if "database_catalog.datacl" in query:
             return self._state.catalog["database_acl"]
         if "namespace.nspacl" in query:
             return self._state.catalog["schema_acl"]
         if "relation.relacl" in query:
-            return self._state.catalog["relation_acl_summary"]
+            return self._state.catalog["relation_acl"]
         if "pg_catalog.pg_default_acl" in query:
-            return self._state.catalog["default_acl_summary"]
+            return self._state.catalog["default_acl"]
         raise AssertionError(f"unexpected fetch query: {query}")
 
     async def execute(self, *_args: object) -> None:
@@ -127,9 +144,11 @@ class _Connection:
 class _Pool:
     def __init__(self, state: SimpleNamespace) -> None:
         self._connection = _Connection(state)
+        self.acquire_calls = 0
         self.closed = False
 
     def acquire(self) -> _Acquire:
+        self.acquire_calls += 1
         return _Acquire(self._connection)
 
     async def close(self) -> None:
@@ -152,30 +171,38 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
         ],
         "memberships": [
             {
+                "membership_oid": 20_001,
                 "granted_role": "atlas_eom_handoff_owner",
                 "member_role": "atlas",
+                "grantor_role": "postgres",
                 "admin_option": False,
+                "inherit_option": False,
+                "set_option": True,
             }
         ],
         "schema_owners": [
             {"schema_name": "public", "owner_role": "atlas_eom_handoff_owner"}
         ],
-        "relation_owner_summary": [
+        "relation_owners": [
             {
                 "schema_name": "public",
+                "relation_oid": 20_002,
+                "relation_name": "work_log",
                 "relation_kind": "r",
                 "owner_role": "atlas_eom_handoff_owner",
                 "row_security_enabled": True,
                 "row_security_forced": False,
-                "object_count": 2,
             }
         ],
-        "function_owner_summary": [
+        "function_owners": [
             {
                 "schema_name": "public",
+                "function_oid": 20_003,
+                "function_name": "write_log",
+                "function_kind": "f",
+                "identity_arguments": "employee_id bigint",
                 "owner_role": "atlas_eom_handoff_owner",
                 "is_security_definer": True,
-                "function_count": 1,
             }
         ],
         "database_acl": [
@@ -195,52 +222,63 @@ def _catalog() -> dict[str, list[dict[str, object]]]:
                 "is_grantable": False,
             }
         ],
-        "relation_acl_summary": [
+        "relation_acl": [
             {
                 "acl_source": "explicit",
                 "schema_name": "public",
+                "relation_oid": 20_002,
+                "relation_name": "work_log",
                 "relation_kind": "r",
                 "row_security_enabled": True,
                 "row_security_forced": False,
                 "grantee_role": "atlas",
                 "privilege_type": "SELECT",
                 "is_grantable": False,
-                "object_count": 2,
             }
         ],
-        "function_acl_summary": [
+        "function_acl": [
             {
                 "acl_source": "default",
                 "schema_name": "public",
+                "function_oid": 20_003,
+                "function_name": "write_log",
+                "function_kind": "f",
+                "identity_arguments": "employee_id bigint",
                 "is_security_definer": True,
                 "grantee_role": "PUBLIC",
                 "privilege_type": "EXECUTE",
                 "is_grantable": False,
-                "function_count": 1,
             }
         ],
-        "column_acl_summary": [
+        "column_acl": [
             {
                 "acl_source": "explicit_column",
                 "schema_name": "public",
+                "relation_oid": 20_002,
+                "relation_name": "work_log",
                 "relation_kind": "r",
+                "column_number": 2,
+                "column_name": "hours_worked",
                 "grantee_role": "atlas",
                 "privilege_type": "UPDATE",
                 "is_grantable": False,
-                "column_count": 1,
             }
         ],
-        "row_security_policy_summary": [
+        "row_security_policies": [
             {
                 "schema_name": "public",
+                "relation_oid": 20_002,
+                "relation_name": "work_log",
                 "relation_kind": "r",
                 "command": "r",
                 "is_permissive": True,
+                "policy_oid": 20_004,
+                "policy_name": "atlas_work_log_read",
                 "role_name": "atlas",
-                "policy_count": 1,
+                "role_oid": 20_005,
             }
         ],
-        "default_acl_summary": [],
+        "default_acl": [],
     }
 
 
@@ -255,6 +293,7 @@ def _state(**overrides: object) -> SimpleNamespace:
         "advisory_lock_available": True,
         "advisory_lock_attempts": 0,
         "readonly_transactions": [],
+        "transaction_isolations": [],
         "transaction_depth": 0,
         "catalog_fetches": 0,
         "database_owner": "atlas_eom_handoff_owner",
@@ -335,7 +374,7 @@ def test_dba_config_uses_redacted_secret_boundary(
     assert "dba-secret" not in repr(config)
 
 
-def test_preflight_returns_redacted_receipt_and_uses_only_readonly_transactions(
+def test_preflight_returns_redacted_snapshot_from_pinned_readonly_connections(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runner = _load_preflight_module()
@@ -375,14 +414,18 @@ def test_preflight_returns_redacted_receipt_and_uses_only_readonly_transactions(
         "owner_role": "atlas_eom_handoff_owner",
     }
     assert receipt["catalog"]["roles"] == dba_state.catalog["roles"]
-    assert receipt["catalog"]["function_acl_summary"] == dba_state.catalog[
-        "function_acl_summary"
+    assert receipt["catalog"]["memberships"] == dba_state.catalog["memberships"]
+    assert receipt["catalog"]["relation_owners"] == dba_state.catalog[
+        "relation_owners"
     ]
-    assert receipt["catalog"]["column_acl_summary"] == dba_state.catalog[
-        "column_acl_summary"
+    assert receipt["catalog"]["function_acl"] == dba_state.catalog[
+        "function_acl"
     ]
-    assert receipt["catalog"]["row_security_policy_summary"] == dba_state.catalog[
-        "row_security_policy_summary"
+    assert receipt["catalog"]["column_acl"] == dba_state.catalog[
+        "column_acl"
+    ]
+    assert receipt["catalog"]["row_security_policies"] == dba_state.catalog[
+        "row_security_policies"
     ]
     assert "dba-secret" not in rendered
     assert "runtime-secret" not in rendered
@@ -400,10 +443,14 @@ def test_preflight_returns_redacted_receipt_and_uses_only_readonly_transactions(
     ]
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
+    assert runtime_pool.acquire_calls == 1
+    assert dba_pool.acquire_calls == 1
     assert runtime_state.readonly_transactions
     assert dba_state.readonly_transactions
     assert all(runtime_state.readonly_transactions)
     assert all(dba_state.readonly_transactions)
+    assert runtime_state.transaction_isolations == ["repeatable_read"]
+    assert dba_state.transaction_isolations == ["repeatable_read"]
 
 
 @pytest.mark.parametrize("database_url", ("", "   "))
@@ -513,14 +560,24 @@ def test_preflight_rejects_every_target_identity_mismatch_before_report(
 def test_target_identity_rejects_an_ambiguous_catalog_superuser_flag() -> None:
     runner = _load_preflight_module()
     state = _state(current_user_is_superuser="true")
+    pool = _Pool(state)
+
+    async def read_identity() -> object:
+        async with pool.acquire() as connection:
+            async with connection.transaction(
+                isolation="repeatable_read",
+                readonly=True,
+            ):
+                return await runner._target_identity(connection, source="test target")
 
     with pytest.raises(
         runner.PreflightError,
         match="Missing or invalid superuser status from test target",
     ):
-        asyncio.run(runner._target_identity(_Pool(state), source="test target"))
+        asyncio.run(read_identity())
 
     assert state.readonly_transactions == [True]
+    assert state.transaction_isolations == ["repeatable_read"]
 
 
 def test_catalog_row_rejects_an_unexpected_column_key() -> None:
@@ -644,10 +701,16 @@ def test_preflight_has_no_apply_or_mutation_command_surface() -> None:
     assert "--apply" not in source
     assert ".execute(" not in source
     assert "readonly=True" in source
+    assert 'isolation="repeatable_read"' in source
     assert "acldefault('d'" in source
     assert "acldefault('n'" in source
     assert "acldefault('f'" in source
     assert "NULLIF(policy.polroles, ARRAY[]::oid[])" in source
+    assert "membership.inherit_option" in source
+    assert "membership.set_option" in source
+    assert "relation.relname AS relation_name" in source
+    assert "policy.polname AS policy_name" in source
+    assert "count(*)::bigint" not in source
 
 
 def test_main_does_not_render_an_unexpected_driver_message(
@@ -665,3 +728,244 @@ def test_main_does_not_render_an_unexpected_driver_message(
     captured = capsys.readouterr()
     assert "driver-secret" not in captured.err
     assert "failed before producing a receipt" in captured.err
+
+
+_ROLE_TOPOLOGY_TEST_DBA_DSN_ENV = (
+    "ATLAS_DATABASE_ROLE_TOPOLOGY_TEST_DBA_DATABASE_URL"
+)
+
+
+def _disposable_role_topology_dba_dsn() -> str:
+    """Return the explicitly provisioned PostgreSQL 16 test target only."""
+
+    database_url = os.environ.get(_ROLE_TOPOLOGY_TEST_DBA_DSN_ENV, "").strip()
+    if not database_url:
+        pytest.skip(
+            "set ATLAS_DATABASE_ROLE_TOPOLOGY_TEST_DBA_DATABASE_URL to run "
+            "the disposable PostgreSQL 16 role-topology integration test"
+        )
+    try:
+        return _require_disposable_role_topology_dba_dsn(database_url)
+    except ValueError as exc:
+        pytest.fail(str(exc))
+
+
+def _require_disposable_role_topology_dba_dsn(database_url: str) -> str:
+    """Reject a non-test or remote database before the fixture can mutate it."""
+
+    parsed = urlsplit(database_url)
+    database_name = parsed.path.lstrip("/")
+    if not database_name.endswith(("_test", "_tests")):
+        raise ValueError("role-topology integration requires a disposable test database")
+    if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("role-topology integration requires a loopback database host")
+    if not parsed.hostname or not parsed.username:
+        raise ValueError("role-topology integration requires a complete disposable DBA DSN")
+    return database_url
+
+
+@pytest.mark.parametrize(
+    ("database_url", "message"),
+    (
+        ("postgresql://atlas:atlas@localhost:5432/atlas", "disposable test database"),
+        (
+            "postgresql://atlas:atlas@example.test:5432/atlas_migration_tests",
+            "loopback database host",
+        ),
+        ("postgresql://localhost:5432/atlas_migration_tests", "complete disposable DBA DSN"),
+    ),
+)
+def test_disposable_role_topology_dsn_rejects_non_test_targets(
+    database_url: str,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        _require_disposable_role_topology_dba_dsn(database_url)
+
+
+def _quoted_identifier(value: str) -> str:
+    return f'"{value.replace("\"", "\"\"")}"'
+
+
+def _runtime_dsn_from_dba_dsn(
+    dba_database_url: str,
+    *,
+    runtime_role: str,
+    runtime_password: str,
+) -> str:
+    """Build a test-only runtime login URL without changing the DBA target."""
+
+    parsed = urlsplit(dba_database_url)
+    assert parsed.hostname is not None
+    host = parsed.hostname
+    if ":" in host:
+        host = f"[{host}]"
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = (
+        f"{quote(runtime_role, safe='')}:{quote(runtime_password, safe='')}"
+        f"@{host}{port}"
+    )
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, ""))
+
+
+@pytest.mark.integration
+def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() -> None:
+    """Exercise the real command against a sealed disposable PostgreSQL target."""
+
+    asyncpg = pytest.importorskip("asyncpg")
+    dba_database_url = _disposable_role_topology_dba_dsn()
+    suffix = uuid4().hex
+    schema_name = f"role_topology_{suffix}"
+    runtime_role = f"role_topology_runtime_{suffix}"
+    granted_role = f"role_topology_granted_{suffix}"
+    relation_name = "work_log"
+    function_name = "write_log"
+    policy_name = "read_work_log"
+    runtime_password = f"runtime-{suffix}"
+    schema = _quoted_identifier(schema_name)
+    runtime = _quoted_identifier(runtime_role)
+    granted = _quoted_identifier(granted_role)
+    relation = f"{schema}.{_quoted_identifier(relation_name)}"
+    function = f"{schema}.{_quoted_identifier(function_name)}(employee_id bigint)"
+    policy = _quoted_identifier(policy_name)
+
+    async def exercise() -> dict[str, object]:
+        connection = await asyncpg.connect(dba_database_url)
+        runtime_created = False
+        granted_created = False
+        try:
+            await connection.execute(
+                f"CREATE ROLE {runtime} LOGIN PASSWORD "
+                f"'{runtime_password}' INHERIT NOSUPERUSER NOCREATEDB "
+                "NOCREATEROLE NOREPLICATION NOBYPASSRLS"
+            )
+            runtime_created = True
+            await connection.execute(f"CREATE ROLE {granted} NOLOGIN")
+            granted_created = True
+            await connection.execute(
+                f"GRANT {granted} TO {runtime} WITH ADMIN FALSE, "
+                "INHERIT FALSE, SET TRUE"
+            )
+            await connection.execute(f"GRANT USAGE ON SCHEMA public TO {runtime}")
+            await connection.execute(f"CREATE SCHEMA {schema}")
+            await connection.execute(
+                f"CREATE TABLE {relation} (row_id bigint, hours_worked integer)"
+            )
+            await connection.execute(f"ALTER TABLE {relation} ENABLE ROW LEVEL SECURITY")
+            await connection.execute(
+                f"CREATE POLICY {policy} ON {relation} FOR SELECT TO {runtime} "
+                "USING (true)"
+            )
+            await connection.execute(f"GRANT USAGE ON SCHEMA {schema} TO {runtime}")
+            await connection.execute(f"GRANT SELECT ON {relation} TO {runtime}")
+            await connection.execute(
+                f"GRANT UPDATE (hours_worked) ON {relation} TO {runtime}"
+            )
+            await connection.execute(
+                f"CREATE FUNCTION {function} RETURNS bigint LANGUAGE sql "
+                "SECURITY DEFINER AS $$ SELECT employee_id $$"
+            )
+            await connection.execute(f"GRANT EXECUTE ON FUNCTION {function} TO {runtime}")
+
+            environment = dict(os.environ)
+            environment["ATLAS_DB_CONNECTION_STRING"] = _runtime_dsn_from_dba_dsn(
+                dba_database_url,
+                runtime_role=runtime_role,
+                runtime_password=runtime_password,
+            )
+            environment["ATLAS_DATABASE_ROLE_TOPOLOGY_DBA_DATABASE_URL"] = (
+                dba_database_url
+            )
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT)],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert result.returncode == 0, result.stderr
+            return json.loads(result.stdout)
+        finally:
+            await connection.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            if runtime_created and granted_created:
+                await connection.execute(f"REVOKE {granted} FROM {runtime}")
+            if runtime_created:
+                await connection.execute(f"DROP ROLE {runtime}")
+            if granted_created:
+                await connection.execute(f"DROP ROLE {granted}")
+            await connection.close()
+
+    receipt = asyncio.run(exercise())
+    catalog = receipt["catalog"]
+    membership = next(
+        row
+        for row in catalog["memberships"]
+        if row["granted_role"] == granted_role and row["member_role"] == runtime_role
+    )
+    assert isinstance(membership["membership_oid"], int)
+    assert isinstance(membership["grantor_role"], str)
+    assert membership["admin_option"] is False
+    assert membership["inherit_option"] is False
+    assert membership["set_option"] is True
+
+    relation_owner = next(
+        row
+        for row in catalog["relation_owners"]
+        if row["schema_name"] == schema_name
+        and row["relation_name"] == relation_name
+    )
+    assert isinstance(relation_owner["relation_oid"], int)
+
+    relation_acl = next(
+        row
+        for row in catalog["relation_acl"]
+        if row["schema_name"] == schema_name
+        and row["relation_name"] == relation_name
+        and row["grantee_role"] == runtime_role
+        and row["privilege_type"] == "SELECT"
+    )
+    assert isinstance(relation_acl["relation_oid"], int)
+
+    column_acl = next(
+        row
+        for row in catalog["column_acl"]
+        if row["schema_name"] == schema_name
+        and row["relation_name"] == relation_name
+        and row["column_name"] == "hours_worked"
+        and row["grantee_role"] == runtime_role
+        and row["privilege_type"] == "UPDATE"
+    )
+    assert isinstance(column_acl["relation_oid"], int)
+    assert isinstance(column_acl["column_number"], int)
+
+    function_acl = next(
+        row
+        for row in catalog["function_acl"]
+        if row["schema_name"] == schema_name
+        and row["function_name"] == function_name
+        and row["grantee_role"] == runtime_role
+        and row["privilege_type"] == "EXECUTE"
+    )
+    assert isinstance(function_acl["function_oid"], int)
+    assert function_acl["identity_arguments"] == "employee_id bigint"
+
+    function_owner = next(
+        row
+        for row in catalog["function_owners"]
+        if row["schema_name"] == schema_name
+        and row["function_name"] == function_name
+    )
+    assert isinstance(function_owner["function_oid"], int)
+    assert function_owner["identity_arguments"] == "employee_id bigint"
+
+    policy_row = next(
+        row
+        for row in catalog["row_security_policies"]
+        if row["schema_name"] == schema_name
+        and row["relation_name"] == relation_name
+        and row["policy_name"] == policy_name
+        and row["role_name"] == runtime_role
+    )
+    assert isinstance(policy_row["policy_oid"], int)
+    assert isinstance(policy_row["relation_oid"], int)
