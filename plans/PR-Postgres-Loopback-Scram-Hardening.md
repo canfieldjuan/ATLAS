@@ -79,6 +79,9 @@ leave its restart procedure with contradictory integrity instructions.
 - Service-file admission for a pre-existing socket assignment or nonblank
   complete DSN was deferred until after backup, peer-map/HBA edits, and reload,
   so a rejected configuration could leave partial authentication state live.
+- The effective service file was manually selected after authentication edits
+  and only checked during rollback, so a mistyped or unlisted path could create
+  a stray socket assignment that the rollback path refuses to remove.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
@@ -124,6 +127,10 @@ leave its restart procedure with contradictory integrity instructions.
    HBA/identity backup, edit, or reload. Each independent post-conversion HBA
    query must define its own derived loopback-coverage relation before it
    consumes that relation.
+   The effective environment file must be derived from the ordered selected
+   service-file list and have its membership validated by the same pre-mutation
+   gate and rollback path; no manual file selection may occur after
+   authentication edits.
    The loaded peer receipt must also require exactly one intended local HBA rule
    and no preceding local rule except the retained `postgres` recovery rule.
    It must require at least one qualifying post-restart `atlas` backend and a
@@ -180,6 +187,8 @@ leave its restart procedure with contradictory integrity instructions.
   assignments pass while literal and expansion-shaped values stop, prove the
   configuration-admission command precedes the first HBA backup, and prove each
   final HBA receipt independently defines `covers_loopback`.
+- It must also prove the derived effective file passes only when it belongs to
+  the ordered selected service-file list and stops before the gate otherwise.
 - GitHub remains the complete unit gate.
 - Post-merge proof while existing TCP trust remains: deploy source; configure
   `ATLAS_DB_SOCKET_PATH` only when no complete DSN overrides it; add/reload the
@@ -231,7 +240,9 @@ Max files: 7
      any HBA/identity mutation when any selected service file already assigns the
      socket path or a nonblank complete DSN, so rollback removes only an
      assignment created by this cutover. Each final HBA receipt is independently
-     executable with its own loopback-coverage relation.
+     executable with its own loopback-coverage relation, and the effective
+     environment file is derived and membership-checked before any authentication
+     mutation.
   5. The migration runbook accurately distinguishes raw forensic output from
      attested admission without changing runner behavior.
 - Reachability proof: `atlas_brain/storage/database.py` initializes the pool
@@ -271,6 +282,10 @@ Max files: 7
     stop condition before authentication mutation. Empty, quoted-empty, and
     comment-only assignments remain admissible; a literal or expansion-shaped
     value requires a separate configuration migration.
+  - The effective environment-file target is derived as the final selected
+    service file and must remain a member of that exact ordered list before
+    either the new-socket gate or rollback proceeds; an unlisted target stops
+    rather than creating a stray assignment.
   - Before fixed inspection or an edit, every selected service file must be
     readable, the selected set must be nonempty, and all `ATLAS_DB_*` keys must
     be canonical uppercase. This makes the `ops` configuration parser and the
@@ -338,9 +353,11 @@ Max files: 7
   empty set stops the cutover.
 - **Service environment-file list — CLOSED / DERIVED for the selected service
   unit.** Membership is the ordered `EnvironmentFiles` output of `./ops env
-  systemd`. An absent, unreadable, or unlisted effective configuration file
-  stops fixed inspection and HBA mutation, the safer side over inspecting or
-  changing a guessed database target.
+  systemd`. The effective target is derived from the final member, then the
+  same membership predicate gates new-socket admission and rollback. An absent,
+  unreadable, or unlisted effective configuration file stops fixed inspection
+  and HBA mutation, the safer side over inspecting or changing a guessed
+  database target.
 - **Pre-existing socket-path assignments — CLOSED / DERIVED before cutover.**
   Membership is every case-variant assignment matching `ATLAS_DB_SOCKET_PATH`
   in the ordered selected `EnvironmentFiles`. The only admitted set is empty;
@@ -447,22 +464,23 @@ blocks the socket-peer path.
 - `./ops test focused tests/test_agent_operations_contract.py -q -k
   'database_runtime_environment or service_db_inspect or
   service_db_case_variant_preflight or service_db_no_socket_guard or
-  new_socket_configuration or final_hba_receipt or
+  effective_env_file or new_socket_configuration or final_hba_receipt or
   admits_new_socket_configuration_before_hba_mutation or rollback_refuses or
-  peer_hba_receipt or qualifying_atlas_backends or hba_sources'` — 13 passed,
+  peer_hba_receipt or qualifying_atlas_backends or hba_sources'` — 15 passed,
   60 deselected (local);
   proves the canonical override, case-variant rejection, complete key-set
   closure, the service-helper unset-set closure, socket/full-DSN alias and
   near-miss boundaries, empty-service-set rejection, a nonblank complete DSN
-  stops before the first HBA backup, a surviving spacing-variant socket
+  stops before the first HBA backup, a selected versus unlisted effective file
+  boundary gates both cutover and rollback, a surviving spacing-variant socket
   assignment cannot reach HBA restoration, each final HBA receipt defines its
   own loopback CTE, the transport receipt requires every qualifying Atlas backend
   to use the socket, the HBA source receipt gates top-level backup/rollback, and
   the loaded peer-HBA receipt requires the intended rule/precedence predicate.
-- `./ops test focused tests/test_agent_operations_contract.py -q` — 73 passed
+- `./ops test focused tests/test_agent_operations_contract.py -q` — 75 passed
   (local).
 - `bash scripts/check_ascii_python.sh` — passed (local).
-- `service_db_inspect`, new-socket-admission, canonical-key/no-socket, and rollback guard blocks
+- `service_db_inspect`, effective-file, new-socket-admission, canonical-key/no-socket, and rollback guard blocks
   extracted from `.agent/runbooks/database.md` and checked with `bash -n` —
   passed (local).
 - The read-only loaded peer-HBA receipt returned `0|0|0|0|0|0` against the
@@ -498,14 +516,14 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 597 |
+| `.agent/runbooks/database.md` | 601 |
 | `atlas_brain/storage/config.py` | 13 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
 | `ops` | 15 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 513 |
-| `tests/test_agent_operations_contract.py` | 424 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 531 |
+| `tests/test_agent_operations_contract.py` | 458 |
 | `tests/test_eom_render_profile.py` | 84 |
-| **Total** | **1666** |
+| **Total** | **1722** |
 
 ## Diff budget
 

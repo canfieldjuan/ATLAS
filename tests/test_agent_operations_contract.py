@@ -142,11 +142,13 @@ def test_runbook_admits_new_socket_configuration_before_hba_mutation() -> None:
     runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
 
     admission = "service_db_require_new_socket_configuration || exit 1"
+    effective_file_derivation = 'EFFECTIVE_DB_ENV_FILE="${SERVICE_ENV_FILES##*:}"'
     first_hba_backup = (
         "sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf"
     )
 
     assert runbook.count(admission) == 1
+    assert runbook.index(effective_file_derivation) < runbook.index(admission)
     assert runbook.index(admission) < runbook.index(first_hba_backup)
     assert "nonblank ATLAS_DB_CONNECTION_STRING assignment found" in runbook
 
@@ -187,6 +189,34 @@ def _run_runbook_function(
         capture_output=True,
         text=True,
     )
+
+
+@pytest.mark.parametrize(
+    ("effective_is_selected", "expected_returncode"),
+    ((True, 0), (False, 1)),
+)
+def test_service_db_effective_env_file_must_be_selected_before_cutover(
+    tmp_path: Path,
+    effective_is_selected: bool,
+    expected_returncode: int,
+) -> None:
+    runbook = (ROOT / ".agent/runbooks/database.md").read_text(encoding="utf-8")
+    selected_env_file = tmp_path / "atlas-api.env"
+    selected_env_file.write_text("ATLAS_DB_HOST=canonical.example\n", encoding="utf-8")
+    effective_env_file = (
+        selected_env_file if effective_is_selected else tmp_path / "outside.env"
+    )
+
+    result = _run_runbook_function(
+        runbook,
+        ("service_db_require_effective_env_file",),
+        service_env_files=str(selected_env_file),
+        shell_stubs=(f"EFFECTIVE_DB_ENV_FILE={str(effective_env_file)!r}",),
+    )
+
+    assert result.returncode == expected_returncode
+    if not effective_is_selected:
+        assert "effective database environment file is not a service EnvironmentFile" in result.stderr
 
 
 @pytest.mark.parametrize(
@@ -338,9 +368,11 @@ def test_new_socket_configuration_admission_rejects_nonempty_complete_dsn(
             "service_db_has_nonempty_connection_string_assignment",
             "service_db_require_canonical_keys",
             "service_db_require_no_socket_assignments",
+            "service_db_require_effective_env_file",
             "service_db_require_new_socket_configuration",
         ),
         service_env_files=str(env_file),
+        shell_stubs=(f"EFFECTIVE_DB_ENV_FILE={str(env_file)!r}",),
     )
 
     assert result.returncode == expected_returncode
@@ -364,6 +396,7 @@ def test_rollback_refuses_a_surviving_socket_assignment_before_hba_restore(
             "service_db_has_socket_assignment",
             "service_db_require_canonical_keys",
             "service_db_require_no_socket_assignments",
+            "service_db_require_effective_env_file",
             "rollback_peer_cutover",
         ),
         service_env_files=str(env_file),
@@ -392,6 +425,7 @@ def test_rollback_refuses_an_hba_source_mismatch_before_service_restart(
             "service_db_has_socket_assignment",
             "service_db_require_canonical_keys",
             "service_db_require_no_socket_assignments",
+            "service_db_require_effective_env_file",
             "rollback_peer_cutover",
         ),
         service_env_files=str(env_file),

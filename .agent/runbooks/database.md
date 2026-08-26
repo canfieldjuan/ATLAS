@@ -143,6 +143,7 @@ break-glass path.
 
    ```bash
    SERVICE_ENV_FILES='/absolute/first.service.env:/absolute/second.service.env'
+   EFFECTIVE_DB_ENV_FILE="${SERVICE_ENV_FILES##*:}"
    service_db_has_case_variant_key() {
      sudo awk '
        BEGIN { found = 0 }
@@ -233,7 +234,14 @@ break-glass path.
        fi
      done < <(printf '%s\n' "$SERVICE_ENV_FILES" | tr ':' '\n')
    }
+   service_db_require_effective_env_file() {
+     case ":$SERVICE_ENV_FILES:" in
+       *":$EFFECTIVE_DB_ENV_FILE:"*) ;;
+       *) printf '%s\n' 'effective database environment file is not a service EnvironmentFile' >&2; return 1 ;;
+     esac
+   }
    service_db_require_new_socket_configuration() {
+     service_db_require_effective_env_file || return 1
      service_db_require_no_socket_assignments || return 1
      while IFS= read -r service_env_file; do
        [ -n "$service_env_file" ] || continue
@@ -361,18 +369,17 @@ break-glass path.
    still uses TCP at this point, so a valid scoped peer rule can be proved
    without removing the existing path.
 
-3. The pre-mutation admission receipt means this procedure supports only a
+3. The pre-mutation admission receipt derives and validates
+   `EFFECTIVE_DB_ENV_FILE` as the final selected service file before any
+   authentication edit. This procedure supports only a
    **new** socket setting. Do not replace, remove, or preserve an existing
    socket assignment or complete DSN here: its original behavior needs a
    separate configuration migration with an exact restoration receipt.
 
-   Set `EFFECTIVE_DB_ENV_FILE` to the final file in service-file order, confirm
-   it is one of the paths in `SERVICE_ENV_FILES`, and add exactly this non-secret
-   setting with `sudoedit "$EFFECTIVE_DB_ENV_FILE"`; do not copy or print the
-   rest of any file:
+   Add exactly this non-secret setting with `sudoedit "$EFFECTIVE_DB_ENV_FILE"`;
+   do not copy or print the rest of that file:
 
    ```bash
-   EFFECTIVE_DB_ENV_FILE='/absolute/path/to/the-effective.service.env'
    sudoedit "$EFFECTIVE_DB_ENV_FILE"
    ```
 
@@ -388,10 +395,7 @@ break-glass path.
 
    ```bash
    rollback_peer_cutover() {
-     case ":$SERVICE_ENV_FILES:" in
-       *":$EFFECTIVE_DB_ENV_FILE:"*) ;;
-       *) printf '%s\n' 'effective database environment file is not a service EnvironmentFile' >&2; return 1 ;;
-     esac
+     service_db_require_effective_env_file || return 1
      sudoedit "$EFFECTIVE_DB_ENV_FILE" || return 1
      service_db_require_no_socket_assignments || return 1
      sudo cp --preserve=mode,ownership,timestamps /etc/postgresql/16/main/pg_hba.conf.pre-atlas-peer \
