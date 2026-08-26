@@ -366,5 +366,5 @@ Parked hardening: none.
 | `atlas_brain/config.py` | 24 |
 | `plans/PR-Postgres-Role-Topology-Preflight.md` | 370 |
 | `scripts/check_database_role_topology.py` | 810 |
-| `tests/test_database_role_topology_preflight.py` | 1028 |
-| **Total** | **2288** |
+| `tests/test_database_role_topology_preflight.py` | 1030 |
+| **Total** | **2290** |

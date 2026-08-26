@@ -940,7 +940,9 @@ def test_role_topology_preflight_executes_fixed_queries_against_postgresql_16() 
             await connection.execute("RESET ROLE")
             await connection.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
             if runtime_created:
-                await connection.execute(f"REVOKE USAGE ON SCHEMA public FROM {runtime}")
+                await connection.execute(
+                    f"REVOKE USAGE ON SCHEMA public FROM {runtime}"
+                )
             if runtime_created and granted_created:
                 await connection.execute(f"REVOKE {granted} FROM {runtime}")
             if runtime_created:
