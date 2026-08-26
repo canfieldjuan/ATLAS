@@ -27,12 +27,14 @@ incorrectly said that admissible state could contain no `missing_source`.
   the socket filename and the migration receipt confirms that label exactly.
 - A successful service or inspector connection is not socket proof while a
   complete DSN retains deliberate precedence over split configuration.
-- A loopback-client inventory without a stop condition can strand an active
-  local client after HBA conversion, and a peer-map insertion without an exact
-  loaded-map receipt can retain a broader OS-account authorization.
-- A manual four-rule HBA conversion needs an exact loaded-tuple postcondition
-  and active-file rollback; aggregate counts can mask duplicated/missing
-  channels, and a disk-only restore leaves partial HBA rules active.
+- A final-only loopback-client inventory can lose a client observed at preflight
+  before it is proved Unix-socket or SCRAM-ready, and a peer-map insertion
+  without an exact loaded-map receipt can retain a broader OS-account
+  authorization.
+- A manual four-rule HBA conversion needs an exact loaded-tuple postcondition,
+  derived coverage over every non-local rule that can match loopback, and
+  active-file rollback; endpoint-only counts can miss a broader subnet or
+  TLS-specific rule, while a disk-only restore leaves partial HBA rules active.
 - The migration runbook confuses raw forensic output with attested admission.
 
 #### Required change surface
@@ -52,11 +54,12 @@ incorrectly said that admissible state could contain no `missing_source`.
    assert the actual pool and raw-connection callers receive the socket kwargs.
 3. Replace the provisional credential/SCRAM procedure with non-secret socket
    configuration, an exact `atlas-api` OS-user → `atlas` peer map, staged
-   service/CRM/backend-transport/inspection proof, loopback-SCRAM replacement,
-   an exact loaded-HBA assertion for all four loopback tuples, and a rollback
+   service/CRM/backend-transport/inspection proof, reconciled initial/final
+   loopback-client inventories, loopback-SCRAM replacement, a derived
+   loaded-HBA coverage assertion plus exact four-tuple proof, and a rollback
    that restores TCP settings and reloads the restored HBA before restarting
-   the service. The procedure must stop on remaining loopback TCP clients and
-   prove the loaded peer map has exactly the intended mapping. The fixed
+   the service. The procedure must stop on unresolved or remaining loopback TCP
+   clients and prove the loaded peer map has exactly the intended mapping. The fixed
    inspection must explicitly select the ordered `atlas-api.service`
    `EnvironmentFiles` while excluding ad hoc `ATLAS_DB_*` overrides.
 4. Correct `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` to require matching,
@@ -101,12 +104,15 @@ incorrectly said that admissible state could contain no `missing_source`.
   exact identity map and specific peer HBA rule; restart `atlas-api`; prove
   health, an authenticated EOM CRM read, the application's Unix-socket backend,
   fixed inspection selected from the service `EnvironmentFiles`, the exclusive
-  loaded identity map, and no remaining loopback TCP or replication client.
+  loaded identity map, a Unix-socket or separately verified SCRAM receipt for
+  every client observed in either inventory, and no remaining loopback TCP or
+  replication client.
 - Only then replace every loopback TCP `trust` rule with `scram-sha-256`,
-  reload PostgreSQL, prove the loaded HBA result is `1|1|1|1|0|0|0` (one exact
-  application IPv4, application IPv6, replication IPv4, and replication IPv6
-  SCRAM tuple; zero unexpected loopback host rules, trust rows, and parser
-  errors), repeat the proofs, prove passwordless TCP rejection, and prove
+  reload PostgreSQL, prove the derived loopback-network receipt is `4` and the
+  exact loaded-HBA result is `1|1|1|1|0|0|0` (one exact application IPv4,
+  application IPv6, replication IPv4, and replication IPv6 SCRAM tuple; zero
+  unexpected endpoint-equal host rules, trust rows, and parser errors), repeat
+  the proofs, prove passwordless TCP rejection, and prove
   `sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -Atc 'SELECT
   current_user'` succeeds.
 
@@ -128,10 +134,11 @@ Max files: 5
      because both already call `connection_kwargs()`.
   4. The operational procedure rejects an overriding complete DSN, authenticates
      the specific service OS account as `atlas` over the Unix socket before
-     removing loopback `trust`, proves the exclusive loaded identity map and no
-     remaining loopback TCP client, proves every exact loopback HBA tuple,
-     retains `postgres` peer recovery, and reloads restored TCP authentication
-     before a rollback restart.
+     removing loopback `trust`, proves the exclusive loaded identity map, gives
+     every initial/final loopback client a Unix-socket or verified-SCRAM receipt,
+     leaves no TCP client, derives every loopback-covering HBA network rule,
+     proves every exact tuple, retains `postgres` peer recovery, and reloads
+     restored TCP authentication before a rollback restart.
   5. The migration runbook accurately distinguishes raw forensic output from
      attested admission without changing runner behavior.
 - Reachability proof: `atlas_brain/storage/database.py` initializes the pool
@@ -159,12 +166,14 @@ Max files: 5
   - The fixed inspector uses only the service `EnvironmentFiles`, in service
     order, and removes ad hoc `ATLAS_DB_*` values before it constructs
     `DatabaseConfig`.
-  - The cutover requires no remaining loopback TCP/replication client and an
-    exact loaded `atlas_app | juan-canfield | atlas` identity map before HBA
-    replacement.
-  - The post-conversion HBA receipt requires one exact SCRAM tuple for each
-    application/replication IPv4/IPv6 channel, no unexpected loopback host
-    rule, no remaining trust row, and no parser error before an IPv4-only
+  - The cutover reconciles every client observed in both initial and final
+    loopback TCP/replication inventories to a Unix-socket or verified-SCRAM
+    receipt, requires no remaining final client, and requires an exact loaded
+    `atlas_app | juan-canfield | atlas` identity map before HBA replacement.
+  - The post-conversion HBA receipt derives every non-local rule whose network
+    can cover either loopback endpoint, then requires one exact SCRAM tuple for
+    each application/replication IPv4/IPv6 channel, no unexpected endpoint-equal
+    host rule, no remaining trust row, and no parser error before an IPv4-only
     negative probe can be treated as sufficient.
   - Cutover order is peer proof before removal of any trust rule; rollback
     restores and reloads TCP authentication before restarting the application.
@@ -179,22 +188,27 @@ Max files: 5
   existing order; a nonblank DSN is outside the socket-proof-admissible subset
   and stops this cutover rather than allowing HBA mutation.
 - **Loopback HBA topology — CLOSED / DERIVED at cutover.** Membership comes
-  from the live `pg_hba_file_rules` receipt on the declared socket and port, not
-  the four examples in this plan. The procedure admits exactly one loaded
+  from every non-local live `pg_hba_file_rules` record on the declared socket
+  and port, not the four examples in this plan. A derived network predicate
+  includes an address/netmask rule when it can cover either loopback endpoint
+  and treats null, unparseable, or family-mismatched forms as candidates. The
+  procedure admits exactly four candidates, each one exact
   application/replication IPv4/IPv6 tuple with the declared user, netmask, and
-  SCRAM method. A missing, duplicate, or unlisted loopback rule fails closed to
-  no HBA change because an unknown authentication path is less safe than a
-  deferred hardening run.
+  SCRAM method. A missing, duplicate, broader, TLS-specific, or unlisted rule
+  fails closed to no HBA change because an unknown authentication path is less
+  safe than a deferred hardening run.
 - **`atlas_app` peer-map membership — CLOSED / DERIVED at reload.** Membership
   comes from `pg_ident_file_mappings`; exactly one
   `atlas_app | juan-canfield | atlas` tuple and no mapping error is admitted.
   Any extra, missing, malformed, or unrecognized mapping stops before HBA
   replacement because it could broaden local role impersonation.
-- **Loopback-client inventory — OPEN / DERIVED at observation time.**
+- **Loopback-client inventory — OPEN / DERIVED at both observation times.**
   `pg_stat_activity` and `pg_stat_replication` supply every current TCP
-  loopback client; application names and client identities are not enumerated.
-  Any observed member, including a new unrecognized client, stops the cutover
-  until it moves to a socket or completes a separately verified SCRAM migration.
+  loopback client at initial and final observation; application names and client
+  identities are not enumerated. Every member of their union, including a
+  client that disappears or newly appears, stops the cutover until it has a
+  Unix-socket or separately verified SCRAM reconnect receipt; an empty final
+  snapshot alone is not an admissible default.
 - **Service environment-file list — CLOSED / DERIVED for the selected service
   unit.** Membership is the ordered `EnvironmentFiles` output of `./ops env
   systemd`. An absent, unreadable, or unlisted effective configuration file
@@ -260,6 +274,10 @@ blocks the socket-peer path.
 - `python scripts/audit_pr_body.py --base-ref origin/main
   tmp/pr-body-postgres-loopback-peer-hardening.md` and the reconciliation/fix
   loop auditors — passed (local).
+- Read-only derived-HBA probe against the current `trust` topology returned
+  `4|0`: four loopback-network candidates and zero unexpected candidates; a
+  synthetic broader subnet, `hostssl` rule, and non-IP form each became a
+  candidate while the current remote `/12` rule did not (local).
 - Guarded `scripts/push_pr.sh` local PR review — passed; GitHub owns the full
   unit gate.
 - Post-merge: follow the exact peer-socket cutover/rollback procedure in
@@ -270,12 +288,12 @@ blocks the socket-peer path.
 
 | File | LOC |
 |---|---:|
-| `.agent/runbooks/database.md` | 356 |
+| `.agent/runbooks/database.md` | 400 |
 | `atlas_brain/storage/config.py` | 11 |
 | `docs/MIGRATION_CONTENT_INTEGRITY_RUNBOOK.md` | 20 |
-| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 286 |
+| `plans/PR-Postgres-Loopback-Scram-Hardening.md` | 304 |
 | `tests/test_eom_render_profile.py` | 61 |
-| **Total** | **734** |
+| **Total** | **796** |
 
 ## Diff budget
 

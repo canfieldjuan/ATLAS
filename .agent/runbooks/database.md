@@ -78,11 +78,12 @@ break-glass path.
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
      "SHOW hba_file; SHOW ident_file; SHOW unix_socket_directories;"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
-     "SELECT application_name, usename, client_addr, state \
+     "SELECT backend_start, application_name, usename, datname, backend_type, \
+             client_addr, state \
       FROM pg_stat_activity \
       WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
-     "SELECT application_name, usename, client_addr, state, sync_state \
+     "SELECT backend_start, application_name, usename, client_addr, state, sync_state \
       FROM pg_stat_replication \
       WHERE client_addr IN ('127.0.0.1'::inet, '::1'::inet);"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
@@ -96,6 +97,16 @@ break-glass path.
       WHERE auth_method = 'trust' \
       ORDER BY line_number;"
    ```
+
+   Record every row from those two inventory queries in the cutover record as
+   the **initial loopback-client inventory**. Keep its source
+   (`pg_stat_activity` or `pg_stat_replication`), `backend_start`, application,
+   user, database or replication state, address, and state/sync state. These
+   are not diagnostic snapshots: every client identity observed here must later
+   receive a Unix-socket or separately owner-verified SCRAM reconnect receipt
+   before HBA conversion, even if its TCP session subsequently disappears. Do
+   not infer that two rows are the same client from an application name or role
+   alone; the owner must bind each initial row to its later receipt in the record.
 
    For the current single-user deployment, the service account is
    `juan-canfield`, the HBA file is `/etc/postgresql/16/main/pg_hba.conf`, the
@@ -279,11 +290,17 @@ break-glass path.
    exact non-secret setting just added, restore the two saved PostgreSQL files,
    reload PostgreSQL, and restart `atlas-api.service`.
 
-   Before step 4, both final loopback inventories must be empty. A remaining
-   loopback TCP client, including a replication client, is a stop condition:
-   move that client to the Unix socket or complete a separate, owner-verified
-   SCRAM reconnect migration before re-running this cutover. Do not create a
-   new credential or remove HBA trust while any such row remains.
+   Record those two later queries as the **final loopback-client inventory**.
+   Before step 4, reconcile every client identity in the union of the initial
+   and final inventories. Each must have either a post-restart Unix-socket
+   backend receipt or a separate, owner-verified SCRAM reconnect receipt for
+   that client. A TCP session that disappeared between snapshots is not a
+   receipt; stop and obtain one before conversion. Both final inventories must
+   also be empty. A remaining loopback TCP client, including a replication
+   client, is a stop condition even if it has a future SCRAM receipt: move that
+   client to the Unix socket or complete its separate migration and disconnect
+   it before re-running this cutover. Do not create a new credential or remove
+   HBA trust while any row or receipt remains unresolved.
 
 4. Only after the socket-peer proof succeeds, replace **all four** loopback
    TCP `trust` entries in `pg_hba.conf` with `scram-sha-256` using `sudoedit`:
@@ -300,6 +317,29 @@ break-glass path.
    authenticated CRM proofs from step 3:
 
    ```bash
+   sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
+     "WITH hba AS ( \
+        SELECT *, \
+          CASE \
+            WHEN address IS NULL OR netmask IS NULL THEN TRUE \
+            WHEN NOT pg_input_is_valid(address, 'inet') \
+              OR NOT pg_input_is_valid(netmask, 'inet') THEN TRUE \
+            WHEN family(address::inet) <> family(netmask::inet) THEN TRUE \
+            WHEN family(address::inet) = 4 THEN \
+              host(address::inet & netmask::inet) \
+                = host('127.0.0.1'::inet & netmask::inet) \
+            WHEN family(address::inet) = 6 THEN \
+              host(address::inet & netmask::inet) \
+                = host('::1'::inet & netmask::inet) \
+            ELSE TRUE \
+          END AS covers_loopback \
+        FROM pg_hba_file_rules \
+      ) \
+      SELECT count(*) FILTER ( \
+        WHERE type <> 'local' \
+          AND covers_loopback \
+      ) AS loopback_network_rule_count \
+      FROM hba;"
    sudo -u postgres psql -h /var/run/postgresql -p 5433 -d atlas -At -F '|' -c \
      "SELECT \
         count(*) FILTER ( \
@@ -365,10 +405,14 @@ break-glass path.
       FROM pg_hba_file_rules;"
    ```
 
-   The query must return `1|1|1|1|0|0|0`: one exact application IPv4 rule, one
-   exact application IPv6 rule, one exact replication IPv4 rule, one exact
-   replication IPv6 rule, no unexpected loopback host rule, no trust rule, and
-   no parser error. If any field differs, do not proceed: run
+   The first query must return `4`: it derives every non-local HBA rule whose
+   network can cover either loopback endpoint. This count fails closed for a
+   broader subnet, `hostssl`/other host type, an unparseable address form, or a
+   family mismatch. The second query must return `1|1|1|1|0|0|0`: one exact
+   application IPv4 rule, one exact application IPv6 rule, one exact replication
+   IPv4 rule, one exact replication IPv6 rule, no unexpected endpoint-equal host
+   rule, no trust rule, and no parser error. If either receipt differs, do not
+   proceed: run
    `rollback_peer_cutover` immediately so the restored HBA/ident files are
    reloaded before the procedure stops. Then repeat the service,
    `service_db_inspect`, and authenticated CRM proofs from step 3.
