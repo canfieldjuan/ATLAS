@@ -875,6 +875,7 @@ class EOMTermsAuthority:
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                     _PUBLICATION_LOCK_KEY,
                 )
+                publication_timestamp = await conn.fetchval("SELECT clock_timestamp()")
                 row = await conn.fetchrow(
                     "SELECT * FROM eom_terms_versions WHERE id = $1 FOR UPDATE",
                     parsed_version_id,
@@ -896,30 +897,33 @@ class EOMTermsAuthority:
                     SET status = 'published',
                         published_by_id = $2,
                         published_by_name = $3,
-                        published_at = CURRENT_TIMESTAMP
+                        published_at = $4
                     WHERE id = $1 AND status = 'draft'
                     RETURNING *
                     """,
                     parsed_version_id,
                     parsed_actor_id,
                     parsed_actor_name,
+                    publication_timestamp,
                 )
                 if row is None:
                     raise EOMTermsConflictError("Terms version could not be published")
                 await conn.execute(
                     """
                     INSERT INTO eom_terms_current_version (
-                        singleton, version_id, selected_by_id, selected_by_name
-                    ) VALUES (TRUE, $1, $2, $3)
+                        singleton, version_id, selected_by_id, selected_by_name,
+                        selected_at
+                    ) VALUES (TRUE, $1, $2, $3, $4)
                     ON CONFLICT (singleton) DO UPDATE
                     SET version_id = EXCLUDED.version_id,
                         selected_by_id = EXCLUDED.selected_by_id,
                         selected_by_name = EXCLUDED.selected_by_name,
-                        selected_at = CURRENT_TIMESTAMP
+                        selected_at = EXCLUDED.selected_at
                     """,
                     parsed_version_id,
                     parsed_actor_id,
                     parsed_actor_name,
+                    publication_timestamp,
                 )
                 return _version_result(row, idempotent=False)
         except EOMTermsAuthorityError:

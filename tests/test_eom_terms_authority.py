@@ -284,17 +284,23 @@ class _PublishConnection:
         self.source = source
         self.current_id = current_id
         self.calls: list[str] = []
+        self.arguments: list[tuple[str, tuple[Any, ...]]] = []
 
-    async def execute(self, query: str, *_args: Any) -> str:
+    async def execute(self, query: str, *args: Any) -> str:
         self.calls.append(query)
+        self.arguments.append((query, args))
         return "OK"
 
-    async def fetchval(self, query: str, *_args: Any) -> UUID | None:
+    async def fetchval(self, query: str, *args: Any) -> object:
         self.calls.append(query)
+        self.arguments.append((query, args))
+        if "clock_timestamp" in query:
+            return _NOW
         return self.current_id
 
-    async def fetchrow(self, query: str, *_args: Any) -> Any:
+    async def fetchrow(self, query: str, *args: Any) -> Any:
         self.calls.append(query)
+        self.arguments.append((query, args))
         if query.lstrip().startswith("SELECT"):
             return self.source
         if "UPDATE eom_terms_versions" in query:
@@ -419,8 +425,21 @@ async def test_publish_serializes_before_selecting_current_version() -> None:
     assert result["status"] == "published"
     assert result["idempotent"] is False
     assert "pg_advisory_xact_lock" in connection.calls[0]
-    assert "FOR UPDATE" in connection.calls[1]
+    assert "clock_timestamp" in connection.calls[1]
+    assert "FOR UPDATE" in connection.calls[2]
     assert "eom_terms_current_version" in connection.calls[-1]
+    version_update_args = next(
+        args
+        for query, args in connection.arguments
+        if "UPDATE eom_terms_versions" in query
+    )
+    current_update_args = next(
+        args
+        for query, args in connection.arguments
+        if "INSERT INTO eom_terms_current_version" in query
+    )
+    assert version_update_args[3] == _NOW
+    assert current_update_args[3] == _NOW
 
 
 @pytest.mark.asyncio
@@ -661,6 +680,31 @@ async def test_real_postgres_enforces_guard_concurrency_and_rollback() -> None:
         assert len(publication_order) == 2
         current = await authority.get_current()
         assert UUID(current["versionId"]) == publication_order[-1]
+        async with pool.raw_pool.acquire() as timestamp_connection:
+            publication_rows = await timestamp_connection.fetch(
+                """
+                SELECT id, published_at
+                FROM eom_terms_versions
+                WHERE id = ANY($1::uuid[])
+                """,
+                distinct_versions,
+            )
+            selected_row = await timestamp_connection.fetchrow(
+                """
+                SELECT version_id, selected_at
+                FROM eom_terms_current_version
+                WHERE singleton
+                """
+            )
+        published_at = {
+            UUID(str(row["id"])): row["published_at"] for row in publication_rows
+        }
+        lock_ordered_timestamps = [
+            published_at[version_id] for version_id in publication_order
+        ]
+        assert lock_ordered_timestamps == sorted(lock_ordered_timestamps)
+        assert UUID(str(selected_row["version_id"])) == publication_order[-1]
+        assert selected_row["selected_at"] == published_at[publication_order[-1]]
         assert (
             await pool.fetchval(
                 """
@@ -1004,4 +1048,6 @@ def test_migration_guards_published_history_and_seeds_no_terms_content() -> None
     assert "BEFORE TRUNCATE ON eom_terms_versions" in migration
     assert "Publishing EOM Terms cannot rewrite draft content" in migration
     assert "BEFORE DELETE ON eom_terms_current_version" in migration
+    assert "Post-deployment rollback" in migration
+    assert "Retain the guard-owned tables" in migration
     assert "INSERT INTO eom_terms_versions" not in migration

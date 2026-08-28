@@ -17,10 +17,12 @@ OPS_MODULE = runpy.run_path(str(OPS), run_name="atlas_ops_contract_test")
 DATABASE_INSPECTIONS = OPS_MODULE["DATABASE_INSPECTIONS"]
 DATABASE_CONFIG_KEYS = OPS_MODULE["DATABASE_CONFIG_KEYS"]
 TEST_DATABASE_URL_KEYS = OPS_MODULE["TEST_DATABASE_URL_KEYS"]
+CONTROLLED_DATABASE_OPERATIONS = OPS_MODULE["CONTROLLED_DATABASE_OPERATIONS"]
 OpsError = OPS_MODULE["OpsError"]
 database_inspection_command = OPS_MODULE["database_inspection_command"]
 database_env_files = OPS_MODULE["database_env_files"]
 database_runtime_environment = OPS_MODULE["database_runtime_environment"]
+run_controlled_database_operation = OPS_MODULE["run_controlled_database_operation"]
 
 
 @pytest.mark.parametrize(
@@ -61,6 +63,62 @@ def test_database_surface_contains_only_fixed_inspections() -> None:
         command = database_inspection_command(name)
         assert command[-2:] == ["__db-inspect", name]
         assert DATABASE_INSPECTIONS[name] not in command
+
+
+def test_terms_authority_is_the_only_guarded_database_operation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert CONTROLLED_DATABASE_OPERATIONS == {
+        "eom-terms-authority": "apply_eom_terms_authority_schema.py"
+    }
+    root = Path("/workspace/atlas-terms-release")
+    calls: list[tuple[list[str], Path | None]] = []
+    function_globals = run_controlled_database_operation.__globals__
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: root)
+    monkeypatch.setitem(
+        function_globals, "python_command", lambda: Path("/venv/python")
+    )
+
+    def fake_exec_command(
+        args: list[str], *, cwd: Path | None = None, **_kwargs: object
+    ) -> int:
+        calls.append((args, cwd))
+        return 0
+
+    monkeypatch.setitem(function_globals, "exec_command", fake_exec_command)
+
+    assert run_controlled_database_operation("eom-terms-authority", "preflight") == 0
+    assert run_controlled_database_operation("eom-terms-authority", "apply") == 0
+    expected_prefix = [
+        "/venv/python",
+        str(root / "scripts/apply_eom_terms_authority_schema.py"),
+        "--json",
+    ]
+    assert calls == [
+        (expected_prefix, root),
+        ([*expected_prefix, "--apply"], root),
+    ]
+    with pytest.raises(OpsError, match="unknown controlled database operation"):
+        run_controlled_database_operation("other", "preflight")
+    with pytest.raises(OpsError, match=r"\{preflight\|apply\}"):
+        run_controlled_database_operation("eom-terms-authority", "other")
+    monkeypatch.setitem(function_globals, "worktree_root", lambda: None)
+    with pytest.raises(OpsError, match="normal worktree"):
+        run_controlled_database_operation("eom-terms-authority", "preflight")
+
+    dispatched: list[tuple[str, str]] = []
+    db_command = OPS_MODULE["db_command"]
+    monkeypatch.setitem(
+        db_command.__globals__,
+        "run_controlled_database_operation",
+        lambda name, mode: dispatched.append((name, mode)) or 0,
+    )
+    assert db_command(["controlled", "eom-terms-authority", "preflight"]) == 0
+    assert db_command(["controlled", "eom-terms-authority", "apply"]) == 0
+    assert dispatched == [
+        ("eom-terms-authority", "preflight"),
+        ("eom-terms-authority", "apply"),
+    ]
 
 
 def test_database_runtime_environment_covers_every_database_config_key() -> None:
@@ -1564,6 +1622,19 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
         assert key in capabilities
     assert capabilities["database"]["safe_inspection"] == "./ops db inspect connectivity"
     assert capabilities["database"]["arbitrary_query"].startswith("unavailable")
+    terms_migration = capabilities["database"]["controlled_migrations"][
+        "eom_terms_authority"
+    ]
+    assert terms_migration["preflight"] == (
+        "./ops db controlled eom-terms-authority preflight"
+    )
+    assert terms_migration["apply"] == "./ops db controlled eom-terms-authority apply"
+    database_runbook = (ROOT / ".agent/runbooks/database.md").read_text(
+        encoding="utf-8"
+    )
+    assert terms_migration["preflight"] in database_runbook
+    assert terms_migration["apply"] in database_runbook
+    assert "Post-deployment application rollback is retention-only" in database_runbook
     assert capabilities["deployment"]["brain"]["provider"] == "local systemd user service"
     assert capabilities["deployment"]["frontend"]["provider"] == "Vercel"
     assert "./ops doctor" in capabilities["project"]["source_of_truth"]

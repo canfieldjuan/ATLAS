@@ -47,6 +47,73 @@ generic query command is unavailable until Atlas has a privilege-restricted
 inspection role. Do not paste customer content or identifiers into chat or
 GitHub, and do not substitute the live application role as an ad hoc read role.
 
+## EOM Terms authority migration
+
+Migration `396_eom_terms_authority` is deliberately excluded from automatic
+startup migrations. It creates the immutable Terms-version authority under the
+existing no-login EOM guard owner, so it must be applied through the one fixed
+`./ops` operation below. Generic `./ops db migrate`, arbitrary SQL, and direct
+use of the shared migration runner are not substitutes.
+
+1. Use a normal worktree at the exact merged release intended for deployment.
+   Confirm its revision and the currently running revision first. If they do
+   not describe the intended rollout, stop rather than applying a schema for a
+   different release:
+
+   ```bash
+   git rev-parse HEAD
+   ./ops deploy status
+   ```
+
+2. In an operator-only process environment, provide
+   `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL` as a direct PostgreSQL
+   superuser DSN and `ATLAS_EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA` as the exact
+   EOM funnel schema. Keep both out of Git, chat, shell history, and service
+   environment files. The runtime target must come from that worktree's
+   canonical `ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING` context. The command
+   rejects a missing or elevated runtime identity, mismatched database,
+   schema, or live cluster, a non-superuser DBA, an unsafe guard role, and any
+   migration outside its fixed allowlist.
+
+3. Run the read-only preflight. Its JSON target is redacted. A nonzero exit or
+   an unexpected target means the migration is not authorized; fix the
+   configuration and rerun instead of bypassing a guard:
+
+   ```bash
+   ./ops db controlled eom-terms-authority preflight
+   ```
+
+4. After recording the preflight with the release receipt, run the explicitly
+   named apply operation once, then repeat the preflight. The runner pins the
+   canonical migration lock, DDL, and migration ledger write to one database
+   transaction; `migration_recorded` must be true before the Terms routes are
+   deployed or restarted:
+
+   ```bash
+   ./ops db controlled eom-terms-authority apply
+   ./ops db controlled eom-terms-authority preflight
+   ```
+
+5. Deploy the application only after that receipt. A failure before the
+   migration transaction commits leaves no partial authority; investigate the
+   reported target or database error and rerun the preflight.
+
+Post-deployment application rollback is retention-only. Stop Terms write
+callers and downstream invitation/acceptance consumers first, then roll the
+application back. Retain both guard-owned tables, all guard functions and
+triggers, the runtime grants, stored versions, and the `schema_migrations`
+record. The prior release does not use these additive objects; do not drop,
+truncate, delete, disable, or unrecord them merely because code is rolled back.
+Roll forward with a reviewed migration or service fix.
+
+If rollback is responding to suspected runtime-credential or application
+compromise, stop every Atlas process using the runtime credential before a DBA
+revokes the Terms tables' runtime INSERT/UPDATE privileges as a separately
+reviewed containment action. Preserve SELECT-only audit access and all stored
+history. Do not use that emergency revoke for a routine application rollback:
+it intentionally makes Terms readiness fail closed until a reviewed repair
+restores the exact grants.
+
 ## Role-topology evidence preflight
 
 This is a read-only prerequisite for a later least-privilege role cutover. It

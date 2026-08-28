@@ -36,9 +36,12 @@ legal-version API.
   search path, constraints, and runtime privilege shape; add one service that
   validates the closed four-document bundle, hashes it canonically,
   creates/replays drafts, publishes/replays versions under the execution model
-  below, and reads the current version; bind the private routes to the slim EOM
-  funnel pool; add real-entrypoint and disposable-PostgreSQL tests enrolled in
-  the EOM workflow, plus focused validator/route coverage.
+  below using one post-lock timestamp, and reads the current version; bind the
+  private routes to the slim EOM funnel pool; expose the controlled migration
+  through one allowlisted `./ops` preflight/apply operation with capability and
+  rollback documentation; add real-entrypoint and disposable-PostgreSQL tests
+  enrolled in the EOM workflow, plus focused validator/route/operations
+  coverage.
 - Must not change: no welcome draft, existing public-onboarding token, email,
   Customer/Site handoff, first-clean completion/candidate, payment, Stripe,
   calendar, Tracker, Website, employee timekeeping, commercial billing, or
@@ -49,7 +52,7 @@ legal-version API.
 
 Ownership lane: eom-onboarding-terms
 Slice phase: Vertical slice
-Max files: 12
+Max files: 16
 
 1. Persist draft/published Terms versions containing exactly residential and
    commercial documents in English and Spanish, each with Terms body, Services
@@ -61,6 +64,8 @@ Max files: 12
 4. Prove the real FastAPI entrypoint returns the stored draft/current snapshot
    and rejects malformed, conflicting, missing-schema, malformed stored, and
    non-current replay inputs.
+5. Make the controlled migration discoverable and safely operable through the
+   repository's canonical `./ops` surface, including retention-first rollback.
 
 ### Review Contract
 
@@ -73,7 +78,9 @@ Max files: 12
     different content returns a conflict.
   - `EOMTermsAuthority.publish` locks the target/current state, permits only a
     draft or the already-current published version, and an unchanged retry
-    returns the same version without another state transition.
+    returns the same version without another state transition. A wall-clock
+    timestamp captured after the advisory lock is used for both the immutable
+    publication row and current-pointer selection.
   - controlled migration 396 leaves both relations and all three guard
     functions owned by `atlas_eom_handoff_owner`; the direct `atlas` login has
     only table SELECT plus the exact column INSERT/UPDATE privileges the
@@ -90,16 +97,22 @@ Max files: 12
   - a disposable-PostgreSQL test runs the actual migration as DBA and the
     service as the direct unprivileged `atlas` login, including concurrency,
     rollback, trigger, ownership, and ACL probes.
+  - `./ops db controlled eom-terms-authority preflight|apply` dispatches only
+    the pinned migration-396 runner from a normal worktree; the capability map
+    and database runbook name the same commands and require retained history on
+    application rollback.
   - the diff contains no seed INSERT and touches no existing onboarding,
     completion, money, calendar, or delivery implementation.
 - Reachability proof: the mounted EOM FastAPI router is called by an ASGI client;
   the observable effects are a closed draft response, a published/current
   response, and stable API errors for rejected boundaries.
 - Affected surfaces: migration chain, new Terms authority service, private EOM
-  funnel API models/dependency/routes, focused tests.
+  funnel API models/dependency/routes, guarded operations contract, focused
+  tests.
 - Risk areas: mutable published content, ambiguous document bundles, hash
-  instability, duplicate labels, concurrent publication, missing schema,
-  authorization/actor omission, accidental customer-visible publication.
+  instability, duplicate labels, concurrent publication/timestamp ordering,
+  missing schema, operational apply/rollback ambiguity, authorization/actor
+  omission, accidental customer-visible publication.
 - Reviewer rules triggered: R1, R2, R3, R4, R6, R7, R8, R9, R10, R11, R14.
 
 ### Publication execution model
@@ -111,12 +124,14 @@ Max files: 12
   by every Terms publication; correctness does not depend on a weaker
   isolation level.
 - While holding that lock, the service row-locks the target version, reads the
-  singleton pointer, performs at most one content-preserving draft-to-published
-  transition, and then selects that version as current. Commit is the
-  linearization point for this service path. Its invariant is: the singleton
-  points to the last lock-ordered authority publication; every earlier
-  published row remains immutable history; an authority publish cannot commit
-  its version transition without its pointer update.
+  wall clock once, row-locks the target version, reads the singleton pointer,
+  performs at most one content-preserving draft-to-published transition, and
+  then selects that version as current with that same timestamp. Commit is the
+  linearization point for this service path. Its invariant is: publication and
+  selection timestamps follow lock order, the singleton points to the last
+  lock-ordered authority publication, every earlier published row remains
+  immutable history, and an authority publish cannot commit its version
+  transition without its pointer update.
 - Duplicate requests for the current published version replay without a write.
   A late retry for a published version already superseded by another committed
   publication conflicts rather than rewinding the pointer. Distinct concurrent
@@ -156,16 +171,20 @@ Max files: 12
 
 ### Files touched
 
+- `.agent/capabilities.yaml`
+- `.agent/runbooks/database.md`
 - `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
 - `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_terms_authority.py`
 - `atlas_brain/storage/migrations/396_eom_terms_authority.sql`
 - `atlas_brain/storage/migrations/__init__.py`
+- `ops`
 - `plans/PR-EOM-Terms-Authority.md`
 - `scripts/apply_eom_first_clean_completion_schema.py`
 - `scripts/apply_eom_terms_authority_schema.py`
 - `tests/test_eom_first_clean_completion_dba_runner.py`
+- `tests/test_agent_operations_contract.py`
 - `tests/test_eom_terms_authority.py`
 - `tests/test_migrations_runner.py`
 
@@ -174,9 +193,12 @@ Max files: 12
 Migration 396 stores the complete closed document bundle as JSONB beside a
 canonical SHA-256 hash and actor evidence. Draft rows may transition once to
 published; a trigger then makes them append-only. A singleton pointer selects
-the current published version without rewriting history. The service owns all
+the current published version without rewriting history, using the same
+post-lock wall-clock timestamp as the publication. The service owns all
 normalization, replay, conflict, and transaction behavior. The funnel routes
 only validate/reproject the private HTTP contract and map typed service errors.
+The canonical `./ops` command exposes only the dedicated migration-396
+preflight/apply wrapper and points operators to the retention-first runbook.
 
 ## Intentional
 
@@ -186,6 +208,8 @@ only validate/reproject the private HTTP contract and map typed service errors.
   readiness, email, or card state is added in this authority-only slice.
 - Every published version is retained. Publishing a new version moves only the
   current pointer; it does not mutate the prior published row.
+- Application rollback retains the migration, guarded objects, runtime grants,
+  and every stored version; destructive schema rollback is forbidden.
 - The bundle is one version across both audiences and both languages so a
   single version/hash identifies the complete approved release.
 
@@ -210,8 +234,8 @@ Parked hardening: none.
 
 ## Verification
 
-- PASS: focused Terms suite without disposable credentials (28 passed, 1
-  environment-gated test skipped).
+- PASS: current focused Terms plus guarded-operations contract probes (31
+  passed, 1 environment-gated test skipped).
 - PASS: the same Terms suite against isolated PostgreSQL 16 (29 passed; no
   skip), controlled DBA-runner suite (21 passed), and migration-runner suite
   (117 passed, 1 unrelated environment-gated test skipped).
@@ -225,24 +249,28 @@ Parked hardening: none.
   retry conflict; rollback after the version transition but before pointer
   selection; DBA trigger execution; and readiness failure while a trigger is
   disabled.
-- Pending before push: clean-tree `./ops test local-review`, mechanical push,
-  hosted reconciliation, and resolution of the four review threads.
+- Pending for this review follow-up: clean-tree `./ops test local-review`,
+  mechanical push, current-head hosted checks, and review reconciliation.
 - Hosted full Unit Gate remains GitHub-only under `.agent/capabilities.yaml`.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `.agent/capabilities.yaml` | 15 |
+| `.agent/runbooks/database.md` | 67 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
 | `atlas_brain/eom_api/funnel.py` | 144 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_terms_authority.py` | 949 |
-| `atlas_brain/storage/migrations/396_eom_terms_authority.sql` | 415 |
+| `atlas_brain/services/eom_terms_authority.py` | 953 |
+| `atlas_brain/storage/migrations/396_eom_terms_authority.sql` | 422 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
-| `plans/PR-EOM-Terms-Authority.md` | 248 |
+| `ops` | 49 |
+| `plans/PR-EOM-Terms-Authority.md` | 276 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 55 |
 | `scripts/apply_eom_terms_authority_schema.py` | 42 |
+| `tests/test_agent_operations_contract.py` | 71 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 44 |
-| `tests/test_eom_terms_authority.py` | 1007 |
+| `tests/test_eom_terms_authority.py` | 1053 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **2918** |
+| **Total** | **3205** |

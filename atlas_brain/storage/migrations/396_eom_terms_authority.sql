@@ -8,6 +8,13 @@
 -- trigger functions that make published history immutable. Apply this through
 -- the dedicated Terms-authority preflight/apply command, never ordinary Atlas
 -- startup migrations.
+--
+-- Post-deployment rollback: stop the Terms write routes and every consumer
+-- before rolling the application back. Retain the guard-owned tables,
+-- functions, triggers, grants, and migration record as legal/audit history;
+-- do not drop, truncate, delete, or unrecord them. The complete operational
+-- sequence and security-containment exception live in
+-- .agent/runbooks/database.md under "EOM Terms authority migration".
 
 DO $$
 DECLARE
