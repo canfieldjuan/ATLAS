@@ -587,6 +587,16 @@ BEGIN
     END IF;
     IF EXISTS (
         SELECT 1
+          FROM eom_terms_deliveries AS delivery
+         WHERE delivery.invitation_id = OLD.id
+           AND delivery.kind = 'invitation'
+           AND delivery.status = 'sending'
+    ) THEN
+        RAISE EXCEPTION
+            'EOM Terms invitation delivery requires reconciliation';
+    END IF;
+    IF EXISTS (
+        SELECT 1
           FROM eom_terms_acceptances AS acceptance
          WHERE acceptance.invitation_id = OLD.id
     ) THEN
@@ -618,12 +628,16 @@ BEGIN
            invitation.revoked_at,
            invitation.expires_at,
            version.content_hash,
-           version.publication_order
+           version.publication_order,
+           invitation_delivery.status AS delivery_status
       INTO invitation_row
       FROM eom_terms_invitations AS invitation
       JOIN eom_terms_versions AS version
         ON version.id = invitation.version_id
        AND version.status = 'published'
+      JOIN eom_terms_deliveries AS invitation_delivery
+        ON invitation_delivery.invitation_id = invitation.id
+       AND invitation_delivery.kind = 'invitation'
      WHERE invitation.id = NEW.invitation_id
      FOR SHARE OF invitation;
     IF NOT FOUND
@@ -640,6 +654,10 @@ BEGIN
     ) THEN
         RAISE EXCEPTION
             'EOM Terms invitation was superseded by a material release';
+    END IF;
+    IF invitation_row.delivery_status = 'sending' THEN
+        RAISE EXCEPTION
+            'EOM Terms invitation delivery requires reconciliation';
     END IF;
     IF NOT EXISTS (
         SELECT 1
@@ -743,9 +761,26 @@ BEGIN
         IF NEW.kind = 'invitation' AND NOT EXISTS (
             SELECT 1
               FROM eom_terms_invitations AS invitation
+              JOIN contacts AS contact ON contact.id = invitation.contact_id
+              JOIN eom_terms_versions AS invited
+                ON invited.id = invitation.version_id
+               AND invited.status = 'published'
              WHERE invitation.id = NEW.invitation_id
                AND invitation.revoked_at IS NULL
                AND clock_timestamp() <= invitation.expires_at
+               AND contact.business_context_id = 'effingham_maids'
+               AND contact.contact_type = 'customer'
+               AND contact.status = 'active'
+               AND contact.customer_type = invitation.audience
+               AND btrim(contact.full_name) = invitation.customer_name
+               AND lower(btrim(contact.email)) = invitation.recipient_email
+               AND NOT EXISTS (
+                   SELECT 1
+                     FROM eom_terms_versions AS later
+                    WHERE later.status = 'published'
+                      AND later.material_change
+                      AND later.publication_order > invited.publication_order
+               )
                AND NOT EXISTS (
                    SELECT 1
                      FROM eom_terms_acceptances AS acceptance

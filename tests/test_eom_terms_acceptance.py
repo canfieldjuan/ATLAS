@@ -26,6 +26,7 @@ from atlas_brain.services.eom_terms_acceptance import (
     EOMTermsAcceptanceConflictError,
     EOMTermsAcceptanceNotFoundError,
     EOMTermsAcceptanceService,
+    EOMTermsAcceptanceUnavailableError,
     EOMTermsAcceptanceValidationError,
     append_eom_terms_acceptance_link,
     authenticate_eom_terms_token,
@@ -425,6 +426,10 @@ async def test_acceptance_requires_two_literal_true_acknowledgements(
     [
         ("", "192.0.2.1"),
         (None, "192.0.2.1"),
+        ("Customer\nInjected", "192.0.2.1"),
+        ("Customer\rInjected", "192.0.2.1"),
+        ("Customer\tInjected", "192.0.2.1"),
+        ("Customer\u2028Injected", "192.0.2.1"),
         ("Customer", "not-an-ip"),
         ("Customer", ""),
     ],
@@ -457,6 +462,7 @@ async def test_acceptance_rejects_invalid_signer_or_client_ip_before_database_us
         {"customer_type": "unknown"},
         {"email": None},
         {"full_name": " "},
+        {"full_name": "Customer\nInjected"},
     ],
 )
 def test_customer_boundary_rejects_every_noncanonical_account(
@@ -474,6 +480,23 @@ def test_customer_boundary_rejects_every_noncanonical_account(
     row.update(changes)
     with pytest.raises(EOMTermsAcceptanceConflictError):
         EOMTermsAcceptanceService._customer(row)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "actor_name",
+    ["Juan\nInjected", "Juan\rInjected", "Juan\tInjected", "Juan\u2028Injected"],
+)
+async def test_actor_identity_rejects_line_controls_before_database_use(
+    actor_name: str,
+) -> None:
+    service = EOMTermsAcceptanceService(pool=object())
+    with pytest.raises(EOMTermsAcceptanceValidationError):
+        await service.revoke(
+            invitation_id=_INVITATION_ID,
+            actor_id=7,
+            actor_name=actor_name,
+        )
 
 
 class _RouteAcceptance:
@@ -963,6 +986,56 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
                     "Database Boundary Probe",
                     "192.0.2.31",
                 )
+
+        current_invitation = await service.issue_and_send(
+            request_key="terms-request-current-version-order",
+            contact_id=_CONTACT_ID,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        current_acceptance = await service.accept_and_send(
+            token=authenticate_eom_terms_token(
+                token=format_eom_terms_token(
+                    invitation_id=UUID(current_invitation["invitationId"]),
+                    secret=_SECRET,
+                ),
+                secret=_SECRET,
+            ),
+            signer_name="Current Version Signer",
+            terms_accepted=True,
+            additional_work_accepted=True,
+            client_ip="192.0.2.32",
+            sender=_RecordingSender(),
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_acceptances
+            DISABLE TRIGGER trg_protect_eom_terms_acceptance
+            """
+        )
+        await dba.execute(
+            """
+            UPDATE eom_terms_acceptances
+            SET accepted_at = TIMESTAMPTZ '2000-01-01 00:00:00+00'
+            WHERE id = $1
+            """,
+            UUID(current_acceptance["acceptanceId"]),
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_acceptances
+            ENABLE TRIGGER trg_protect_eom_terms_acceptance
+            """
+        )
+        current_readiness = await service.get_readiness(contact_id=_CONTACT_ID)
+        assert current_readiness["ready"] is True
+        assert current_readiness["reason"] == "accepted"
+        assert current_readiness["acceptedVersionId"] == material_release["versionId"]
+
         with pytest.raises(EOMTermsAcceptanceConflictError):
             await service.revoke(
                 invitation_id=invitation["invitationId"],
@@ -1055,7 +1128,9 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         contact_invalid = uuid4()
         contact_expired = uuid4()
         contact_delivery_lock = uuid4()
+        contact_changed_before_delivery = uuid4()
         contact_replay = uuid4()
+        contact_confirmation_failure = uuid4()
         await _seed_customer(dba, contact_id=contact_duplicate)
         await _seed_customer(
             dba,
@@ -1084,8 +1159,18 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         )
         await _seed_customer(
             dba,
+            contact_id=contact_changed_before_delivery,
+            email="changed-before-delivery@example.com",
+        )
+        await _seed_customer(
+            dba,
             contact_id=contact_replay,
             email="replay@example.com",
+        )
+        await _seed_customer(
+            dba,
+            contact_id=contact_confirmation_failure,
+            email="confirmation-failure@example.com",
         )
         await dba.execute(
             "UPDATE contacts SET status = 'archived' WHERE id = $1",
@@ -1227,6 +1312,41 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         assert {result["idempotent"] for result in acceptance_results} == {False, True}
         assert len(receipt_sender.calls) == 1
 
+        changed_invitation = await no_delivery.issue_and_send(
+            request_key="terms-request-contact-changed-before-delivery",
+            contact_id=contact_changed_before_delivery,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        await dba.execute(
+            "UPDATE contacts SET email = $2 WHERE id = $1",
+            contact_changed_before_delivery,
+            "changed-after-issue@example.com",
+        )
+        changed_contact_sender = _RecordingSender()
+        with pytest.raises(
+            EOMTermsAcceptanceConflictError,
+            match="customer changed before Terms delivery",
+        ):
+            await service._deliver(
+                delivery_id=UUID(changed_invitation["deliveryId"]),
+                secret=_SECRET,
+                previous_secret=None,
+                sender=changed_contact_sender,
+            )
+        assert changed_contact_sender.calls == []
+        assert (
+            await dba.fetchval(
+                "SELECT status FROM eom_terms_deliveries WHERE id = $1",
+                UUID(changed_invitation["deliveryId"]),
+            )
+            == "pending"
+        )
+
         locked_invitation = await no_delivery.issue_and_send(
             request_key="terms-request-delivery-lock",
             contact_id=contact_delivery_lock,
@@ -1254,13 +1374,29 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
                 actor_name="Juan",
             )
         )
+
+        contact_update_started = asyncio.Event()
+
+        async def update_locked_contact() -> None:
+            async with pool.raw_pool.acquire() as connection:
+                contact_update_started.set()
+                await connection.execute(
+                    "UPDATE contacts SET email = $2 WHERE id = $1",
+                    contact_delivery_lock,
+                    "delivery-lock-after-send@example.com",
+                )
+
+        contact_update_task = asyncio.create_task(update_locked_contact())
         try:
+            await asyncio.wait_for(contact_update_started.wait(), timeout=2)
             await asyncio.sleep(0.05)
             assert revoke_task.done() is False
+            assert contact_update_task.done() is False
         finally:
             blocking_sender.release.set()
         locked_delivery, locked_delivery_error = await delivery_task
         locked_revocation = await revoke_task
+        await contact_update_task
         assert locked_delivery["status"] == "sent"
         assert locked_delivery_error is False
         assert locked_revocation["revokedAt"] is not None
@@ -1298,6 +1434,70 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         assert replay_evidence["resend_message_id"] is None
         assert replay_evidence["transport_idempotent_replay"] is True
 
+        confirmation_failure = await no_delivery.issue_and_send(
+            request_key="terms-request-confirmation-failure",
+            contact_id=contact_confirmation_failure,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        await dba.execute(
+            """
+            CREATE FUNCTION test_reject_eom_terms_confirmation()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            AS $$
+            BEGIN
+                IF OLD.status = 'sending' AND NEW.status = 'sent' THEN
+                    RAISE EXCEPTION 'injected confirmation failure';
+                END IF;
+                RETURN NEW;
+            END;
+            $$;
+            CREATE TRIGGER trg_test_reject_eom_terms_confirmation
+            BEFORE UPDATE ON eom_terms_deliveries
+            FOR EACH ROW EXECUTE FUNCTION test_reject_eom_terms_confirmation();
+            """
+        )
+        confirmation_sender = _RecordingSender()
+        try:
+            with pytest.raises(EOMTermsAcceptanceUnavailableError):
+                await service._deliver(
+                    delivery_id=UUID(confirmation_failure["deliveryId"]),
+                    secret=_SECRET,
+                    previous_secret=None,
+                    sender=confirmation_sender,
+                )
+        finally:
+            await dba.execute(
+                """
+                DROP TRIGGER trg_test_reject_eom_terms_confirmation
+                    ON eom_terms_deliveries;
+                DROP FUNCTION test_reject_eom_terms_confirmation();
+                """
+            )
+        assert len(confirmation_sender.calls) == 1
+        assert (
+            await dba.fetchval(
+                "SELECT status FROM eom_terms_deliveries WHERE id = $1",
+                UUID(confirmation_failure["deliveryId"]),
+            )
+            == "sending"
+        )
+        confirmation_retry_sender = _RecordingSender()
+        confirmation_retry, confirmation_retry_error = await service._deliver(
+            delivery_id=UUID(confirmation_failure["deliveryId"]),
+            secret=_SECRET,
+            previous_secret=None,
+            sender=confirmation_retry_sender,
+        )
+        assert confirmation_retry["status"] == "sending"
+        assert confirmation_retry_error is False
+        assert confirmation_retry_sender.calls == []
+
         invalid_replay = await no_delivery.issue_and_send(
             request_key="terms-request-invalid-provider-replay",
             contact_id=contact_replay,
@@ -1329,6 +1529,45 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
                 WHERE id = $1
                 """,
                 UUID(invalid_replay["deliveryId"]),
+            )
+        with pytest.raises(
+            EOMTermsAcceptanceConflictError,
+            match="delivery requires reconciliation",
+        ):
+            await service.revoke(
+                invitation_id=invalid_replay["invitationId"],
+                actor_id=7,
+                actor_name="Juan",
+            )
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="delivery requires reconciliation",
+        ):
+            await dba.execute(
+                """
+                UPDATE eom_terms_invitations
+                SET revoked_at = clock_timestamp(),
+                    revoked_by_id = 7,
+                    revoked_by_name = 'Juan'
+                WHERE id = $1
+                """,
+                UUID(invalid_replay["invitationId"]),
+            )
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="delivery requires reconciliation",
+        ):
+            await dba.execute(
+                """
+                INSERT INTO eom_terms_acceptances (
+                    id, invitation_id, signer_name, terms_accepted,
+                    additional_work_accepted, client_ip
+                ) VALUES ($1, $2, $3, TRUE, TRUE, $4::inet)
+                """,
+                uuid4(),
+                UUID(invalid_replay["invitationId"]),
+                "Sending Boundary Probe",
+                "192.0.2.33",
             )
 
         opposing = await no_delivery.issue_and_send(

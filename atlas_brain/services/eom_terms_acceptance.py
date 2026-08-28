@@ -198,6 +198,7 @@ def _safe_text(value: object, *, label: str, maximum: int) -> str:
         or len(normalized) > maximum
         or "\x00" in normalized
         or any(0xD800 <= ord(character) <= 0xDFFF for character in normalized)
+        or any(not character.isprintable() for character in normalized)
     ):
         raise EOMTermsAcceptanceValidationError(f"{label} is invalid")
     return normalized
@@ -944,14 +945,35 @@ class EOMTermsAcceptanceService:
                        AS invitation_expired,
                    EXISTS (
                        SELECT 1
+                       FROM eom_terms_versions AS invited
+                       JOIN eom_terms_versions AS later
+                         ON later.status = 'published'
+                        AND later.material_change
+                        AND later.publication_order > invited.publication_order
+                       WHERE invited.id = invitation.version_id
+                         AND invited.status = 'published'
+                   ) AS invitation_materially_stale,
+                   (
+                       contact.business_context_id = 'effingham_maids'
+                       AND contact.contact_type = 'customer'
+                       AND contact.status = 'active'
+                       AND contact.customer_type = invitation.audience
+                       AND btrim(contact.full_name) = invitation.customer_name
+                       AND lower(btrim(contact.email)) =
+                           invitation.recipient_email
+                   ) AS invitation_contact_matches,
+                   EXISTS (
+                       SELECT 1
                        FROM eom_terms_acceptances AS accepted
                        WHERE accepted.invitation_id = invitation.id
                    ) AS invitation_accepted
             FROM eom_terms_deliveries AS delivery
             JOIN eom_terms_invitations AS invitation
               ON invitation.id = delivery.invitation_id
+            JOIN contacts AS contact ON contact.id = invitation.contact_id
             WHERE delivery.id = $1
-            FOR UPDATE OF invitation
+            FOR UPDATE OF invitation, delivery
+            FOR SHARE OF contact
             """,
             delivery_id,
         )
@@ -998,9 +1020,60 @@ class EOMTermsAcceptanceService:
         previous_secret: str | None,
         sender: Sender,
     ) -> tuple[dict[str, Any], bool]:
-        """Serialize invitation state through one bounded transport outcome."""
+        """Durably claim once, then serialize one bounded transport outcome."""
 
+        def prepare(candidate: dict[str, Any]) -> tuple[str, str] | None:
+            body = str(candidate["body"])
+            if _body_hash(body) != candidate["body_hash"]:
+                raise EOMTermsAcceptanceUnavailableError(
+                    "Stored Terms delivery payload is invalid"
+                )
+            kind = str(candidate["kind"])
+            if kind == "invitation":
+                if (
+                    candidate["invitation_revoked_at"] is not None
+                    or bool(candidate["invitation_expired"])
+                    or bool(candidate["invitation_accepted"])
+                    or bool(candidate["invitation_materially_stale"])
+                ):
+                    return None
+                if not bool(candidate["invitation_contact_matches"]):
+                    raise EOMTermsAcceptanceConflictError(
+                        "EOM customer changed before Terms delivery"
+                    )
+                if secret is None:
+                    raise EOMTermsAcceptanceUnavailableError(
+                        "Terms invitation signing key is unavailable"
+                    )
+                invitation_id = UUID(str(candidate["invitation_id"]))
+                token_secret = _secret_for_fingerprint(
+                    fingerprint=candidate["signing_key_fingerprint"],
+                    secret=secret,
+                    previous_secret=previous_secret,
+                )
+                token = format_eom_terms_token(
+                    invitation_id=invitation_id,
+                    secret=token_secret,
+                )
+                link = build_eom_terms_link(
+                    base_url=str(candidate["public_base_url"]),
+                    token=token,
+                )
+                body = append_eom_terms_acceptance_link(
+                    body=body,
+                    link=link,
+                    locale=str(candidate["locale"]),
+                )
+            elif kind != "executed_copy":
+                raise EOMTermsAcceptanceUnavailableError(
+                    "Stored Terms delivery kind is invalid"
+                )
+            return kind, body
+
+        transport_succeeded = False
+        transport_kind = "unknown"
         try:
+            # Commit the non-retryable state before crossing the provider boundary.
             async with self.pool.transaction() as connection:
                 await connection.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -1019,50 +1092,8 @@ class EOMTermsAcceptanceService:
                     raise EOMTermsAcceptanceUnavailableError(
                         "Stored Terms delivery state is invalid"
                     )
-                body = str(candidate["body"])
-                if _body_hash(body) != candidate["body_hash"]:
-                    raise EOMTermsAcceptanceUnavailableError(
-                        "Stored Terms delivery payload is invalid"
-                    )
-                kind = str(candidate["kind"])
-                invitation_is_usable = not (
-                    kind == "invitation"
-                    and (
-                        candidate["invitation_revoked_at"] is not None
-                        or bool(candidate["invitation_expired"])
-                        or bool(candidate["invitation_accepted"])
-                    )
-                )
-                if not invitation_is_usable:
+                if prepare(candidate) is None:
                     return candidate, False
-                if kind == "invitation":
-                    if secret is None:
-                        raise EOMTermsAcceptanceUnavailableError(
-                            "Terms invitation signing key is unavailable"
-                        )
-                    invitation_id = UUID(str(candidate["invitation_id"]))
-                    token_secret = _secret_for_fingerprint(
-                        fingerprint=candidate["signing_key_fingerprint"],
-                        secret=secret,
-                        previous_secret=previous_secret,
-                    )
-                    token = format_eom_terms_token(
-                        invitation_id=invitation_id,
-                        secret=token_secret,
-                    )
-                    link = build_eom_terms_link(
-                        base_url=str(candidate["public_base_url"]),
-                        token=token,
-                    )
-                    body = append_eom_terms_acceptance_link(
-                        body=body,
-                        link=link,
-                        locale=str(candidate["locale"]),
-                    )
-                elif kind != "executed_copy":
-                    raise EOMTermsAcceptanceUnavailableError(
-                        "Stored Terms delivery kind is invalid"
-                    )
                 claimed = await connection.fetchrow(
                     """
                     UPDATE eom_terms_deliveries AS delivery
@@ -1095,7 +1126,35 @@ class EOMTermsAcceptanceService:
                             "Terms delivery was not found"
                         )
                     return dict(current), False
-                sending = dict(claimed)
+            # Revalidate under canonical locks and hold them through transport.
+            async with self.pool.transaction() as connection:
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                    EOM_TERMS_PUBLICATION_LOCK_KEY,
+                )
+                row = await self._delivery_by_id(connection, delivery_id)
+                if row is None:
+                    raise EOMTermsAcceptanceNotFoundError(
+                        "Terms delivery was not found"
+                    )
+                candidate = dict(row)
+                state = str(candidate["status"])
+                if state == "sent":
+                    return candidate, False
+                if state != "sending":
+                    raise EOMTermsAcceptanceUnavailableError(
+                        "Stored Terms delivery state is invalid"
+                    )
+                prepared = prepare(candidate)
+                if prepared is None:
+                    logger.warning(
+                        "Terms delivery requires reconciliation after its "
+                        "invitation became unavailable for %s",
+                        delivery_id,
+                    )
+                    return candidate, True
+                kind, body = prepared
+                transport_kind = kind
                 try:
                     send_result = await sender(
                         to=str(candidate["recipient_email"]),
@@ -1110,6 +1169,7 @@ class EOMTermsAcceptanceService:
                     idempotent_replay = send_result.get("idempotent_replay")
                     if not isinstance(idempotent_replay, bool):
                         raise ValueError("Terms delivery transport result is invalid")
+                    transport_succeeded = True
                 except Exception:
                     logger.warning(
                         "Terms %s delivery requires reconciliation for %s",
@@ -1117,32 +1177,28 @@ class EOMTermsAcceptanceService:
                         delivery_id,
                         exc_info=True,
                     )
-                    return sending, True
-                try:
-                    confirmed = await connection.fetchrow(
-                        """
-                        UPDATE eom_terms_deliveries
-                        SET status = 'sent',
-                            sent_at = clock_timestamp(),
-                            resend_message_id = $2,
-                            transport_idempotent_replay = $3
-                        WHERE id = $1 AND status = 'sending'
-                        RETURNING *
-                        """,
-                        delivery_id,
-                        message_id,
-                        idempotent_replay,
-                    )
-                except (asyncpg.PostgresError, OSError, TimeoutError):
+                    return candidate, True
+                confirmed = await connection.fetchrow(
+                    """
+                    UPDATE eom_terms_deliveries
+                    SET status = 'sent',
+                        sent_at = clock_timestamp(),
+                        resend_message_id = $2,
+                        transport_idempotent_replay = $3
+                    WHERE id = $1 AND status = 'sending'
+                    RETURNING *
+                    """,
+                    delivery_id,
+                    message_id,
+                    idempotent_replay,
+                )
+                if confirmed is None:
                     logger.warning(
-                        "Terms %s transport succeeded but confirmation rolled "
-                        "back for idempotent retry of %s",
+                        "Terms %s transport succeeded but confirmation was not "
+                        "stored; its durable claim requires reconciliation for %s",
                         kind,
                         delivery_id,
-                        exc_info=True,
                     )
-                    raise
-                if confirmed is None:
                     raise EOMTermsAcceptanceUnavailableError(
                         "Terms delivery confirmation was not stored"
                     )
@@ -1150,6 +1206,14 @@ class EOMTermsAcceptanceService:
         except EOMTermsAcceptanceError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            if transport_succeeded:
+                logger.warning(
+                    "Terms %s transport succeeded but database confirmation "
+                    "failed; its durable claim requires reconciliation for %s",
+                    transport_kind,
+                    delivery_id,
+                    exc_info=True,
+                )
             raise EOMTermsAcceptanceUnavailableError(
                 "Terms delivery state is unavailable"
             ) from exc
@@ -1475,10 +1539,15 @@ class EOMTermsAcceptanceService:
                 invitation = await connection.fetchrow(
                     """
                     SELECT invitation.*, version.version_label,
-                           version.content_hash, version.documents
+                           version.content_hash, version.documents,
+                           invitation_delivery.status
+                               AS invitation_delivery_status
                     FROM eom_terms_invitations AS invitation
                     JOIN eom_terms_versions AS version
                       ON version.id = invitation.version_id
+                    JOIN eom_terms_deliveries AS invitation_delivery
+                      ON invitation_delivery.invitation_id = invitation.id
+                     AND invitation_delivery.kind = 'invitation'
                     WHERE invitation.id = $1
                     FOR UPDATE OF invitation
                     """,
@@ -1502,6 +1571,10 @@ class EOMTermsAcceptanceService:
                     acceptance = existing
                     idempotent = True
                 else:
+                    if invitation["invitation_delivery_status"] == "sending":
+                        raise EOMTermsAcceptanceConflictError(
+                            "Terms invitation delivery requires reconciliation"
+                        )
                     accepted_at = await connection.fetchval("SELECT clock_timestamp()")
                     if (
                         not isinstance(accepted_at, datetime)
@@ -1635,7 +1708,16 @@ class EOMTermsAcceptanceService:
                     EOM_TERMS_PUBLICATION_LOCK_KEY,
                 )
                 row = await connection.fetchrow(
-                    "SELECT * FROM eom_terms_invitations WHERE id = $1 FOR UPDATE",
+                    """
+                    SELECT invitation.*,
+                           delivery.status AS invitation_delivery_status
+                    FROM eom_terms_invitations AS invitation
+                    JOIN eom_terms_deliveries AS delivery
+                      ON delivery.invitation_id = invitation.id
+                     AND delivery.kind = 'invitation'
+                    WHERE invitation.id = $1
+                    FOR UPDATE OF invitation
+                    """,
                     parsed_invitation_id,
                 )
                 if row is None:
@@ -1649,6 +1731,10 @@ class EOMTermsAcceptanceService:
                 if acceptance_id is not None:
                     raise EOMTermsAcceptanceConflictError(
                         "Accepted Terms invitation cannot be revoked"
+                    )
+                if row["invitation_delivery_status"] == "sending":
+                    raise EOMTermsAcceptanceConflictError(
+                        "Terms invitation delivery requires reconciliation"
                     )
                 if row["revoked_at"] is not None:
                     idempotent = True
@@ -1796,7 +1882,9 @@ class EOMTermsAcceptanceService:
                       ON delivery.acceptance_id = acceptance.id
                      AND delivery.kind = 'executed_copy'
                     WHERE acceptance.contact_id = $1
-                    ORDER BY acceptance.accepted_at DESC, acceptance.id DESC
+                    ORDER BY version.publication_order DESC,
+                             acceptance.accepted_at DESC,
+                             acceptance.id DESC
                     LIMIT 1
                     """,
                     parsed_contact_id,

@@ -77,14 +77,25 @@ evidence.
   and before transport. Material-release comparisons also used wall-clock
   timestamps, which do not define a strict release order, and the delivery
   evidence guard rejected Resend's provider-confirmed idempotent replay shape
-  when that replay has no message id.
-- Revised requirement: delivery acquires the publication lock and invitation
-  row lock in the same order as acceptance/revocation and retains both through
-  the bounded provider outcome and database confirmation. Migration 397 adds a
-  guard-owned monotonic publication order assigned under the existing
-  publication lock and every later-material decision uses that order. A sent
-  transition admits a missing provider message id only when the established
-  sender explicitly reports `idempotent_replay = true`.
+  when that replay has no message id. Further review proved that keeping claim,
+  provider call, and confirmation in one transaction erased `sending` when the
+  provider accepted but database confirmation failed; contact identity was not
+  revalidated or locked through transport; readiness still selected among
+  acceptances by wall-clock time; and receipt identity fields admitted embedded
+  line controls.
+- Revised requirement: delivery first commits a durable `pending -> sending`
+  claim before crossing the provider boundary. It then reacquires the
+  publication, invitation, delivery, and canonical contact locks, revalidates
+  material currency and contact identity, and retains those locks through the
+  bounded provider outcome and database confirmation. Any uncertain provider
+  or confirmation result remains `sending` and is never automatically retried;
+  acceptance and revocation reject that reconciliation state. Migration 397
+  adds a guard-owned monotonic publication order assigned under the existing
+  publication lock, every later-material decision and readiness selection uses
+  that order, and a sent transition admits a missing provider message id only
+  when the established sender explicitly reports
+  `idempotent_replay = true`. Shared signer/customer/actor text rejects every
+  non-printable line-control character before it can enter receipt evidence.
 - Preserved boundary: this internal serialization and release-order evidence
   does not change Terms prose, version hashes, the operator publish/current
   selection API, route payloads, customer classification, payment/onboarding
@@ -141,10 +152,12 @@ Max files: 18
     changed signer conflicts.
   - The service execution model below makes publication/issue/accept/readiness
     linearize on one PostgreSQL advisory lock, revocation/acceptance linearize on
-    the invitation row lock, and delivery hold those locks from its conditional
-    `pending -> sending` claim through the provider outcome; focused concurrent
-    tests settle duplicate issue, double accept, accept-vs-revoke,
-    send-vs-revoke, and double-send invariants under that model.
+    the invitation row lock, and delivery commit its `pending -> sending` claim
+    before transport, then hold publication, invitation, delivery, and contact
+    locks through the provider outcome; focused concurrent tests settle
+    duplicate issue, double accept, accept-vs-revoke, send-vs-revoke,
+    contact-update-vs-send, confirmation-failure, and double-send invariants
+    under that model.
   - Migration 397 tests prove the guard owner owns all three relations and guard
     functions, the direct `atlas` login has no table-wide write/delete/truncate
     or function-replacement authority, acceptance rows and delivery payloads
@@ -152,8 +165,8 @@ Max files: 18
     admitted.
   - Readiness tests prove acceptance of the current or an older release followed
     only by non-material releases is ready, and any later material release is
-    `reacceptance_required`, including when its wall-clock publication timestamp
-    is earlier than the accepted release.
+    `reacceptance_required`, including when release or acceptance wall-clock
+    timestamps contradict the database-owned publication order.
   - Invitation and executed-copy transport tests assert persisted body equality
     with the selected published audience/locale, separate acknowledgement
     evidence, deterministic Resend idempotency keys, and an acceptance that
@@ -194,15 +207,16 @@ Max files: 18
   exactly one of revocation or first acceptance wins, and an unchanged accept
   replay returns the existing immutable row.
 - Delivery payload creation commits with its invitation/acceptance. Delivery
-  then acquires the publication lock followed by the invitation row lock,
-  claims exactly one pending row, and retains those locks through the bounded
-  provider result and `sent` confirmation. A failed/unknown sender call commits
-  explicit `sending` reconciliation evidence. A database failure after provider
-  acceptance rolls the claim back, and a later explicit invocation uses the
-  same deterministic Resend idempotency key; a provider-confirmed replay can
-  therefore restore `sent` evidence without a duplicate message. No background
-  retry is introduced, and actor confirmation remains limited to a persisted
-  `sending` state after external reconciliation.
+  acquires the publication, invitation, delivery, and contact locks, validates
+  the canonical recipient and current material release, and commits exactly one
+  `pending -> sending` claim before transport. It then reacquires the same locks,
+  revalidates every condition, and retains them through the bounded provider
+  result and `sent` confirmation. A failed/unknown sender call or a database
+  failure after provider acceptance leaves durable `sending` reconciliation
+  evidence; later invocations do not cross the provider boundary again. No
+  background retry is introduced, and actor confirmation remains limited to a
+  persisted `sending` state after external reconciliation. Acceptance and
+  revocation cannot race through that state.
 - Published Terms versions receive a database-assigned positive
   `publication_order` under the existing publication advisory lock. Historical
   releases are backfilled deterministically with the selected current release
@@ -219,21 +233,102 @@ Required when this diff changes a guard, validator, normalizer, resolver,
 router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
-- Boundary path/seam: Terms-specific bearer formatting/authentication; private
-  issue/revoke/readiness/reconcile routes; Tracker-proxied session/acceptance;
-  invitation/acceptance/delivery database transitions.
-- Replaced-path behaviors: none. Existing profile-onboarding tokens and Terms
-  publication remain separate and unchanged.
-- Guard-relevant fields: requestKey, contactId, locale, invitation UUID,
-  delivery UUID, token grammar/MAC/key fingerprint, signerName,
-  termsAccepted, additionalWorkAccepted, trusted client-IP header, actor
-  id/name, database-derived audience/email/current version/timestamps, delivery
-  status.
-- Caller x input shape: authenticated office/Tracker bearer plus actor headers x
-  `{requestKey, contactId, locale}` for issue; bearer+actor x invitation for
-  revoke; bearer x contact for readiness; bearer x raw Terms token for session;
-  bearer+raw Terms token+two strict `true` acknowledgements+typed signer+trusted
-  IP header for acceptance; bearer+actor x `sending` delivery for reconciliation.
+- Boundary path/seam: _terms_authority_dependency
+- Replaced-path behaviors: none; this adds the slim-app Terms authority
+  dependency without replacing another dependency resolver.
+- Guard-relevant fields: initialized EOM funnel pool and migration-396 schema
+  readiness.
+- Caller x input shape: mounted slim EOM app x injected authority service.
+
+- Boundary path/seam: _authenticated_terms_token
+- Replaced-path behaviors: none; the existing profile-onboarding token remains
+  a separate bearer domain.
+- Guard-relevant fields: raw Terms token, current/previous HMAC secret, token
+  grammar, MAC, invitation UUID, and key fingerprint.
+- Caller x input shape: authenticated Tracker proxy x raw Terms token for
+  session or acceptance.
+
+- Boundary path/seam: EOMTermsAcceptanceValidationError
+- Replaced-path behaviors: none; this adds a typed failure for the new Terms
+  boundary.
+- Guard-relevant fields: request key, locale, UUIDs, acknowledgements, signer,
+  actor, trusted client IP, email, and receipt identity text.
+- Caller x input shape: malformed private/public Terms input x closed validation
+  error before database mutation.
+
+- Boundary path/seam: AuthenticatedEOMTermsToken
+- Replaced-path behaviors: none; no existing token value object is reused or
+  changed.
+- Guard-relevant fields: authenticated invitation UUID and signing-key
+  fingerprint only; the raw bearer is excluded.
+- Caller x input shape: successful Terms token authentication x closed internal
+  identity value.
+
+- Boundary path/seam: authenticate_eom_terms_token
+- Replaced-path behaviors: none; profile-onboarding authentication stays
+  separate and unchanged.
+- Guard-relevant fields: token prefix/grammar, UUID, MAC, current key, previous
+  key, and derived fingerprint.
+- Caller x input shape: raw Terms bearer x current/previous configured key.
+
+- Boundary path/seam: _require_authenticated_token
+- Replaced-path behaviors: none; this narrows service entry to the authenticated
+  Terms token type.
+- Guard-relevant fields: runtime token type, invitation UUID, and key
+  fingerprint.
+- Caller x input shape: service session/accept call x authenticated internal
+  token value.
+
+- Boundary path/seam: eom_terms_authority_schema_ready
+- Replaced-path behaviors: none; migration-396 readiness gains exact
+  compatibility with migration 397 when installed.
+- Guard-relevant fields: Terms authority relations, triggers, guard functions,
+  ownership, runtime privileges, and optional publication-order guard.
+- Caller x input shape: EOM authority service x current database schema.
+
+- Boundary path/seam: eom_terms_authority_schema_ready#2
+- Replaced-path behaviors: none; this is another changed hunk of the same schema
+  readiness boundary.
+- Guard-relevant fields: Terms authority relations, triggers, functions,
+  ownership, and runtime privileges.
+- Caller x input shape: EOM authority service x incomplete schema.
+
+- Boundary path/seam: eom_terms_authority_schema_ready#3
+- Replaced-path behaviors: none; this is another changed hunk of the same schema
+  readiness boundary.
+- Guard-relevant fields: publication-order column, assignment trigger, and guard
+  ownership when migration 397 exists.
+- Caller x input shape: EOM authority service x migration-396-only or
+  migration-396-plus-397 schema.
+
+- Boundary path/seam: eom_terms_authority_schema_ready#4
+- Replaced-path behaviors: none; this is another changed hunk of the same schema
+  readiness boundary.
+- Guard-relevant fields: owner-role membership and guard-function execution
+  privileges.
+- Caller x input shape: Atlas runtime role x guarded Terms authority schema.
+
+- Boundary path/seam: eom_terms_authority_schema_ready#5
+- Replaced-path behaviors: none; this is another changed hunk of the same schema
+  readiness boundary.
+- Guard-relevant fields: forbidden table-wide mutation and function replacement
+  privileges.
+- Caller x input shape: Atlas runtime role x authority object privilege matrix.
+
+- Boundary path/seam: eom_terms_authority_schema_ready#6
+- Replaced-path behaviors: none; this is another changed hunk of the same schema
+  readiness boundary.
+- Guard-relevant fields: exact column grants for draft creation and publication
+  transitions.
+- Caller x input shape: Atlas runtime role x admitted authority writes.
+
+- Boundary path/seam: EOMTermsAuthority
+- Replaced-path behaviors: none; this adds the Terms publication authority and
+  leaves customer acceptance in its separate service.
+- Guard-relevant fields: immutable bilingual documents, version labels, material
+  flag, content hash, publication order, actor evidence, and current selection.
+- Caller x input shape: authenticated operator draft/publish request x guarded
+  migration-396 authority state.
 
 ### Deployed-config probing
 
@@ -254,9 +349,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   `effingham_maids`; no caller-supplied tenant, audience, recipient, timestamp,
   or Terms version is accepted.
 - Side-effect ordering: issue preflights config and email transport before the
-  invitation transaction; acceptance commits immutable evidence and a pending
-  executed-copy delivery before any email call; both email calls claim their
-  persisted payload before transport and confirm only after transport
+  invitation transaction; acceptance commits immutable evidence and a newly
+  created executed-copy delivery before any email call; both email calls
+  durably commit their persisted payload as `sending` before transport,
+  revalidate under the canonical locks, and confirm only after transport
   acceptance.
 
 ### Files touched
@@ -286,10 +382,12 @@ relations. Invitation identity is a UUID signed in a Terms-specific HMAC domain;
 the database stores only that UUID and the admitting key fingerprint. The issue
 transaction locks Terms publication, derives the account audience/email from
 `contacts`, pins the current immutable version, persists the exact selected
-email payload, and replays only an identical request key. A single conditional
-delivery claim holds publication/invitation locks while it calls the established
-slim-profile Resend sender with a stable idempotency key and persists either the
-provider message id or its explicit idempotent-replay result.
+email payload, and replays only an identical request key. A durable conditional
+delivery claim commits before the provider boundary; a second transaction
+revalidates and holds publication/invitation/delivery/contact locks while it
+calls the established slim-profile Resend sender with a stable idempotency key
+and persists either the provider message id or its explicit idempotent-replay
+result.
 
 Session and acceptance authenticate the bearer before database access and bind
 the verified key fingerprint to the invitation. Acceptance uses database time,
@@ -317,10 +415,10 @@ funnel pool used by the authority.
 - A newly issued link expires after 30 days using database time. This bounds
   bearer lifetime without adding caller-controlled expiry or another deployment
   setting; a fresh actor-audited invitation is required after expiry.
-- Delivery uncertainty from the sender remains explicit `sending` evidence and
-  requires operator reconciliation. Confirmation failure instead rolls the
-  transaction back for a later explicit, provider-idempotent replay; there is
-  no autonomous retry after an ambiguous external side effect.
+- Delivery uncertainty from the sender or confirmation database remains
+  explicit `sending` evidence and requires operator reconciliation. There is no
+  autonomous or later-call provider retry after an ambiguous external side
+  effect.
 - This provider can send only when an authenticated private caller explicitly
   issues an invitation. It adds no scheduler, bulk send, or production data
   mutation.
@@ -346,9 +444,10 @@ Parked hardening: none.
 
 - Passed locally after review fixes: the focused acceptance, authority, and
   controlled migration-runner suite against disposable PostgreSQL
-  (`197 passed, 1 skipped`), targeted Ruff and Ruff format checks, Python
+  (`206 passed, 1 skipped`), targeted Ruff and Ruff format checks, Python
   compilation, and `git diff --check`.
-- Pending: synchronized-plan check and mechanical pre-push review.
+- Passed: synchronized-plan, boundary-enumeration, deployed-config, and
+  PR-side consistency checks.
 - Hosted: EOM pipeline disposable-PostgreSQL proof and GitHub-only Unit Gate.
 
 ## Estimated diff size
@@ -360,16 +459,16 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
 | `atlas_brain/eom_api/funnel.py` | 369 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_terms_acceptance.py` | 1842 |
-| `atlas_brain/services/eom_terms_authority.py` | 102 |
-| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 988 |
+| `atlas_brain/services/eom_terms_acceptance.py` | 1930 |
+| `atlas_brain/services/eom_terms_authority.py` | 108 |
+| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 1023 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
-| `ops` | 3 |
-| `plans/PR-EOM-Terms-Acceptance.md` | 375 |
-| `scripts/apply_eom_first_clean_completion_schema.py` | 23 |
+| `ops` | 5 |
+| `plans/PR-EOM-Terms-Acceptance.md` | 474 |
+| `scripts/apply_eom_first_clean_completion_schema.py` | 24 |
 | `scripts/apply_eom_terms_acceptance_schema.py` | 42 |
-| `tests/test_agent_operations_contract.py` | 30 |
-| `tests/test_eom_first_clean_completion_dba_runner.py` | 94 |
-| `tests/test_eom_terms_acceptance.py` | 1499 |
-| `tests/test_migrations_runner.py` | 2 |
-| **Total** | **5441** |
+| `tests/test_agent_operations_contract.py` | 35 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 95 |
+| `tests/test_eom_terms_acceptance.py` | 1738 |
+| `tests/test_migrations_runner.py` | 3 |
+| **Total** | **5918** |
