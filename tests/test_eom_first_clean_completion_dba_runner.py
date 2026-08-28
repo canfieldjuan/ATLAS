@@ -16,6 +16,7 @@ from pydantic import ValidationError
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "apply_eom_first_clean_completion_schema.py"
 TERMS_SCRIPT = ROOT / "scripts" / "apply_eom_terms_authority_schema.py"
+TERMS_ACCEPTANCE_SCRIPT = ROOT / "scripts" / "apply_eom_terms_acceptance_schema.py"
 
 
 def _load_runner_module() -> ModuleType:
@@ -34,6 +35,19 @@ def _load_terms_runner_module() -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(TERMS_SCRIPT.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+def _load_terms_acceptance_runner_module() -> ModuleType:
+    module_name = "test_eom_terms_acceptance_dba_runner_script"
+    spec = importlib.util.spec_from_file_location(module_name, TERMS_ACCEPTANCE_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(TERMS_ACCEPTANCE_SCRIPT.parent))
     try:
         spec.loader.exec_module(module)
     finally:
@@ -74,7 +88,7 @@ class _Connection:
     def transaction(self) -> _Transaction:
         return _Transaction(self)
 
-    async def fetchval(self, query: str, *_args: object) -> object:
+    async def fetchval(self, query: str, *args: object) -> object:
         if "pg_try_advisory_xact_lock" in query:
             self._state.advisory_lock_attempts = (
                 getattr(self._state, "advisory_lock_attempts", 0) + 1
@@ -112,6 +126,10 @@ class _Connection:
         if "to_regclass" in query:
             return self._state.migrations_table_exists
         if "schema_migrations" in query:
+            migration_records = getattr(self._state, "migration_records", None)
+            if migration_records is not None:
+                assert len(args) == 1
+                return bool(migration_records.get(str(args[0]), False))
             return self._state.migration_recorded
         raise AssertionError(f"unexpected query: {query}")
 
@@ -293,6 +311,7 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
     [
         "394_eom_first_clean_completion_receipts",
         "396_eom_terms_authority",
+        "397_eom_terms_acceptance",
     ],
 )
 def test_runner_applies_only_its_named_migration_in_pinned_transaction(
@@ -311,6 +330,11 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
         schema_name=schema_name,
         migration_lock_results=[False, True],
     )
+    if migration_name == "397_eom_terms_acceptance":
+        state.migration_records = {
+            "396_eom_terms_authority": True,
+            "397_eom_terms_acceptance": False,
+        }
     runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
     dba_pool = _Pool(state)
     calls: list[tuple[object, tuple[str, ...]]] = []
@@ -331,6 +355,8 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
         assert state.transaction_depth == 1
         await observed_pool.release(dba_pool._connection)
         state.migration_recorded = True
+        if getattr(state, "migration_records", None) is not None:
+            state.migration_records[migration_name] = True
 
     async def sleep(delay: float) -> None:
         sleep_delays.append(delay)
@@ -382,6 +408,73 @@ def test_terms_entrypoint_pins_migration_396() -> None:
         terms_runner._terms_argv(
             ["--migration=394_eom_first_clean_completion_receipts"]
         )
+
+
+def test_terms_acceptance_entrypoint_pins_migration_397() -> None:
+    terms_runner = _load_terms_acceptance_runner_module()
+
+    argv = terms_runner._terms_acceptance_argv(["--apply", "--json"])
+    assert argv == [
+        "--migration",
+        "397_eom_terms_acceptance",
+        "--apply",
+        "--json",
+    ]
+    shared_runner = sys.modules[terms_runner._main.__module__]
+    assert shared_runner._parse_args(argv).migration == "397_eom_terms_acceptance"
+    with pytest.raises(SystemExit):
+        terms_runner._terms_acceptance_argv(["--migration=396_eom_terms_authority"])
+
+
+def test_terms_acceptance_refuses_an_unrecorded_authority_predecessor(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        migration_recorded=False,
+        migration_records={
+            "396_eom_terms_authority": False,
+            "397_eom_terms_acceptance": False,
+        },
+        schema_name=schema_name,
+    )
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            assert schema_name is None
+            return runtime_pool
+        assert schema_name == "eom_canonical"
+        return dba_pool
+
+    args = runner._parse_args(["--migration", "397_eom_terms_acceptance"])
+    with pytest.raises(
+        RuntimeError,
+        match="Controlled predecessor 396_eom_terms_authority must be recorded",
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:

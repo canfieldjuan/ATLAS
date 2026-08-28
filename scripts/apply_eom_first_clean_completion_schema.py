@@ -43,7 +43,17 @@ DBA_SCHEMA_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV
 FUNNEL_DSN_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
 MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
 TERMS_AUTHORITY_MIGRATION_NAME = "396_eom_terms_authority"
-CONTROLLED_MIGRATION_NAMES = frozenset({MIGRATION_NAME, TERMS_AUTHORITY_MIGRATION_NAME})
+TERMS_ACCEPTANCE_MIGRATION_NAME = "397_eom_terms_acceptance"
+CONTROLLED_MIGRATION_NAMES = frozenset(
+    {
+        MIGRATION_NAME,
+        TERMS_AUTHORITY_MIGRATION_NAME,
+        TERMS_ACCEPTANCE_MIGRATION_NAME,
+    }
+)
+CONTROLLED_MIGRATION_PREDECESSORS = {
+    TERMS_ACCEPTANCE_MIGRATION_NAME: TERMS_AUTHORITY_MIGRATION_NAME,
+}
 
 
 @dataclass(frozen=True)
@@ -419,6 +429,18 @@ async def _run(
                 expected_target=runtime_target,
                 migration_name=migration_name,
             )
+            predecessor = CONTROLLED_MIGRATION_PREDECESSORS.get(migration_name)
+            if predecessor is not None:
+                _executor_is_superuser, predecessor_recorded = await _migration_state(
+                    pool,
+                    expected_target=runtime_target,
+                    migration_name=predecessor,
+                )
+                if not predecessor_recorded:
+                    raise RuntimeError(
+                        f"Controlled predecessor {predecessor} must be recorded "
+                        f"before {migration_name}"
+                    )
             result: dict[str, object] = {
                 "target": _safe_target_label(database_url, schema_name=schema_name),
                 "executor_is_superuser": executor_is_superuser,

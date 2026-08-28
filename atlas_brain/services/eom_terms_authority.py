@@ -23,7 +23,7 @@ _VERSION_LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_SECTION_LENGTH = 100_000
 _MAX_ACTOR_NAME_LENGTH = 128
 _MAX_SIGNED_BIGINT = 2**63 - 1
-_PUBLICATION_LOCK_KEY = "eom-terms-current-version"
+EOM_TERMS_PUBLICATION_LOCK_KEY = "eom-terms-current-version"
 
 
 class EOMTermsAuthorityError(Exception):
@@ -873,7 +873,7 @@ class EOMTermsAuthority:
             async with self.pool.transaction() as conn:
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-                    _PUBLICATION_LOCK_KEY,
+                    EOM_TERMS_PUBLICATION_LOCK_KEY,
                 )
                 publication_timestamp = await conn.fetchval("SELECT clock_timestamp()")
                 row = await conn.fetchrow(
