@@ -53,6 +53,9 @@ DATABASE_INSPECTIONS = {
         "FROM public.schema_migrations"
     ),
 }
+CONTROLLED_DATABASE_OPERATIONS = {
+    "eom-terms-authority": "apply_eom_terms_authority_schema.py",
+}
 TEST_DATABASE_URL_KEYS = (
     "ATLAS_MIGRATION_TEST_DATABASE_URL",
     "ATLAS_RECEIVABLES_TEST_DATABASE_URL",
@@ -352,6 +355,30 @@ def run_database_inspection(
     return exec_command(command, env=env)
 
 
+def run_controlled_database_operation(name: str, mode: str) -> int:
+    """Dispatch one allowlisted preflight/apply script from a real worktree."""
+
+    script_name = CONTROLLED_DATABASE_OPERATIONS.get(name)
+    if script_name is None:
+        raise OpsError(f"unknown controlled database operation: {name}")
+    if mode not in ("preflight", "apply"):
+        raise OpsError(f"usage: ./ops db controlled {name} {{preflight|apply}}")
+    root = worktree_root()
+    if root is None:
+        raise OpsError(
+            "controlled database operations require a normal worktree, "
+            "not the shared/bare root"
+        )
+    command = [
+        str(python_command()),
+        str(root / "scripts" / script_name),
+        "--json",
+    ]
+    if mode == "apply":
+        command.append("--apply")
+    return exec_command(command, cwd=root)
+
+
 def database_probe() -> tuple[str, str]:
     try:
         result = run_database_inspection("connectivity", capture=True)
@@ -532,7 +559,9 @@ def env_command(args: list[str]) -> int:
 
 def db_command(args: list[str]) -> int:
     if not args:
-        raise OpsError("usage: ./ops db {status|inspect NAME|migrations}")
+        raise OpsError(
+            "usage: ./ops db {status|inspect NAME|migrations|controlled NAME MODE}"
+        )
     action = args[0]
     if action == "status":
         state, detail = database_probe()
@@ -548,9 +577,17 @@ def db_command(args: list[str]) -> int:
         result = run_database_inspection("migrations")
         assert isinstance(result, int)
         return result
+    if action == "controlled":
+        if len(args) != 3:
+            raise OpsError(
+                "usage: ./ops db controlled eom-terms-authority {preflight|apply}"
+            )
+        return run_controlled_database_operation(args[1], args[2])
     if action in ("query", "write", "migrate", "rollback", "drop"):
         raise OpsError("arbitrary SQL and mutating database operations are intentionally not exposed by ./ops")
-    raise OpsError("usage: ./ops db {status|inspect NAME|migrations}")
+    raise OpsError(
+        "usage: ./ops db {status|inspect NAME|migrations|controlled NAME MODE}"
+    )
 
 
 def container_status() -> None:
@@ -863,6 +900,9 @@ Read-only discovery and inspection:
   logs {brain|container NAME|frontend [--since 1h] [--limit N] [--follow]}
   ci {status [LIMIT]|run RUN_ID [--log-failed]}
 
+Guarded database changes:
+  db controlled eom-terms-authority {preflight|apply}
+
 Local/test execution:
   test unit  # GitHub-only; prints the canonical hosted gate and exits
   test focused <pytest target/args...>
@@ -870,8 +910,9 @@ Local/test execution:
   test frontend PACKAGE [SCRIPT]
   test local-review
 
-Production deploys, database writes, migrations, and restarts are intentionally
-not exposed. Read .agent/runbooks/ before performing them manually.
+Other production deploys, database writes, migrations, and restarts are
+intentionally not exposed. Read .agent/runbooks/ before using the one guarded
+controlled-migration operation above or performing another change manually.
 """
     )
 

@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "apply_eom_first_clean_completion_schema.py"
+TERMS_SCRIPT = ROOT / "scripts" / "apply_eom_terms_authority_schema.py"
 
 
 def _load_runner_module() -> ModuleType:
@@ -24,6 +25,19 @@ def _load_runner_module() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
+    return module
+
+
+def _load_terms_runner_module() -> ModuleType:
+    module_name = "test_eom_terms_authority_dba_runner_script"
+    spec = importlib.util.spec_from_file_location(module_name, TERMS_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(TERMS_SCRIPT.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
     return module
 
 
@@ -274,8 +288,16 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
     assert dba_pool.closed is True
 
 
+@pytest.mark.parametrize(
+    "migration_name",
+    [
+        "394_eom_first_clean_completion_receipts",
+        "396_eom_terms_authority",
+    ],
+)
 def test_runner_applies_only_its_named_migration_in_pinned_transaction(
     monkeypatch,
+    migration_name: str,
 ) -> None:
     runner = _load_runner_module()
     runtime_database_url = "postgresql://runtime@example.test/atlas"
@@ -316,7 +338,7 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
 
     monkeypatch.setattr(runner.asyncio, "sleep", sleep)
 
-    args = runner._parse_args(["--apply"])
+    args = runner._parse_args(["--apply", "--migration", migration_name])
     result = asyncio.run(
         runner._run(
             args,
@@ -331,7 +353,7 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
         )
     )
 
-    assert [only for _pool, only in calls] == [(runner.MIGRATION_NAME,)]
+    assert [only for _pool, only in calls] == [(migration_name,)]
     assert result["migration_recorded"] is True
     assert result["applied"] is True
     assert runtime_pool.closed is True
@@ -342,6 +364,24 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
     assert state.migration_lock_unlocks == 1
     assert state.migration_lock_depth == 0
     assert sleep_delays == [0.2]
+
+
+def test_terms_entrypoint_pins_migration_396() -> None:
+    terms_runner = _load_terms_runner_module()
+
+    argv = terms_runner._terms_argv(["--apply", "--json"])
+    assert argv == [
+        "--migration",
+        "396_eom_terms_authority",
+        "--apply",
+        "--json",
+    ]
+    shared_runner = sys.modules[terms_runner._main.__module__]
+    assert shared_runner._parse_args(argv).migration == "396_eom_terms_authority"
+    with pytest.raises(SystemExit):
+        terms_runner._terms_argv(
+            ["--migration=394_eom_first_clean_completion_receipts"]
+        )
 
 
 def test_runner_rejects_missing_typed_dsn_before_pool(monkeypatch) -> None:

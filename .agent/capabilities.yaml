@@ -3,7 +3,7 @@ schema_version: 1
 project:
   name: Atlas
   repository: canfieldjuan/ATLAS
-  verified_at: "2026-08-25"
+  verified_at: "2026-08-27"
   operational_entrypoint: ./ops doctor
   source_of_truth:
     - ./ops doctor
@@ -166,8 +166,19 @@ database:
   migrations:
     provider: custom SQL runner
     path: atlas_brain/storage/migrations
-    invocation: automatic during full application startup
+    invocation: automatic during full application startup except migrations registered as controlled DBA-only
     warning: the full chain is not fresh-database applicable because later migrations depend on out-of-band product_metadata
+  controlled_migrations:
+    eom_terms_authority:
+      status: guarded-preflight-and-apply
+      migration: 396_eom_terms_authority
+      preflight: ./ops db controlled eom-terms-authority preflight
+      apply: ./ops db controlled eom-terms-authority apply
+      implementation: scripts/apply_eom_terms_authority_schema.py
+      authentication: protected direct PostgreSQL-superuser DSN plus canonical EOM funnel runtime configuration
+      current_session_capable: false-until-the-protected-DBA-configuration-is-exported
+      mutation: preflight is read-only; apply creates guard-owned Terms authority objects and records migration 396
+      rollback: stop Terms writers and consumers, retain immutable history and the migration record, and follow .agent/runbooks/database.md
   mutation: fixed inspections are read-only; app startup and integration tests can mutate
   likely_failures:
     - assuming root Docker Compose provides PostgreSQL
