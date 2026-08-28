@@ -82,14 +82,17 @@ evidence.
   provider accepted but database confirmation failed; contact identity was not
   revalidated or locked through transport; readiness still selected among
   acceptances by wall-clock time; and receipt identity fields admitted embedded
-  line controls.
+  line controls. A later review proved that the shared contact comparison was
+  still enforced only for invitation delivery, allowing an executed-copy
+  receipt to target a stale address after acceptance.
 - Revised requirement: delivery first commits a durable `pending -> sending`
   claim before crossing the provider boundary. It then reacquires the
   publication, invitation, delivery, and canonical contact locks, revalidates
-  material currency and contact identity, and retains those locks through the
-  bounded provider outcome and database confirmation. Any uncertain provider
-  or confirmation result remains `sending` and is never automatically retried;
-  acceptance and revocation reject that reconciliation state. Migration 397
+  material currency and contact identity for both invitation and executed-copy
+  delivery, and retains those locks through the bounded provider outcome and
+  database confirmation. Any uncertain provider or confirmation result remains
+  `sending` and is never automatically retried; acceptance and revocation reject
+  that reconciliation state. Migration 397
   adds a guard-owned monotonic publication order assigned under the existing
   publication lock, every later-material decision and readiness selection uses
   that order, and a sent transition admits a missing provider message id only
@@ -169,8 +172,9 @@ Max files: 18
     timestamps contradict the database-owned publication order.
   - Invitation and executed-copy transport tests assert persisted body equality
     with the selected published audience/locale, separate acknowledgement
-    evidence, deterministic Resend idempotency keys, and an acceptance that
-    remains committed when receipt delivery needs reconciliation.
+    evidence, deterministic Resend idempotency keys, rejection after canonical
+    contact drift for either delivery kind, and an acceptance that remains
+    committed when receipt delivery needs reconciliation.
   - `./ops db controlled eom-terms-acceptance preflight|apply` dispatches only
     migration 397 after migration 396; capability/runbook evidence requires
     both migration receipts before deploying these routes and retains every
@@ -208,15 +212,16 @@ Max files: 18
   replay returns the existing immutable row.
 - Delivery payload creation commits with its invitation/acceptance. Delivery
   acquires the publication, invitation, delivery, and contact locks, validates
-  the canonical recipient and current material release, and commits exactly one
-  `pending -> sending` claim before transport. It then reacquires the same locks,
-  revalidates every condition, and retains them through the bounded provider
-  result and `sent` confirmation. A failed/unknown sender call or a database
-  failure after provider acceptance leaves durable `sending` reconciliation
-  evidence; later invocations do not cross the provider boundary again. No
-  background retry is introduced, and actor confirmation remains limited to a
-  persisted `sending` state after external reconciliation. Acceptance and
-  revocation cannot race through that state.
+  canonical recipient for both delivery kinds and current material release for
+  invitations, and commits exactly one `pending -> sending` claim before
+  transport. It then reacquires the same locks, revalidates every condition,
+  and retains them through the bounded provider result and `sent` confirmation.
+  A failed/unknown sender call or a database failure after provider acceptance
+  leaves durable `sending` reconciliation evidence; later invocations do not
+  cross the provider boundary again. No background retry is introduced, and
+  actor confirmation remains limited to a persisted `sending` state after
+  external reconciliation. Acceptance and revocation cannot race through that
+  state.
 - Published Terms versions receive a database-assigned positive
   `publication_order` under the existing publication advisory lock. Historical
   releases are backfilled deterministically with the selected current release
@@ -384,10 +389,10 @@ transaction locks Terms publication, derives the account audience/email from
 `contacts`, pins the current immutable version, persists the exact selected
 email payload, and replays only an identical request key. A durable conditional
 delivery claim commits before the provider boundary; a second transaction
-revalidates and holds publication/invitation/delivery/contact locks while it
-calls the established slim-profile Resend sender with a stable idempotency key
-and persists either the provider message id or its explicit idempotent-replay
-result.
+revalidates the canonical contact for invitation and executed-copy delivery and
+holds publication/invitation/delivery/contact locks while it calls the
+established slim-profile Resend sender with a stable idempotency key and
+persists either the provider message id or its explicit idempotent-replay result.
 
 Session and acceptance authenticate the bearer before database access and bind
 the verified key fingerprint to the invitation. Acceptance uses database time,
@@ -461,14 +466,14 @@ Parked hardening: none.
 | `atlas_brain/main_eom.py` | 1 |
 | `atlas_brain/services/eom_terms_acceptance.py` | 1930 |
 | `atlas_brain/services/eom_terms_authority.py` | 108 |
-| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 1023 |
+| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 1045 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Terms-Acceptance.md` | 474 |
+| `plans/PR-EOM-Terms-Acceptance.md` | 479 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 24 |
 | `scripts/apply_eom_terms_acceptance_schema.py` | 42 |
 | `tests/test_agent_operations_contract.py` | 35 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 95 |
-| `tests/test_eom_terms_acceptance.py` | 1738 |
+| `tests/test_eom_terms_acceptance.py` | 1801 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **5918** |
+| **Total** | **6008** |

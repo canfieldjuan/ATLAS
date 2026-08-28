@@ -1129,6 +1129,7 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         contact_expired = uuid4()
         contact_delivery_lock = uuid4()
         contact_changed_before_delivery = uuid4()
+        contact_executed_copy_changed = uuid4()
         contact_replay = uuid4()
         contact_confirmation_failure = uuid4()
         await _seed_customer(dba, contact_id=contact_duplicate)
@@ -1161,6 +1162,11 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
             dba,
             contact_id=contact_changed_before_delivery,
             email="changed-before-delivery@example.com",
+        )
+        await _seed_customer(
+            dba,
+            contact_id=contact_executed_copy_changed,
+            email="executed-copy-before-change@example.com",
         )
         await _seed_customer(
             dba,
@@ -1311,6 +1317,63 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         }
         assert {result["idempotent"] for result in acceptance_results} == {False, True}
         assert len(receipt_sender.calls) == 1
+
+        executed_copy_invitation = await service.issue_and_send(
+            request_key="terms-request-executed-copy-contact-change",
+            contact_id=contact_executed_copy_changed,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        executed_copy_acceptance = await no_delivery.accept_and_send(
+            token=authenticate_eom_terms_token(
+                token=format_eom_terms_token(
+                    invitation_id=UUID(executed_copy_invitation["invitationId"]),
+                    secret=_SECRET,
+                ),
+                secret=_SECRET,
+            ),
+            signer_name="Executed Copy Signer",
+            terms_accepted=True,
+            additional_work_accepted=True,
+            client_ip="192.0.2.34",
+            sender=_RecordingSender(),
+        )
+        await dba.execute(
+            "UPDATE contacts SET email = $2 WHERE id = $1",
+            contact_executed_copy_changed,
+            "executed-copy-after-change@example.com",
+        )
+        executed_copy_sender = _RecordingSender()
+        with pytest.raises(
+            EOMTermsAcceptanceConflictError,
+            match="customer changed before Terms delivery",
+        ):
+            await service._deliver(
+                delivery_id=UUID(executed_copy_acceptance["deliveryId"]),
+                secret=None,
+                previous_secret=None,
+                sender=executed_copy_sender,
+            )
+        assert executed_copy_sender.calls == []
+        assert (
+            await dba.fetchval(
+                "SELECT status FROM eom_terms_deliveries WHERE id = $1",
+                UUID(executed_copy_acceptance["deliveryId"]),
+            )
+            == "pending"
+        )
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="executed-copy delivery is no longer valid",
+        ):
+            await dba.execute(
+                "UPDATE eom_terms_deliveries SET status = 'sending' WHERE id = $1",
+                UUID(executed_copy_acceptance["deliveryId"]),
+            )
 
         changed_invitation = await no_delivery.issue_and_send(
             request_key="terms-request-contact-changed-before-delivery",

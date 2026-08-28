@@ -789,6 +789,28 @@ BEGIN
         ) THEN
             RAISE EXCEPTION 'EOM Terms invitation delivery is no longer valid';
         END IF;
+        IF NEW.kind = 'executed_copy' AND NOT EXISTS (
+            SELECT 1
+              FROM eom_terms_acceptances AS acceptance
+              JOIN eom_terms_invitations AS invitation
+                ON invitation.id = acceptance.invitation_id
+               AND invitation.contact_id = acceptance.contact_id
+               AND invitation.audience = acceptance.audience
+               AND invitation.recipient_email = acceptance.recipient_email
+              JOIN contacts AS contact ON contact.id = acceptance.contact_id
+             WHERE acceptance.id = NEW.acceptance_id
+               AND acceptance.invitation_id = NEW.invitation_id
+               AND acceptance.recipient_email = NEW.recipient_email
+               AND contact.business_context_id = 'effingham_maids'
+               AND contact.contact_type = 'customer'
+               AND contact.status = 'active'
+               AND contact.customer_type = acceptance.audience
+               AND btrim(contact.full_name) = invitation.customer_name
+               AND lower(btrim(contact.email)) = acceptance.recipient_email
+        ) THEN
+            RAISE EXCEPTION
+                'EOM Terms executed-copy delivery is no longer valid';
+        END IF;
         NEW.claimed_at := clock_timestamp();
         RETURN NEW;
     END IF;

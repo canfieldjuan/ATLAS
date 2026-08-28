@@ -1029,6 +1029,14 @@ class EOMTermsAcceptanceService:
                     "Stored Terms delivery payload is invalid"
                 )
             kind = str(candidate["kind"])
+            if kind not in ("invitation", "executed_copy"):
+                raise EOMTermsAcceptanceUnavailableError(
+                    "Stored Terms delivery kind is invalid"
+                )
+            if not bool(candidate["invitation_contact_matches"]):
+                raise EOMTermsAcceptanceConflictError(
+                    "EOM customer changed before Terms delivery"
+                )
             if kind == "invitation":
                 if (
                     candidate["invitation_revoked_at"] is not None
@@ -1037,10 +1045,6 @@ class EOMTermsAcceptanceService:
                     or bool(candidate["invitation_materially_stale"])
                 ):
                     return None
-                if not bool(candidate["invitation_contact_matches"]):
-                    raise EOMTermsAcceptanceConflictError(
-                        "EOM customer changed before Terms delivery"
-                    )
                 if secret is None:
                     raise EOMTermsAcceptanceUnavailableError(
                         "Terms invitation signing key is unavailable"
@@ -1063,10 +1067,6 @@ class EOMTermsAcceptanceService:
                     body=body,
                     link=link,
                     locale=str(candidate["locale"]),
-                )
-            elif kind != "executed_copy":
-                raise EOMTermsAcceptanceUnavailableError(
-                    "Stored Terms delivery kind is invalid"
                 )
             return kind, body
 
