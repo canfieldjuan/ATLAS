@@ -43,7 +43,7 @@ legal-version API.
 ## Scope (this PR)
 
 Ownership lane: eom-onboarding-terms
-Slice phase: Terms authority
+Slice phase: Vertical slice
 
 1. Persist draft/published Terms versions containing exactly residential and
    commercial documents in English and Spanish, each with Terms body, Services
