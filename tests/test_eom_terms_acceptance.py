@@ -1096,6 +1096,55 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
             commercial_readiness["acceptedVersionId"] == material_release["versionId"]
         )
 
+        non_material_release = await _publish(
+            authority,
+            label="2026.4",
+            material=False,
+            marker="non-material-after-reclassification",
+        )
+        later_commercial_invitation = await service.issue_and_send(
+            request_key="terms-request-later-non-material-commercial",
+            contact_id=_CONTACT_ID,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        await service.accept_and_send(
+            token=authenticate_eom_terms_token(
+                token=format_eom_terms_token(
+                    invitation_id=UUID(later_commercial_invitation["invitationId"]),
+                    secret=_SECRET,
+                ),
+                secret=_SECRET,
+            ),
+            signer_name="Later Commercial Signer",
+            terms_accepted=True,
+            additional_work_accepted=True,
+            client_ip="192.0.2.36",
+            sender=_RecordingSender(),
+        )
+        await dba.execute(
+            "UPDATE contacts SET customer_type = 'residential' WHERE id = $1",
+            _CONTACT_ID,
+        )
+        returned_audience_readiness = await service.get_readiness(
+            contact_id=_CONTACT_ID
+        )
+        assert returned_audience_readiness["ready"] is True
+        assert returned_audience_readiness["reason"] == "accepted"
+        assert returned_audience_readiness["audience"] == "residential"
+        assert (
+            returned_audience_readiness["currentVersionId"]
+            == non_material_release["versionId"]
+        )
+        assert (
+            returned_audience_readiness["acceptedVersionId"]
+            == material_release["versionId"]
+        )
+
         with pytest.raises(EOMTermsAcceptanceConflictError):
             await service.revoke(
                 invitation_id=invitation["invitationId"],
@@ -1192,6 +1241,7 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         contact_executed_copy_changed = uuid4()
         contact_replay = uuid4()
         contact_confirmation_failure = uuid4()
+        contact_acceptance_confirmation_failure = uuid4()
         await _seed_customer(dba, contact_id=contact_duplicate)
         await _seed_customer(
             dba,
@@ -1237,6 +1287,11 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
             dba,
             contact_id=contact_confirmation_failure,
             email="confirmation-failure@example.com",
+        )
+        await _seed_customer(
+            dba,
+            contact_id=contact_acceptance_confirmation_failure,
+            email="acceptance-confirmation-failure@example.com",
         )
         await dba.execute(
             "UPDATE contacts SET status = 'archived' WHERE id = $1",
@@ -1441,6 +1496,101 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
                 "UPDATE eom_terms_deliveries SET status = 'sending' WHERE id = $1",
                 UUID(executed_copy_acceptance["deliveryId"]),
             )
+
+        acceptance_confirmation_invitation = await service.issue_and_send(
+            request_key="terms-request-acceptance-confirmation-failure",
+            contact_id=contact_acceptance_confirmation_failure,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        acceptance_confirmation_token = authenticate_eom_terms_token(
+            token=format_eom_terms_token(
+                invitation_id=UUID(acceptance_confirmation_invitation["invitationId"]),
+                secret=_SECRET,
+            ),
+            secret=_SECRET,
+        )
+        pending_acceptance = await no_delivery.accept_and_send(
+            token=acceptance_confirmation_token,
+            signer_name="Confirmation Failure Signer",
+            terms_accepted=True,
+            additional_work_accepted=True,
+            client_ip="192.0.2.37",
+            sender=_RecordingSender(),
+        )
+
+        class _AcceptanceConfirmationFailureService(EOMTermsAcceptanceService):
+            async def _deliver(self, **kwargs: Any) -> tuple[dict[str, Any], bool]:
+                await dba.execute(
+                    """
+                    CREATE FUNCTION test_reject_eom_terms_acceptance_confirmation()
+                    RETURNS TRIGGER
+                    LANGUAGE plpgsql
+                    AS $$
+                    BEGIN
+                        IF OLD.status = 'sending' AND NEW.status = 'sent' THEN
+                            RAISE EXCEPTION
+                                'injected acceptance confirmation failure';
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$;
+                    CREATE TRIGGER trg_test_reject_eom_terms_acceptance_confirmation
+                    BEFORE UPDATE ON eom_terms_deliveries
+                    FOR EACH ROW EXECUTE FUNCTION
+                        test_reject_eom_terms_acceptance_confirmation();
+                    """
+                )
+                try:
+                    return await super()._deliver(**kwargs)
+                finally:
+                    await dba.execute(
+                        """
+                        DROP TRIGGER
+                            trg_test_reject_eom_terms_acceptance_confirmation
+                            ON eom_terms_deliveries;
+                        DROP FUNCTION
+                            test_reject_eom_terms_acceptance_confirmation();
+                        """
+                    )
+
+        confirmation_failure_service = _AcceptanceConfirmationFailureService(pool=pool)
+        acceptance_confirmation_sender = _RecordingSender()
+        accepted_after_confirmation_failure = (
+            await confirmation_failure_service.accept_and_send(
+                token=acceptance_confirmation_token,
+                signer_name="Confirmation Failure Signer",
+                terms_accepted=True,
+                additional_work_accepted=True,
+                client_ip="192.0.2.37",
+                sender=acceptance_confirmation_sender,
+            )
+        )
+        assert (
+            accepted_after_confirmation_failure["acceptanceId"]
+            == pending_acceptance["acceptanceId"]
+        )
+        assert accepted_after_confirmation_failure["idempotent"] is True
+        assert accepted_after_confirmation_failure["deliveryError"] is True
+        assert (
+            accepted_after_confirmation_failure["deliveryNeedsReconciliation"] is True
+        )
+        assert (
+            accepted_after_confirmation_failure["executedCopyDeliveryStatus"]
+            == "sending"
+        )
+        assert len(acceptance_confirmation_sender.calls) == 1
+        assert (
+            await dba.fetchval(
+                "SELECT status FROM eom_terms_deliveries WHERE id = $1",
+                UUID(pending_acceptance["deliveryId"]),
+            )
+            == "sending"
+        )
 
         changed_invitation = await no_delivery.issue_and_send(
             request_key="terms-request-contact-changed-before-delivery",

@@ -1682,12 +1682,33 @@ class EOMTermsAcceptanceService:
                     previous_secret=None,
                     sender=sender,
                 )
-            except EOMTermsAcceptanceConflictError:
+            except EOMTermsAcceptanceError:
                 logger.warning(
                     "Accepted EOM Terms receipt delivery requires reconciliation",
                     extra={"acceptance_id": str(acceptance["acceptance_id"])},
+                    exc_info=True,
                 )
                 delivery_error = True
+                try:
+                    async with self.pool.transaction() as connection:
+                        current_delivery_status = await connection.fetchval(
+                            "SELECT status FROM eom_terms_deliveries WHERE id = $1",
+                            UUID(str(acceptance["delivery_id"])),
+                        )
+                except (
+                    EOMTermsAcceptanceError,
+                    asyncpg.PostgresError,
+                    OSError,
+                    TimeoutError,
+                ):
+                    logger.warning(
+                        "Committed EOM Terms receipt status could not be refreshed",
+                        extra={"acceptance_id": str(acceptance["acceptance_id"])},
+                        exc_info=True,
+                    )
+                else:
+                    if current_delivery_status in EOM_TERMS_DELIVERY_STATUSES:
+                        result_row["delivery_status"] = current_delivery_status
             else:
                 result_row["delivery_status"] = delivery["status"]
         else:
@@ -1890,8 +1911,8 @@ class EOMTermsAcceptanceService:
                       ON delivery.acceptance_id = acceptance.id
                      AND delivery.kind = 'executed_copy'
                     WHERE acceptance.contact_id = $1
-                    ORDER BY version.publication_order DESC,
-                             (acceptance.audience = $2) DESC,
+                    ORDER BY (acceptance.audience = $2) DESC,
+                             version.publication_order DESC,
                              acceptance.id DESC
                     LIMIT 1
                     """,

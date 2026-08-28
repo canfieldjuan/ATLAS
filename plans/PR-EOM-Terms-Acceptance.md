@@ -90,7 +90,10 @@ evidence.
   readiness used wall-clock ordering to choose between same-version
   acceptances for different audiences; and a separate publication-order
   trigger changed the predecessor release's exact five-trigger authority
-  boundary, breaking rolling-deploy and application-rollback compatibility.
+  boundary, breaking rolling-deploy and application-rollback compatibility. A
+  subsequent review showed that the post-commit handler still covered only one
+  delivery-error subtype, and that version-first readiness ordering could hide
+  valid current-audience evidence across a later non-material release.
 - Revised requirement: delivery first commits a durable `pending -> sending`
   claim before crossing the provider boundary. It then reacquires the
   publication, invitation, delivery, and canonical contact locks, revalidates
@@ -98,14 +101,15 @@ evidence.
   delivery, and retains those locks through the bounded provider outcome and
   database confirmation. Any uncertain provider or confirmation result remains
   `sending` and is never automatically retried; acceptance and revocation reject
-  that reconciliation state. A delivery-only conflict after acceptance commit
-  returns the immutable acceptance with explicit pending/error reconciliation
-  state instead of falsely reporting that acceptance failed. Migration 397
+  that reconciliation state. Every delivery-domain failure after acceptance
+  commit returns the immutable acceptance with explicit error/reconciliation
+  state and best-effort persisted delivery status instead of falsely reporting
+  that acceptance failed. Migration 397
   adds a guard-owned monotonic publication order inside the existing protected
   version trigger, preserving the predecessor's exact five-trigger boundary;
-  every later-material decision uses that order, and same-version readiness
-  prefers evidence for the contact's current audience rather than wall-clock
-  order. A sent transition admits a missing provider message id only
+  every later-material decision uses that order, and readiness first prefers
+  evidence for the contact's current audience before choosing its newest
+  publication order. A sent transition admits a missing provider message id only
   when the established sender explicitly reports
   `idempotent_replay = true`. Shared signer/customer/actor text rejects every
   non-printable line-control character before it can enter receipt evidence.
@@ -180,13 +184,15 @@ Max files: 18
   - Readiness tests prove acceptance of the current or an older release followed
     only by non-material releases is ready, and any later material release is
     `reacceptance_required`, including when release or acceptance wall-clock
-    timestamps contradict the database-owned publication order; same-version
-    acceptance for the current audience wins even when its clock is earlier.
+    timestamps contradict the database-owned publication order; acceptance for
+    the current audience wins even when a different audience accepted a later
+    non-material release or its clock is newer.
   - Invitation and executed-copy transport tests assert persisted body equality
     with the selected published audience/locale, separate acknowledgement
     evidence, deterministic Resend idempotency keys, rejection after canonical
     contact drift for either delivery kind, and an acceptance that remains
-    committed when receipt delivery needs reconciliation.
+    successfully returned with persisted delivery state when contact conflict
+    or database confirmation failure requires receipt reconciliation.
   - `./ops db controlled eom-terms-acceptance preflight|apply` dispatches only
     migration 397 after migration 396; capability/runbook evidence requires
     both migration receipts before deploying these routes and retains every
@@ -476,16 +482,16 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
 | `atlas_brain/eom_api/funnel.py` | 369 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_terms_acceptance.py` | 1939 |
+| `atlas_brain/services/eom_terms_acceptance.py` | 1960 |
 | `atlas_brain/services/eom_terms_authority.py` | 4 |
 | `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 1054 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Terms-Acceptance.md` | 491 |
+| `plans/PR-EOM-Terms-Acceptance.md` | 497 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 24 |
 | `scripts/apply_eom_terms_acceptance_schema.py` | 42 |
 | `tests/test_agent_operations_contract.py` | 35 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 95 |
-| `tests/test_eom_terms_acceptance.py` | 1869 |
+| `tests/test_eom_terms_acceptance.py` | 2019 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **6002** |
+| **Total** | **6179** |
