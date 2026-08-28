@@ -196,12 +196,114 @@ BEGIN
           )) IS NOT NULL
        OR to_regprocedure(format(
             '%I.protect_eom_terms_delivery()', schema_name
+          )) IS NOT NULL
+       OR to_regprocedure(format(
+            '%I.assign_eom_terms_publication_order()', schema_name
           )) IS NOT NULL THEN
         RAISE EXCEPTION
             'refusing to adopt a pre-existing EOM Terms acceptance object';
     END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM pg_attribute AS attribute
+         WHERE attribute.attrelid = to_regclass(format(
+                   '%I.eom_terms_versions', schema_name
+               ))
+           AND attribute.attname = 'publication_order'
+           AND attribute.attnum > 0
+           AND NOT attribute.attisdropped
+    ) OR EXISTS (
+        SELECT 1
+          FROM pg_trigger AS guard_trigger
+         WHERE guard_trigger.tgrelid = to_regclass(format(
+                   '%I.eom_terms_versions', schema_name
+               ))
+           AND guard_trigger.tgname =
+               'trg_assign_eom_terms_publication_order'
+           AND NOT guard_trigger.tgisinternal
+    ) THEN
+        RAISE EXCEPTION
+            'refusing to adopt pre-existing EOM Terms publication ordering';
+    END IF;
 END;
 $$;
+
+ALTER TABLE eom_terms_versions
+    ADD COLUMN publication_order BIGINT;
+
+-- Migration 396 made published rows immutable. Temporarily suspend that one
+-- guard inside this atomic DBA migration so existing releases can receive a
+-- deterministic order. The selected current release is always placed last;
+-- ties among historical releases are stable but make no claim about chronology
+-- that was not recorded before this migration.
+ALTER TABLE eom_terms_versions
+    DISABLE TRIGGER trg_protect_eom_terms_version;
+
+WITH ordered_release AS (
+    SELECT version.id,
+           row_number() OVER (
+               ORDER BY
+                   CASE WHEN version.id = (
+                       SELECT selected.version_id
+                         FROM eom_terms_current_version AS selected
+                        WHERE selected.singleton
+                   ) THEN 1 ELSE 0 END,
+                   version.published_at,
+                   version.created_at,
+                   version.id
+           ) AS publication_order
+      FROM eom_terms_versions AS version
+     WHERE version.status = 'published'
+)
+UPDATE eom_terms_versions AS version
+   SET publication_order = ordered_release.publication_order
+  FROM ordered_release
+ WHERE version.id = ordered_release.id;
+
+ALTER TABLE eom_terms_versions
+    ENABLE TRIGGER trg_protect_eom_terms_version;
+
+ALTER TABLE eom_terms_versions
+    ADD CONSTRAINT uq_eom_terms_publication_order
+        UNIQUE (publication_order),
+    ADD CONSTRAINT ck_eom_terms_publication_order
+        CHECK (
+            (status = 'draft' AND publication_order IS NULL)
+            OR
+            (status = 'published' AND publication_order > 0)
+        );
+
+CREATE FUNCTION assign_eom_terms_publication_order()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+AS $$
+BEGIN
+    IF OLD.status = 'draft' AND NEW.status = 'published' THEN
+        IF NEW.publication_order IS NOT NULL THEN
+            RAISE EXCEPTION
+                'EOM Terms publication order is database assigned';
+        END IF;
+        PERFORM pg_advisory_xact_lock(
+            hashtextextended('eom-terms-current-version', 0)
+        );
+        SELECT COALESCE(max(version.publication_order), 0) + 1
+          INTO NEW.publication_order
+          FROM eom_terms_versions AS version
+         WHERE version.status = 'published';
+        RETURN NEW;
+    END IF;
+    IF NEW.publication_order IS DISTINCT FROM OLD.publication_order THEN
+        RAISE EXCEPTION 'EOM Terms publication order is immutable';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_assign_eom_terms_publication_order
+    BEFORE UPDATE ON eom_terms_versions
+    FOR EACH ROW EXECUTE FUNCTION assign_eom_terms_publication_order();
 
 CREATE TABLE eom_terms_invitations (
     id UUID CONSTRAINT pk_eom_terms_invitations PRIMARY KEY,
@@ -381,8 +483,11 @@ CREATE TABLE eom_terms_deliveries (
                 AND claimed_at IS NOT NULL
                 AND sent_at IS NOT NULL
                 AND (
-                    (length(btrim(resend_message_id)) > 0
-                        AND transport_idempotent_replay IS NOT NULL
+                    (((length(btrim(resend_message_id)) > 0
+                            AND transport_idempotent_replay IS NOT NULL)
+                        OR
+                        (resend_message_id IS NULL
+                            AND transport_idempotent_replay IS TRUE))
                         AND confirmed_by_id IS NULL
                         AND confirmed_by_name IS NULL)
                     OR
@@ -513,7 +618,7 @@ BEGIN
            invitation.revoked_at,
            invitation.expires_at,
            version.content_hash,
-           version.published_at
+           version.publication_order
       INTO invitation_row
       FROM eom_terms_invitations AS invitation
       JOIN eom_terms_versions AS version
@@ -531,7 +636,7 @@ BEGIN
           FROM eom_terms_versions AS later
          WHERE later.status = 'published'
            AND later.material_change
-           AND later.published_at > invitation_row.published_at
+           AND later.publication_order > invitation_row.publication_order
     ) THEN
         RAISE EXCEPTION
             'EOM Terms invitation was superseded by a material release';
@@ -656,9 +761,13 @@ BEGIN
         IF NEW.claimed_at IS DISTINCT FROM OLD.claimed_at THEN
             RAISE EXCEPTION 'EOM Terms delivery claim time is immutable';
         END IF;
-        IF (
-            length(btrim(NEW.resend_message_id)) > 0
-            AND NEW.transport_idempotent_replay IS NOT NULL
+        IF ((
+            (length(btrim(NEW.resend_message_id)) > 0
+                AND NEW.transport_idempotent_replay IS NOT NULL)
+            OR
+            (NEW.resend_message_id IS NULL
+                AND NEW.transport_idempotent_replay IS TRUE)
+        )
             AND NEW.confirmed_by_id IS NULL
             AND NEW.confirmed_by_name IS NULL
         ) OR (
@@ -725,6 +834,7 @@ DECLARE
     grantee_name TEXT;
 BEGIN
     FOREACH function_name IN ARRAY ARRAY[
+        'assign_eom_terms_publication_order',
         'validate_eom_terms_invitation',
         'protect_eom_terms_invitation',
         'validate_eom_terms_acceptance',
@@ -787,6 +897,7 @@ BEGIN
     END LOOP;
 
     FOREACH function_name IN ARRAY ARRAY[
+        'assign_eom_terms_publication_order',
         'validate_eom_terms_invitation',
         'protect_eom_terms_invitation',
         'validate_eom_terms_acceptance',
@@ -873,3 +984,5 @@ COMMENT ON TABLE eom_terms_acceptances IS
     'Immutable evidence that one active EOM customer accepted one published Terms version and both required acknowledgements.';
 COMMENT ON TABLE eom_terms_deliveries IS
     'Immutable invitation/executed-copy payloads with one-way transport and actor-reconciliation evidence.';
+COMMENT ON COLUMN eom_terms_versions.publication_order IS
+    'Database-assigned monotonic release order used instead of wall-clock chronology.';

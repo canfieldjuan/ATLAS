@@ -70,6 +70,26 @@ evidence.
   Reusing that key for another contact or locale conflicts. A genuinely new
   invitation for the new current version requires a new request key.
 
+### Review-evidence contract revision
+
+- New evidence: a delivery claim previously serialized only the delivery row,
+  so acceptance or revocation could commit after the invitation usability read
+  and before transport. Material-release comparisons also used wall-clock
+  timestamps, which do not define a strict release order, and the delivery
+  evidence guard rejected Resend's provider-confirmed idempotent replay shape
+  when that replay has no message id.
+- Revised requirement: delivery acquires the publication lock and invitation
+  row lock in the same order as acceptance/revocation and retains both through
+  the bounded provider outcome and database confirmation. Migration 397 adds a
+  guard-owned monotonic publication order assigned under the existing
+  publication lock and every later-material decision uses that order. A sent
+  transition admits a missing provider message id only when the established
+  sender explicitly reports `idempotent_replay = true`.
+- Preserved boundary: this internal serialization and release-order evidence
+  does not change Terms prose, version hashes, the operator publish/current
+  selection API, route payloads, customer classification, payment/onboarding
+  state, or production delivery authority.
+
 ## Scope (this PR)
 
 Ownership lane: eom-onboarding-terms
@@ -121,10 +141,10 @@ Max files: 18
     changed signer conflicts.
   - The service execution model below makes publication/issue/accept/readiness
     linearize on one PostgreSQL advisory lock, revocation/acceptance linearize on
-    the invitation row lock, and delivery claim linearize on
-    `UPDATE ... WHERE status = 'pending' RETURNING`; focused concurrent tests
-    settle the duplicate issue, double accept, accept-vs-revoke, and double-send
-    invariants under that model.
+    the invitation row lock, and delivery hold those locks from its conditional
+    `pending -> sending` claim through the provider outcome; focused concurrent
+    tests settle duplicate issue, double accept, accept-vs-revoke,
+    send-vs-revoke, and double-send invariants under that model.
   - Migration 397 tests prove the guard owner owns all three relations and guard
     functions, the direct `atlas` login has no table-wide write/delete/truncate
     or function-replacement authority, acceptance rows and delivery payloads
@@ -132,7 +152,8 @@ Max files: 18
     admitted.
   - Readiness tests prove acceptance of the current or an older release followed
     only by non-material releases is ready, and any later material release is
-    `reacceptance_required`.
+    `reacceptance_required`, including when its wall-clock publication timestamp
+    is earlier than the accepted release.
   - Invitation and executed-copy transport tests assert persisted body equality
     with the selected published audience/locale, separate acknowledgement
     evidence, deterministic Resend idempotency keys, and an acceptance that
@@ -173,12 +194,20 @@ Max files: 18
   exactly one of revocation or first acceptance wins, and an unchanged accept
   replay returns the existing immutable row.
 - Delivery payload creation commits with its invitation/acceptance. Delivery
-  itself occurs after commit and claims exactly one pending row through a
-  conditional update. The deterministic Resend idempotency key is a second
-  boundary against transport replay. A failed/unknown transport leaves
-  `sending` reconciliation evidence; it never rolls back or silently retries a
-  legal acceptance. An authenticated actor may confirm `sending -> sent` only
-  after external reconciliation.
+  then acquires the publication lock followed by the invitation row lock,
+  claims exactly one pending row, and retains those locks through the bounded
+  provider result and `sent` confirmation. A failed/unknown sender call commits
+  explicit `sending` reconciliation evidence. A database failure after provider
+  acceptance rolls the claim back, and a later explicit invocation uses the
+  same deterministic Resend idempotency key; a provider-confirmed replay can
+  therefore restore `sent` evidence without a duplicate message. No background
+  retry is introduced, and actor confirmation remains limited to a persisted
+  `sending` state after external reconciliation.
+- Published Terms versions receive a database-assigned positive
+  `publication_order` under the existing publication advisory lock. Historical
+  releases are backfilled deterministically with the selected current release
+  last. Later-material acceptance and readiness decisions compare this order,
+  never the non-monotonic wall clock.
 - Transaction cancellation, connection loss, or process death before commit
   releases locks and rolls back the whole database transition. No lease, file
   lock, background scheduler, cross-database write, or caller-supplied clock
@@ -258,8 +287,9 @@ the database stores only that UUID and the admitting key fingerprint. The issue
 transaction locks Terms publication, derives the account audience/email from
 `contacts`, pins the current immutable version, persists the exact selected
 email payload, and replays only an identical request key. A single conditional
-delivery claim calls the established slim-profile Resend sender with a stable
-idempotency key.
+delivery claim holds publication/invitation locks while it calls the established
+slim-profile Resend sender with a stable idempotency key and persists either the
+provider message id or its explicit idempotent-replay result.
 
 Session and acceptance authenticate the bearer before database access and bind
 the verified key fingerprint to the invitation. Acceptance uses database time,
@@ -287,9 +317,10 @@ funnel pool used by the authority.
 - A newly issued link expires after 30 days using database time. This bounds
   bearer lifetime without adding caller-controlled expiry or another deployment
   setting; a fresh actor-audited invitation is required after expiry.
-- Delivery uncertainty remains explicit `sending` evidence and requires
-  operator reconciliation. There is no automatic retry after an ambiguous
-  external side effect.
+- Delivery uncertainty from the sender remains explicit `sending` evidence and
+  requires operator reconciliation. Confirmation failure instead rolls the
+  transaction back for a later explicit, provider-idempotent replay; there is
+  no autonomous retry after an ambiguous external side effect.
 - This provider can send only when an authenticated private caller explicitly
   issues an invitation. It adds no scheduler, bulk send, or production data
   mutation.
@@ -313,12 +344,10 @@ Parked hardening: none.
 
 ## Verification
 
-- Passed locally: the canonical EOM workflow test list against disposable
-  PostgreSQL (`1681 passed, 5 skipped`); the isolated Terms suite with live
-  migration 396/397, runtime ACL, immutability, boundary, and concurrency proof
-  (`27 passed`); controlled-runner/operations/migration tests
-  (`245 passed, 1 skipped`); targeted Ruff, format-check, compile, and diff
-  check.
+- Passed locally after review fixes: the focused acceptance, authority, and
+  controlled migration-runner suite against disposable PostgreSQL
+  (`197 passed, 1 skipped`), targeted Ruff and Ruff format checks, Python
+  compilation, and `git diff --check`.
 - Pending: synchronized-plan check and mechanical pre-push review.
 - Hosted: EOM pipeline disposable-PostgreSQL proof and GitHub-only Unit Gate.
 
@@ -331,16 +360,16 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
 | `atlas_brain/eom_api/funnel.py` | 369 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_terms_acceptance.py` | 1814 |
-| `atlas_brain/services/eom_terms_authority.py` | 4 |
-| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 875 |
+| `atlas_brain/services/eom_terms_acceptance.py` | 1842 |
+| `atlas_brain/services/eom_terms_authority.py` | 102 |
+| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 988 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
-| `ops` | 5 |
-| `plans/PR-EOM-Terms-Acceptance.md` | 346 |
-| `scripts/apply_eom_first_clean_completion_schema.py` | 24 |
+| `ops` | 3 |
+| `plans/PR-EOM-Terms-Acceptance.md` | 375 |
+| `scripts/apply_eom_first_clean_completion_schema.py` | 23 |
 | `scripts/apply_eom_terms_acceptance_schema.py` | 42 |
-| `tests/test_agent_operations_contract.py` | 35 |
-| `tests/test_eom_first_clean_completion_dba_runner.py` | 95 |
-| `tests/test_eom_terms_acceptance.py` | 1240 |
-| `tests/test_migrations_runner.py` | 3 |
-| **Total** | **4924** |
+| `tests/test_agent_operations_contract.py` | 30 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 94 |
+| `tests/test_eom_terms_acceptance.py` | 1499 |
+| `tests/test_migrations_runner.py` | 2 |
+| **Total** | **5441** |

@@ -223,6 +223,10 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                                pg_catalog.current_schema()
                            )) AS current_oid,
                            to_regprocedure(format(
+                               '%I.assign_eom_terms_publication_order()',
+                               pg_catalog.current_schema()
+                           )) AS assign_publication_order_oid,
+                           to_regprocedure(format(
                                '%I.protect_eom_terms_version()',
                                pg_catalog.current_schema()
                            )) AS protect_version_oid,
@@ -352,11 +356,52 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                           ]
                    )
                    AND (
-                       SELECT COUNT(*) = 5
+                       boundary.assign_publication_order_oid IS NULL
+                       OR EXISTS (
+                           SELECT 1
+                             FROM pg_proc AS assignment_function
+                            WHERE assignment_function.oid =
+                                      boundary.assign_publication_order_oid
+                              AND assignment_function.pronargs = 0
+                              AND assignment_function.proowner =
+                                  boundary.guard_oid
+                              AND NOT assignment_function.prosecdef
+                              AND assignment_function.prorettype =
+                                  'trigger'::regtype
+                              AND assignment_function.proconfig = ARRAY[
+                                  format(
+                                      'search_path=pg_catalog, %I, pg_temp',
+                                      boundary.schema_name
+                                  )
+                              ]
+                       )
+                   )
+                   AND (
+                       SELECT (
+                                  (
+                                      COUNT(*) = 5
+                                      AND boundary.assign_publication_order_oid
+                                          IS NULL
+                                  )
+                                  OR
+                                  (
+                                      COUNT(*) = 6
+                                      AND boundary.assign_publication_order_oid
+                                          IS NOT NULL
+                                  )
+                              )
                           AND BOOL_AND(
                               guard_trigger.tgenabled = 'O'
                               AND (
                                   (
+                                      guard_trigger.tgrelid =
+                                          boundary.versions_oid
+                                      AND guard_trigger.tgfoid =
+                                          boundary.assign_publication_order_oid
+                                      AND guard_trigger.tgname =
+                                          'trg_assign_eom_terms_publication_order'
+                                  )
+                                  OR (
                                       guard_trigger.tgrelid =
                                           boundary.versions_oid
                                       AND guard_trigger.tgfoid =
@@ -448,6 +493,48 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                                    expected_constraint.constraint_type
                                AND actual_constraint.convalidated
                         )
+                   )
+                   AND (
+                       boundary.assign_publication_order_oid IS NULL
+                       OR NOT EXISTS (
+                           SELECT 1
+                             FROM (
+                                 VALUES
+                                     ('uq_eom_terms_publication_order', 'u'),
+                                     ('ck_eom_terms_publication_order', 'c')
+                             ) AS expected_order_constraint(
+                                 constraint_name,
+                                 constraint_type
+                             )
+                            WHERE NOT EXISTS (
+                                SELECT 1
+                                  FROM pg_constraint AS actual_constraint
+                                 WHERE actual_constraint.conrelid =
+                                           boundary.versions_oid
+                                   AND actual_constraint.conname =
+                                       expected_order_constraint.constraint_name
+                                   AND actual_constraint.contype::text =
+                                       expected_order_constraint.constraint_type
+                                   AND actual_constraint.convalidated
+                            )
+                       )
+                   )
+                   AND (
+                       boundary.assign_publication_order_oid IS NULL
+                       OR EXISTS (
+                           SELECT 1
+                             FROM pg_attribute AS publication_attribute
+                            WHERE publication_attribute.attrelid =
+                                      boundary.versions_oid
+                              AND publication_attribute.attname =
+                                  'publication_order'
+                              AND publication_attribute.atttypid =
+                                  'bigint'::regtype
+                              AND publication_attribute.attnum > 0
+                              AND NOT publication_attribute.attisdropped
+                              AND publication_attribute.attgenerated = ''
+                              AND publication_attribute.attidentity = ''
+                       )
                    )
                    AND (
                        SELECT COUNT(DISTINCT indexed_attribute.attname) = 2
@@ -729,6 +816,14 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                        boundary.prevent_current_removal_oid,
                        'EXECUTE'
                    )
+                   AND (
+                       boundary.assign_publication_order_oid IS NULL
+                       OR NOT has_function_privilege(
+                           current_user,
+                           boundary.assign_publication_order_oid,
+                           'EXECUTE'
+                       )
+                   )
                    AND NOT EXISTS (
                        SELECT 1
                          FROM pg_class AS relation
@@ -769,9 +864,10 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                              protected_function.proacl
                          ) AS acl
                         WHERE protected_function.oid IN (
-                                  boundary.protect_version_oid,
-                                  boundary.require_current_oid,
-                                  boundary.prevent_current_removal_oid
+                             boundary.protect_version_oid,
+                             boundary.require_current_oid,
+                             boundary.prevent_current_removal_oid,
+                             boundary.assign_publication_order_oid
                               )
                           AND (
                               acl.grantee <> boundary.guard_oid

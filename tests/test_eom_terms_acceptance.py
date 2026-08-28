@@ -35,7 +35,10 @@ from atlas_brain.services.eom_terms_acceptance import (
     render_eom_terms_executed_copy,
     render_eom_terms_invitation,
 )
-from atlas_brain.services.eom_terms_authority import EOMTermsAuthority
+from atlas_brain.services.eom_terms_authority import (
+    EOMTermsAuthority,
+    eom_terms_authority_schema_ready,
+)
 
 
 _NOW = datetime(2026, 8, 28, 14, 30, tzinfo=timezone.utc)
@@ -109,6 +112,28 @@ class _RecordingSender:
             "message_id": f"message-{len(self.calls)}",
             "idempotent_replay": False,
         }
+
+
+class _IdempotentReplaySender:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        return {"message_id": None, "idempotent_replay": True}
+
+
+class _BlockingSender:
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls: list[dict[str, Any]] = []
+
+    async def __call__(self, **kwargs: Any) -> dict[str, Any]:
+        self.calls.append(dict(kwargs))
+        self.started.set()
+        await self.release.wait()
+        return {"message_id": "message-after-lock", "idempotent_replay": False}
 
 
 class _NoDeliveryService(EOMTermsAcceptanceService):
@@ -861,12 +886,54 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
         )
         assert confirmed["status"] == "sent"
 
-        await _publish(
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_versions
+            DISABLE TRIGGER trg_protect_eom_terms_version
+            """
+        )
+        await dba.execute(
+            """
+            UPDATE eom_terms_versions
+            SET published_at = clock_timestamp() + INTERVAL '1 day'
+            WHERE status = 'published'
+            """
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_versions
+            ENABLE TRIGGER trg_protect_eom_terms_version
+            """
+        )
+        prior_release = await dba.fetchrow(
+            """
+            SELECT max(publication_order) AS publication_order,
+                   min(published_at) AS published_at
+            FROM eom_terms_versions
+            WHERE status = 'published'
+            """
+        )
+        assert prior_release is not None
+        material_release = await _publish(
             authority,
             label="2026.3",
             material=True,
             marker="material",
         )
+        material_release_row = await dba.fetchrow(
+            """
+            SELECT publication_order, published_at
+            FROM eom_terms_versions
+            WHERE id = $1
+            """,
+            UUID(material_release["versionId"]),
+        )
+        assert material_release_row is not None
+        assert (
+            material_release_row["publication_order"]
+            > prior_release["publication_order"]
+        )
+        assert material_release_row["published_at"] < prior_release["published_at"]
         stale = await service.get_readiness(contact_id=_CONTACT_ID)
         assert stale["ready"] is False
         assert stale["reason"] == "reacceptance_required"
@@ -879,6 +946,23 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
                 client_ip="192.0.2.30",
                 sender=_RecordingSender(),
             )
+        async with pool.raw_pool.acquire() as runtime:
+            with pytest.raises(
+                asyncpg.PostgresError,
+                match="superseded by a material release",
+            ):
+                await runtime.execute(
+                    """
+                    INSERT INTO eom_terms_acceptances (
+                        id, invitation_id, signer_name, terms_accepted,
+                        additional_work_accepted, client_ip
+                    ) VALUES ($1, $2, $3, TRUE, TRUE, $4::inet)
+                    """,
+                    uuid4(),
+                    UUID(materially_stale["invitationId"]),
+                    "Database Boundary Probe",
+                    "192.0.2.31",
+                )
         with pytest.raises(EOMTermsAcceptanceConflictError):
             await service.revoke(
                 invitation_id=invitation["invitationId"],
@@ -887,6 +971,23 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
             )
 
         assert await eom_terms_acceptance_schema_ready(pool) is True
+        assert await eom_terms_authority_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_versions
+            DISABLE TRIGGER trg_assign_eom_terms_publication_order
+            """
+        )
+        assert await eom_terms_acceptance_schema_ready(pool) is False
+        assert await eom_terms_authority_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_versions
+            ENABLE TRIGGER trg_assign_eom_terms_publication_order
+            """
+        )
+        assert await eom_terms_acceptance_schema_ready(pool) is True
+        assert await eom_terms_authority_schema_ready(pool) is True
         await dba.execute(
             """
             ALTER TABLE eom_terms_deliveries
@@ -953,6 +1054,8 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         contact_revoked = uuid4()
         contact_invalid = uuid4()
         contact_expired = uuid4()
+        contact_delivery_lock = uuid4()
+        contact_replay = uuid4()
         await _seed_customer(dba, contact_id=contact_duplicate)
         await _seed_customer(
             dba,
@@ -974,6 +1077,16 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
             contact_id=contact_expired,
             email="expired@example.com",
         )
+        await _seed_customer(
+            dba,
+            contact_id=contact_delivery_lock,
+            email="delivery-lock@example.com",
+        )
+        await _seed_customer(
+            dba,
+            contact_id=contact_replay,
+            email="replay@example.com",
+        )
         await dba.execute(
             "UPDATE contacts SET status = 'archived' WHERE id = $1",
             contact_invalid,
@@ -985,7 +1098,46 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
             material=True,
             marker="race",
         )
+        concurrent_releases = await asyncio.gather(
+            _publish(
+                authority,
+                label="race.2",
+                material=False,
+                marker="race-two",
+            ),
+            _publish(
+                authority,
+                label="race.3",
+                material=False,
+                marker="race-three",
+            ),
+        )
+        concurrent_ids = [UUID(release["versionId"]) for release in concurrent_releases]
+        concurrent_orders = await dba.fetch(
+            """
+            SELECT id, publication_order
+            FROM eom_terms_versions
+            WHERE id = ANY($1::uuid[])
+            ORDER BY publication_order
+            """,
+            concurrent_ids,
+        )
+        assert len(concurrent_orders) == 2
+        assert (
+            concurrent_orders[0]["publication_order"]
+            < concurrent_orders[1]["publication_order"]
+        )
+        current_order = await dba.fetchval(
+            """
+            SELECT version.publication_order
+            FROM eom_terms_current_version AS selected
+            JOIN eom_terms_versions AS version ON version.id = selected.version_id
+            WHERE selected.singleton
+            """
+        )
+        assert current_order == concurrent_orders[-1]["publication_order"]
         service = EOMTermsAcceptanceService(pool=pool)
+        no_delivery = _NoDeliveryService(pool=pool)
         invitation_sender = _RecordingSender()
         invalid_sender = _RecordingSender()
         with pytest.raises(EOMTermsAcceptanceConflictError):
@@ -1075,7 +1227,110 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
         assert {result["idempotent"] for result in acceptance_results} == {False, True}
         assert len(receipt_sender.calls) == 1
 
-        no_delivery = _NoDeliveryService(pool=pool)
+        locked_invitation = await no_delivery.issue_and_send(
+            request_key="terms-request-delivery-lock",
+            contact_id=contact_delivery_lock,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        blocking_sender = _BlockingSender()
+        delivery_task = asyncio.create_task(
+            service._deliver(
+                delivery_id=UUID(locked_invitation["deliveryId"]),
+                secret=_SECRET,
+                previous_secret=None,
+                sender=blocking_sender,
+            )
+        )
+        await asyncio.wait_for(blocking_sender.started.wait(), timeout=2)
+        revoke_task = asyncio.create_task(
+            service.revoke(
+                invitation_id=locked_invitation["invitationId"],
+                actor_id=7,
+                actor_name="Juan",
+            )
+        )
+        try:
+            await asyncio.sleep(0.05)
+            assert revoke_task.done() is False
+        finally:
+            blocking_sender.release.set()
+        locked_delivery, locked_delivery_error = await delivery_task
+        locked_revocation = await revoke_task
+        assert locked_delivery["status"] == "sent"
+        assert locked_delivery_error is False
+        assert locked_revocation["revokedAt"] is not None
+        assert len(blocking_sender.calls) == 1
+
+        replay_invitation = await no_delivery.issue_and_send(
+            request_key="terms-request-provider-replay",
+            contact_id=contact_replay,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        replay_sender = _IdempotentReplaySender()
+        replay_delivery, replay_delivery_error = await service._deliver(
+            delivery_id=UUID(replay_invitation["deliveryId"]),
+            secret=_SECRET,
+            previous_secret=None,
+            sender=replay_sender,
+        )
+        assert replay_delivery["status"] == "sent"
+        assert replay_delivery_error is False
+        assert len(replay_sender.calls) == 1
+        replay_evidence = await dba.fetchrow(
+            """
+            SELECT resend_message_id, transport_idempotent_replay
+            FROM eom_terms_deliveries
+            WHERE id = $1
+            """,
+            UUID(replay_invitation["deliveryId"]),
+        )
+        assert replay_evidence is not None
+        assert replay_evidence["resend_message_id"] is None
+        assert replay_evidence["transport_idempotent_replay"] is True
+
+        invalid_replay = await no_delivery.issue_and_send(
+            request_key="terms-request-invalid-provider-replay",
+            contact_id=contact_replay,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        uncertain_delivery, uncertain_error = await service._deliver(
+            delivery_id=UUID(invalid_replay["deliveryId"]),
+            secret=_SECRET,
+            previous_secret=None,
+            sender=_RecordingSender(fail=True),
+        )
+        assert uncertain_delivery["status"] == "sending"
+        assert uncertain_error is True
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="requires transport or actor evidence",
+        ):
+            await dba.execute(
+                """
+                UPDATE eom_terms_deliveries
+                SET status = 'sent',
+                    resend_message_id = NULL,
+                    transport_idempotent_replay = FALSE
+                WHERE id = $1
+                """,
+                UUID(invalid_replay["deliveryId"]),
+            )
+
         opposing = await no_delivery.issue_and_send(
             request_key="terms-request-race-opposing",
             contact_id=contact_opposing,
@@ -1232,9 +1487,13 @@ def test_migration_is_guard_owned_append_only_and_seeds_no_content() -> None:
     assert "validate_eom_terms_invitation" in migration
     assert "validate_eom_terms_acceptance" in migration
     assert "protect_eom_terms_delivery" in migration
+    assert "assign_eom_terms_publication_order" in migration
+    assert "ADD COLUMN publication_order BIGINT" in migration
+    assert "later.publication_order > invitation_row.publication_order" in migration
     assert "BEFORE TRUNCATE ON eom_terms_acceptances" in migration
     assert "GRANT INSERT (id, invitation_id, signer_name" in migration
     assert "GRANT UPDATE (status, claimed_at, sent_at" in migration
     assert "GRANT DELETE" not in migration
+    assert "GRANT UPDATE (publication_order" not in migration
     assert "raw bearer tokens are never stored" in migration
     assert "INSERT INTO eom_terms_versions" not in migration
