@@ -9,7 +9,16 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Mapping
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -54,6 +63,10 @@ from ..services.eom_missed_call_recovery import (
 from ..services.eom_first_clean_completion import (
     EOMFirstCleanCompletionError,
     EOMFirstCleanCompletionService,
+)
+from ..services.eom_terms_authority import (
+    EOMTermsAuthority,
+    EOMTermsAuthorityError,
 )
 from ..services.eom_public_onboarding_tokens import (
     AuthenticatedEOMPublicOnboardingToken,
@@ -194,6 +207,36 @@ class EOMPostCleanOnboardingCandidateResponse(BaseModel):
     cursor: str | None = None
     has_more: bool = Field(serialization_alias="hasMore")
     next_cursor: str | None = Field(default=None, serialization_alias="nextCursor")
+
+
+class EOMTermsVersionCreateRequest(BaseModel):
+    """One exact bilingual residential/commercial Terms release candidate."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    version_label: object = Field(alias="versionLabel")
+    material_change: object = Field(alias="materialChange")
+    documents: object
+
+
+class EOMTermsVersionResponse(BaseModel):
+    """Closed private projection of one Atlas Terms version."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    version_id: UUID = Field(alias="versionId")
+    version_label: str = Field(alias="versionLabel")
+    status: Literal["draft", "published"]
+    material_change: bool = Field(alias="materialChange")
+    documents: dict[str, Any]
+    content_hash: str = Field(alias="contentHash")
+    created_by_id: int = Field(alias="createdById")
+    created_by_name: str = Field(alias="createdByName")
+    created_at: datetime = Field(alias="createdAt")
+    published_by_id: int | None = Field(default=None, alias="publishedById")
+    published_by_name: str | None = Field(default=None, alias="publishedByName")
+    published_at: datetime | None = Field(default=None, alias="publishedAt")
+    idempotent: bool
 
 
 class EOMPublicOnboardingSessionRequest(BaseModel):
@@ -710,6 +753,19 @@ def _first_clean_completion_dependency(
 
         pool = get_db_pool()
     return EOMFirstCleanCompletionService(pool=pool)
+
+
+def _terms_authority_dependency(request: Request) -> EOMTermsAuthority:
+    """Bind Terms state to the same canonical funnel database."""
+
+    pool_factory = getattr(request.app.state, "eom_funnel_terms_pool", None)
+    if callable(pool_factory):
+        pool = pool_factory()
+    else:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+    return EOMTermsAuthority(pool=pool)
 
 
 def _authenticated_public_onboarding_token(
@@ -2015,6 +2071,92 @@ async def list_eom_public_onboarding_issued_links(
         has_more=has_more,
         next_cursor=next_cursor,
     )
+
+
+def _terms_error(exc: EOMTermsAuthorityError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
+@router.post(
+    "/terms/versions",
+    response_model=EOMTermsVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def create_eom_terms_version(
+    payload: EOMTermsVersionCreateRequest,
+    response: Response,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    authority: EOMTermsAuthority = Depends(_terms_authority_dependency),
+) -> EOMTermsVersionResponse:
+    """Store one reviewed-but-unpublished Terms snapshot."""
+
+    try:
+        result = await authority.create_draft(
+            version_label=payload.version_label,
+            material_change=payload.material_change,
+            documents=payload.documents,
+            actor_id=actor["id"],
+            actor_name=actor["name"],
+        )
+    except EOMTermsAuthorityError as exc:
+        raise _terms_error(exc) from exc
+    response.status_code = (
+        status.HTTP_200_OK
+        if bool(result["idempotent"])
+        else status.HTTP_201_CREATED
+    )
+    return EOMTermsVersionResponse.model_validate(result)
+
+
+@router.post(
+    "/terms/versions/{version_id}/publish",
+    response_model=EOMTermsVersionResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def publish_eom_terms_version(
+    version_id: UUID,
+    response: Response,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    authority: EOMTermsAuthority = Depends(_terms_authority_dependency),
+) -> EOMTermsVersionResponse:
+    """Publish an immutable snapshot and select it as current."""
+
+    try:
+        result = await authority.publish(
+            version_id=version_id,
+            actor_id=actor["id"],
+            actor_name=actor["name"],
+        )
+    except EOMTermsAuthorityError as exc:
+        raise _terms_error(exc) from exc
+    response.status_code = (
+        status.HTTP_200_OK
+        if bool(result["idempotent"])
+        else status.HTTP_201_CREATED
+    )
+    return EOMTermsVersionResponse.model_validate(result)
+
+
+@router.get(
+    "/terms/current",
+    response_model=EOMTermsVersionResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def get_current_eom_terms_version(
+    authority: EOMTermsAuthority = Depends(_terms_authority_dependency),
+) -> EOMTermsVersionResponse:
+    """Return the exact current published snapshot without changing state."""
+
+    try:
+        result = await authority.get_current()
+    except EOMTermsAuthorityError as exc:
+        raise _terms_error(exc) from exc
+    return EOMTermsVersionResponse.model_validate(result)
 
 
 @router.get(
