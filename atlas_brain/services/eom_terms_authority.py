@@ -352,7 +352,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                           ]
                    )
                    AND (
-                       SELECT COUNT(*) = 4
+                       SELECT COUNT(*) = 5
                           AND BOOL_AND(
                               guard_trigger.tgenabled = 'O'
                               AND (
