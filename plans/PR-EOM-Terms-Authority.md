@@ -155,11 +155,18 @@ Slice phase: Vertical slice
 
 ### Files touched
 
+- `.github/workflows/atlas_eom_lead_pipeline_checks.yml`
 - `atlas_brain/eom_api/funnel.py`
+- `atlas_brain/main_eom.py`
 - `atlas_brain/services/eom_terms_authority.py`
 - `atlas_brain/storage/migrations/396_eom_terms_authority.sql`
+- `atlas_brain/storage/migrations/__init__.py`
 - `plans/PR-EOM-Terms-Authority.md`
+- `scripts/apply_eom_first_clean_completion_schema.py`
+- `scripts/apply_eom_terms_authority_schema.py`
+- `tests/test_eom_first_clean_completion_dba_runner.py`
 - `tests/test_eom_terms_authority.py`
+- `tests/test_migrations_runner.py`
 
 ## Mechanism
 
@@ -231,10 +238,10 @@ Parked hardening: none.
 | `atlas_brain/services/eom_terms_authority.py` | 949 |
 | `atlas_brain/storage/migrations/396_eom_terms_authority.sql` | 415 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
-| `plans/PR-EOM-Terms-Authority.md` | 238 |
+| `plans/PR-EOM-Terms-Authority.md` | 247 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 55 |
 | `scripts/apply_eom_terms_authority_schema.py` | 42 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 44 |
-| `tests/test_eom_terms_authority.py` | 947 |
+| `tests/test_eom_terms_authority.py` | 1007 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **2848** |
+| **Total** | **2917** |
