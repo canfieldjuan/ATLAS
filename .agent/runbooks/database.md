@@ -114,6 +114,56 @@ history. Do not use that emergency revoke for a routine application rollback:
 it intentionally makes Terms readiness fail closed until a reviewed repair
 restores the exact grants.
 
+## EOM Terms acceptance migration
+
+Migration `397_eom_terms_acceptance` is also excluded from automatic startup.
+It adds customer-bound invitation metadata, immutable acceptance evidence, and
+content-stable delivery records under the same no-login EOM guard owner. It
+depends on a recorded migration `396_eom_terms_authority`; the fixed runner
+rejects preflight and apply when that predecessor is absent.
+
+1. Use the exact merged release worktree intended for deployment and compare it
+   to the running revision:
+
+   ```bash
+   git rev-parse HEAD
+   ./ops deploy status
+   ```
+
+2. Supply the same operator-only protected DBA DSN and exact schema variables
+   described above. Do not put them in Git, chat, shell history, or a service
+   environment file. Confirm migration 396 first, then run the read-only 397
+   preflight:
+
+   ```bash
+   ./ops db controlled eom-terms-authority preflight
+   ./ops db controlled eom-terms-acceptance preflight
+   ```
+
+3. After recording both target receipts, apply 397 once and immediately repeat
+   its preflight. `migration_recorded` must be true before deploying or
+   restarting any invitation, token-session, acceptance, readiness, revocation,
+   or delivery-reconciliation route:
+
+   ```bash
+   ./ops db controlled eom-terms-acceptance apply
+   ./ops db controlled eom-terms-acceptance preflight
+   ```
+
+4. Keep invitation issuance disabled until the application release and its
+   Tracker consumer are deployed. Applying the schema creates no Terms content,
+   invitation, acceptance, email, scheduler, or customer mutation by itself.
+
+Post-deployment application rollback is retention-only. Stop every Terms
+invitation and acceptance caller first, then roll application code back while
+retaining migrations 396 and 397, all guard-owned relations/functions/triggers,
+their grants, and every stored row. Never delete, truncate, disable, rewrite, or
+unrecord legal or delivery evidence as an application rollback mechanism. A
+credential-compromise response may revoke runtime write grants only as a
+separately reviewed DBA containment action after all affected Atlas processes
+are stopped; preserve read-only audit access and roll forward with a reviewed
+repair.
+
 ## Role-topology evidence preflight
 
 This is a read-only prerequisite for a later least-privilege role cutover. It

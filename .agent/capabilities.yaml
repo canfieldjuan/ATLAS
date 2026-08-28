@@ -179,6 +179,17 @@ database:
       current_session_capable: false-until-the-protected-DBA-configuration-is-exported
       mutation: preflight is read-only; apply creates guard-owned Terms authority objects and records migration 396
       rollback: stop Terms writers and consumers, retain immutable history and the migration record, and follow .agent/runbooks/database.md
+    eom_terms_acceptance:
+      status: guarded-preflight-and-apply
+      migration: 397_eom_terms_acceptance
+      predecessor: 396_eom_terms_authority
+      preflight: ./ops db controlled eom-terms-acceptance preflight
+      apply: ./ops db controlled eom-terms-acceptance apply
+      implementation: scripts/apply_eom_terms_acceptance_schema.py
+      authentication: protected direct PostgreSQL-superuser DSN plus canonical EOM funnel runtime configuration
+      current_session_capable: false-until-the-protected-DBA-configuration-is-exported
+      mutation: preflight is read-only; apply creates guard-owned Terms invitation, acceptance, and delivery evidence and records migration 397
+      rollback: stop Terms invitation and acceptance callers, retain all legal and delivery history plus the migration record, and follow .agent/runbooks/database.md
   mutation: fixed inspections are read-only; app startup and integration tests can mutate
   likely_failures:
     - assuming root Docker Compose provides PostgreSQL

@@ -68,6 +68,12 @@ from ..services.eom_terms_authority import (
     EOMTermsAuthority,
     EOMTermsAuthorityError,
 )
+from ..services.eom_terms_acceptance import (
+    AuthenticatedEOMTermsToken,
+    EOMTermsAcceptanceError,
+    EOMTermsAcceptanceService,
+    authenticate_eom_terms_token,
+)
 from ..services.eom_public_onboarding_tokens import (
     AuthenticatedEOMPublicOnboardingToken,
     EOMPublicOnboardingTokenError,
@@ -236,6 +242,161 @@ class EOMTermsVersionResponse(BaseModel):
     published_by_id: int | None = Field(default=None, alias="publishedById")
     published_by_name: str | None = Field(default=None, alias="publishedByName")
     published_at: datetime | None = Field(default=None, alias="publishedAt")
+    idempotent: bool
+
+
+class EOMTermsInvitationRequest(BaseModel):
+    """Only caller-owned identity fields for one manual invitation."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    request_key: object = Field(alias="requestKey")
+    contact_id: object = Field(alias="contactId")
+    locale: object
+
+
+class EOMTermsInvitationResponse(BaseModel):
+    """Closed office projection of one pinned invitation and its delivery."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    invitation_id: UUID = Field(alias="invitationId")
+    contact_id: UUID = Field(alias="contactId")
+    version_id: UUID = Field(alias="versionId")
+    version_label: str = Field(alias="versionLabel")
+    content_hash: str = Field(alias="contentHash")
+    audience: Literal["residential", "commercial"]
+    locale: Literal["en", "es"]
+    recipient_email: str = Field(alias="recipientEmail")
+    status: Literal["issued", "accepted", "revoked", "expired"]
+    issued_at: datetime = Field(alias="issuedAt")
+    expires_at: datetime = Field(alias="expiresAt")
+    revoked_at: datetime | None = Field(default=None, alias="revokedAt")
+    acceptance_id: UUID | None = Field(default=None, alias="acceptanceId")
+    delivery_id: UUID = Field(alias="deliveryId")
+    delivery_status: Literal["pending", "sending", "sent"] = Field(
+        alias="deliveryStatus"
+    )
+    delivery_needs_reconciliation: bool = Field(alias="deliveryNeedsReconciliation")
+    delivery_error: bool = Field(alias="deliveryError")
+    idempotent: bool
+
+
+class EOMTermsTokenRequest(BaseModel):
+    """Opaque Terms bearer forwarded by the authenticated Tracker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    token: object
+
+
+class EOMTermsAcceptanceRequest(EOMTermsTokenRequest):
+    """Two explicit acknowledgements plus the customer's typed signature."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    signer_name: object = Field(alias="signerName")
+    terms_accepted: object = Field(alias="termsAccepted")
+    additional_work_accepted: object = Field(alias="additionalWorkAccepted")
+
+
+class EOMTermsSessionResponse(BaseModel):
+    """Token-bound public projection of one exact published Terms snapshot."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    status: Literal["ready", "accepted"]
+    invitation_id: UUID = Field(alias="invitationId")
+    version_id: UUID = Field(alias="versionId")
+    version_label: str = Field(alias="versionLabel")
+    content_hash: str = Field(alias="contentHash")
+    audience: Literal["residential", "commercial"]
+    locale: Literal["en", "es"]
+    customer_name: str | None = Field(default=None, alias="customerName")
+    documents: dict[str, str] | None = None
+    expires_at: datetime | None = Field(default=None, alias="expiresAt")
+    accepted_at: datetime | None = Field(default=None, alias="acceptedAt")
+
+    @model_validator(mode="after")
+    def _state_has_only_its_projection(self) -> "EOMTermsSessionResponse":
+        ready_fields = (
+            self.customer_name is not None
+            and self.documents is not None
+            and self.expires_at is not None
+            and self.accepted_at is None
+        )
+        accepted_fields = (
+            self.customer_name is None
+            and self.documents is None
+            and self.expires_at is None
+            and self.accepted_at is not None
+        )
+        if (self.status == "ready" and not ready_fields) or (
+            self.status == "accepted" and not accepted_fields
+        ):
+            raise ValueError("Terms session state and projection do not match")
+        return self
+
+
+class EOMTermsAcceptanceResponse(BaseModel):
+    """Closed response for immutable acceptance and executed-copy delivery."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    acceptance_id: UUID = Field(alias="acceptanceId")
+    invitation_id: UUID = Field(alias="invitationId")
+    contact_id: UUID = Field(alias="contactId")
+    version_id: UUID = Field(alias="versionId")
+    version_label: str = Field(alias="versionLabel")
+    content_hash: str = Field(alias="contentHash")
+    audience: Literal["residential", "commercial"]
+    locale: Literal["en", "es"]
+    signer_name: str = Field(alias="signerName")
+    terms_accepted: Literal[True] = Field(alias="termsAccepted")
+    additional_work_accepted: Literal[True] = Field(alias="additionalWorkAccepted")
+    accepted_at: datetime = Field(alias="acceptedAt")
+    delivery_id: UUID = Field(alias="deliveryId")
+    executed_copy_delivery_status: Literal["pending", "sending", "sent"] = Field(
+        alias="executedCopyDeliveryStatus"
+    )
+    delivery_needs_reconciliation: bool = Field(alias="deliveryNeedsReconciliation")
+    delivery_error: bool = Field(alias="deliveryError")
+    idempotent: bool
+
+
+class EOMTermsReadinessResponse(BaseModel):
+    """Current customer readiness under the published material-version chain."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    contact_id: UUID = Field(alias="contactId")
+    audience: Literal["residential", "commercial"]
+    ready: bool
+    reason: Literal[
+        "not_accepted", "audience_changed", "reacceptance_required", "accepted"
+    ]
+    current_version_id: UUID = Field(alias="currentVersionId")
+    current_version_label: str = Field(alias="currentVersionLabel")
+    current_content_hash: str = Field(alias="currentContentHash")
+    accepted_version_id: UUID | None = Field(default=None, alias="acceptedVersionId")
+    accepted_version_label: str | None = Field(
+        default=None, alias="acceptedVersionLabel"
+    )
+    accepted_at: datetime | None = Field(default=None, alias="acceptedAt")
+    executed_copy_delivery_status: Literal["pending", "sending", "sent"] | None = Field(
+        default=None, alias="executedCopyDeliveryStatus"
+    )
+
+
+class EOMTermsDeliveryResponse(BaseModel):
+    """Actor-confirmed terminal state for one ambiguous transport result."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    delivery_id: UUID = Field(alias="deliveryId")
+    kind: Literal["invitation", "executed_copy"]
+    status: Literal["sent"]
+    sent_at: datetime = Field(alias="sentAt")
     idempotent: bool
 
 
@@ -766,6 +927,38 @@ def _terms_authority_dependency(request: Request) -> EOMTermsAuthority:
 
         pool = get_db_pool()
     return EOMTermsAuthority(pool=pool)
+
+
+def _terms_acceptance_dependency(request: Request) -> EOMTermsAcceptanceService:
+    """Bind Terms customer evidence to the canonical funnel database."""
+
+    pool_factory = getattr(request.app.state, "eom_funnel_terms_acceptance_pool", None)
+    if callable(pool_factory):
+        pool = pool_factory()
+    else:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+    return EOMTermsAcceptanceService(pool=pool)
+
+
+def _authenticated_terms_token(
+    token: object,
+    public_onboarding: EOMPublicOnboardingConfig,
+) -> AuthenticatedEOMTermsToken:
+    """Authenticate one Terms bearer before touching customer state."""
+
+    try:
+        return authenticate_eom_terms_token(
+            token=token,
+            secret=public_onboarding.hmac_secret,
+            previous_secret=public_onboarding.previous_hmac_secret,
+        )
+    except EOMTermsAcceptanceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
 
 
 def _authenticated_public_onboarding_token(
@@ -2080,6 +2273,13 @@ def _terms_error(exc: EOMTermsAuthorityError) -> HTTPException:
     )
 
 
+def _terms_acceptance_error(exc: EOMTermsAcceptanceError) -> HTTPException:
+    return HTTPException(
+        status_code=exc.status_code,
+        detail={"code": exc.code, "message": str(exc)},
+    )
+
+
 @router.post(
     "/terms/versions",
     response_model=EOMTermsVersionResponse,
@@ -2157,6 +2357,175 @@ async def get_current_eom_terms_version(
     except EOMTermsAuthorityError as exc:
         raise _terms_error(exc) from exc
     return EOMTermsVersionResponse.model_validate(result)
+
+
+@router.post(
+    "/terms/invitations",
+    response_model=EOMTermsInvitationResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def issue_eom_terms_invitation(
+    payload: EOMTermsInvitationRequest,
+    response: Response,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    config: Any = Depends(get_eom_funnel_api_config),
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    acceptance: EOMTermsAcceptanceService = Depends(_terms_acceptance_dependency),
+    sender: Any = Depends(_onboarding_sender_dependency),
+) -> EOMTermsInvitationResponse:
+    """Issue and deliver one actor-audited invitation for an existing customer."""
+
+    if not config.public_onboarding_issuance_is_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Public onboarding link issuance is paused",
+        )
+    try:
+        result = await acceptance.issue_and_send(
+            request_key=payload.request_key,
+            contact_id=payload.contact_id,
+            locale=payload.locale,
+            actor_id=actor["id"],
+            actor_name=actor["name"],
+            public_base_url=public_onboarding.base_url,
+            hmac_secret=public_onboarding.hmac_secret,
+            previous_hmac_secret=public_onboarding.previous_hmac_secret,
+            sender=sender,
+        )
+    except EOMTermsAcceptanceError as exc:
+        raise _terms_acceptance_error(exc) from exc
+    response.status_code = (
+        status.HTTP_200_OK if bool(result["idempotent"]) else status.HTTP_201_CREATED
+    )
+    return EOMTermsInvitationResponse.model_validate(result)
+
+
+@router.post(
+    "/terms/invitations/{invitation_id}/revoke",
+    response_model=EOMTermsInvitationResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def revoke_eom_terms_invitation(
+    invitation_id: UUID,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    acceptance: EOMTermsAcceptanceService = Depends(_terms_acceptance_dependency),
+) -> EOMTermsInvitationResponse:
+    """Make one unaccepted invitation permanently unusable."""
+
+    try:
+        result = await acceptance.revoke(
+            invitation_id=invitation_id,
+            actor_id=actor["id"],
+            actor_name=actor["name"],
+        )
+    except EOMTermsAcceptanceError as exc:
+        raise _terms_acceptance_error(exc) from exc
+    return EOMTermsInvitationResponse.model_validate(result)
+
+
+@router.get(
+    "/terms/readiness/{contact_id}",
+    response_model=EOMTermsReadinessResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def get_eom_terms_readiness(
+    contact_id: UUID,
+    acceptance: EOMTermsAcceptanceService = Depends(_terms_acceptance_dependency),
+) -> EOMTermsReadinessResponse:
+    """Report whether the customer has current material Terms evidence."""
+
+    try:
+        result = await acceptance.get_readiness(contact_id=contact_id)
+    except EOMTermsAcceptanceError as exc:
+        raise _terms_acceptance_error(exc) from exc
+    return EOMTermsReadinessResponse.model_validate(result)
+
+
+@router.post(
+    "/terms/deliveries/{delivery_id}/confirm-sent",
+    response_model=EOMTermsDeliveryResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def confirm_eom_terms_delivery_sent(
+    delivery_id: UUID,
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    acceptance: EOMTermsAcceptanceService = Depends(_terms_acceptance_dependency),
+) -> EOMTermsDeliveryResponse:
+    """Record an actor's external confirmation of an ambiguous send."""
+
+    try:
+        result = await acceptance.confirm_delivery_sent(
+            delivery_id=delivery_id,
+            actor_id=actor["id"],
+            actor_name=actor["name"],
+        )
+    except EOMTermsAcceptanceError as exc:
+        raise _terms_acceptance_error(exc) from exc
+    return EOMTermsDeliveryResponse.model_validate(result)
+
+
+@router.post(
+    "/terms/public/session",
+    response_model=EOMTermsSessionResponse,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def get_eom_terms_session(
+    payload: EOMTermsTokenRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    acceptance: EOMTermsAcceptanceService = Depends(_terms_acceptance_dependency),
+) -> EOMTermsSessionResponse:
+    """Resolve a Tracker-forwarded bearer into its exact public snapshot."""
+
+    token = _authenticated_terms_token(payload.token, public_onboarding)
+    try:
+        result = await acceptance.get_session(token=token)
+    except EOMTermsAcceptanceError as exc:
+        raise _terms_acceptance_error(exc) from exc
+    return EOMTermsSessionResponse.model_validate(result)
+
+
+@router.post(
+    "/terms/public/accept",
+    response_model=EOMTermsAcceptanceResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def accept_eom_terms(
+    payload: EOMTermsAcceptanceRequest,
+    response: Response,
+    x_eom_client_ip: Annotated[
+        str,
+        Header(alias="X-EOM-Client-IP", min_length=1, max_length=64),
+    ],
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    acceptance: EOMTermsAcceptanceService = Depends(_terms_acceptance_dependency),
+    sender: Any = Depends(_onboarding_sender_dependency),
+) -> EOMTermsAcceptanceResponse:
+    """Append one token-bound acceptance and deliver its executed copy."""
+
+    token = _authenticated_terms_token(payload.token, public_onboarding)
+    try:
+        result = await acceptance.accept_and_send(
+            token=token,
+            signer_name=payload.signer_name,
+            terms_accepted=payload.terms_accepted,
+            additional_work_accepted=payload.additional_work_accepted,
+            client_ip=x_eom_client_ip,
+            sender=sender,
+        )
+    except EOMTermsAcceptanceError as exc:
+        raise _terms_acceptance_error(exc) from exc
+    response.status_code = (
+        status.HTTP_200_OK if bool(result["idempotent"]) else status.HTTP_201_CREATED
+    )
+    return EOMTermsAcceptanceResponse.model_validate(result)
 
 
 @router.get(
