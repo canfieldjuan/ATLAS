@@ -49,6 +49,7 @@ legal-version API.
 
 Ownership lane: eom-onboarding-terms
 Slice phase: Vertical slice
+Max files: 12
 
 1. Persist draft/published Terms versions containing exactly residential and
    commercial documents in English and Spanish, each with Terms body, Services
@@ -238,10 +239,10 @@ Parked hardening: none.
 | `atlas_brain/services/eom_terms_authority.py` | 949 |
 | `atlas_brain/storage/migrations/396_eom_terms_authority.sql` | 415 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
-| `plans/PR-EOM-Terms-Authority.md` | 247 |
+| `plans/PR-EOM-Terms-Authority.md` | 248 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 55 |
 | `scripts/apply_eom_terms_authority_schema.py` | 42 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 44 |
 | `tests/test_eom_terms_authority.py` | 1007 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **2917** |
+| **Total** | **2918** |
