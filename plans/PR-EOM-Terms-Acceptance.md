@@ -84,7 +84,13 @@ evidence.
   acceptances by wall-clock time; and receipt identity fields admitted embedded
   line controls. A later review proved that the shared contact comparison was
   still enforced only for invitation delivery, allowing an executed-copy
-  receipt to target a stale address after acceptance.
+  receipt to target a stale address after acceptance. The final reconciliation
+  review exposed three remaining boundary failures: a delivery-only contact
+  conflict escaped after the acceptance transaction had already committed;
+  readiness used wall-clock ordering to choose between same-version
+  acceptances for different audiences; and a separate publication-order
+  trigger changed the predecessor release's exact five-trigger authority
+  boundary, breaking rolling-deploy and application-rollback compatibility.
 - Revised requirement: delivery first commits a durable `pending -> sending`
   claim before crossing the provider boundary. It then reacquires the
   publication, invitation, delivery, and canonical contact locks, revalidates
@@ -92,10 +98,14 @@ evidence.
   delivery, and retains those locks through the bounded provider outcome and
   database confirmation. Any uncertain provider or confirmation result remains
   `sending` and is never automatically retried; acceptance and revocation reject
-  that reconciliation state. Migration 397
-  adds a guard-owned monotonic publication order assigned under the existing
-  publication lock, every later-material decision and readiness selection uses
-  that order, and a sent transition admits a missing provider message id only
+  that reconciliation state. A delivery-only conflict after acceptance commit
+  returns the immutable acceptance with explicit pending/error reconciliation
+  state instead of falsely reporting that acceptance failed. Migration 397
+  adds a guard-owned monotonic publication order inside the existing protected
+  version trigger, preserving the predecessor's exact five-trigger boundary;
+  every later-material decision uses that order, and same-version readiness
+  prefers evidence for the contact's current audience rather than wall-clock
+  order. A sent transition admits a missing provider message id only
   when the established sender explicitly reports
   `idempotent_replay = true`. Shared signer/customer/actor text rejects every
   non-printable line-control character before it can enter receipt evidence.
@@ -164,12 +174,14 @@ Max files: 18
   - Migration 397 tests prove the guard owner owns all three relations and guard
     functions, the direct `atlas` login has no table-wide write/delete/truncate
     or function-replacement authority, acceptance rows and delivery payloads
-    cannot be rewritten, and only valid one-way revoke/delivery transitions are
-    admitted.
+    cannot be rewritten, only valid one-way revoke/delivery transitions are
+    admitted, and the predecessor's exact five-trigger authority attestor stays
+    ready after migration 397.
   - Readiness tests prove acceptance of the current or an older release followed
     only by non-material releases is ready, and any later material release is
     `reacceptance_required`, including when release or acceptance wall-clock
-    timestamps contradict the database-owned publication order.
+    timestamps contradict the database-owned publication order; same-version
+    acceptance for the current audience wins even when its clock is earlier.
   - Invitation and executed-copy transport tests assert persisted body equality
     with the selected published audience/locale, separate acknowledgement
     evidence, deterministic Resend idempotency keys, rejection after canonical
@@ -449,7 +461,7 @@ Parked hardening: none.
 
 - Passed locally after review fixes: the focused acceptance, authority, and
   controlled migration-runner suite against disposable PostgreSQL
-  (`206 passed, 1 skipped`), targeted Ruff and Ruff format checks, Python
+  (`207 passed`), targeted Ruff and Ruff format checks, Python
   compilation, and `git diff --check`.
 - Passed: synchronized-plan, boundary-enumeration, deployed-config, and
   PR-side consistency checks.
@@ -464,16 +476,16 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
 | `atlas_brain/eom_api/funnel.py` | 369 |
 | `atlas_brain/main_eom.py` | 1 |
-| `atlas_brain/services/eom_terms_acceptance.py` | 1930 |
-| `atlas_brain/services/eom_terms_authority.py` | 108 |
-| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 1045 |
+| `atlas_brain/services/eom_terms_acceptance.py` | 1939 |
+| `atlas_brain/services/eom_terms_authority.py` | 4 |
+| `atlas_brain/storage/migrations/397_eom_terms_acceptance.sql` | 1054 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Terms-Acceptance.md` | 479 |
+| `plans/PR-EOM-Terms-Acceptance.md` | 491 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 24 |
 | `scripts/apply_eom_terms_acceptance_schema.py` | 42 |
 | `tests/test_agent_operations_contract.py` | 35 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 95 |
-| `tests/test_eom_terms_acceptance.py` | 1801 |
+| `tests/test_eom_terms_acceptance.py` | 1869 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **6008** |
+| **Total** | **6002** |

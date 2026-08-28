@@ -390,7 +390,7 @@ async def eom_terms_acceptance_schema_ready(pool: Any) -> bool:
                            ('eom_terms_deliveries')
                 ),
                 expected_functions(name) AS (
-                    VALUES ('assign_eom_terms_publication_order'),
+                    VALUES ('protect_eom_terms_version'),
                            ('validate_eom_terms_invitation'),
                            ('protect_eom_terms_invitation'),
                            ('validate_eom_terms_acceptance'),
@@ -400,8 +400,8 @@ async def eom_terms_acceptance_schema_ready(pool: Any) -> bool:
                 expected_triggers(relation_name, function_name, trigger_name) AS (
                     VALUES
                         ('eom_terms_versions',
-                         'assign_eom_terms_publication_order',
-                         'trg_assign_eom_terms_publication_order'),
+                         'protect_eom_terms_version',
+                         'trg_protect_eom_terms_version'),
                         ('eom_terms_invitations',
                          'validate_eom_terms_invitation',
                          'trg_validate_eom_terms_invitation'),
@@ -713,7 +713,7 @@ async def eom_terms_acceptance_schema_ready(pool: Any) -> bool:
                    )
                    AND NOT has_function_privilege(
                        current_user,
-                       'assign_eom_terms_publication_order()', 'EXECUTE'
+                       'protect_eom_terms_version()', 'EXECUTE'
                    )
                    AND NOT has_function_privilege(
                        current_user, 'validate_eom_terms_invitation()', 'EXECUTE'
@@ -820,7 +820,7 @@ def _acceptance_result(
         "acceptedAt": _iso(row["accepted_at"]),
         "deliveryId": str(row["delivery_id"]),
         "executedCopyDeliveryStatus": delivery_status,
-        "deliveryNeedsReconciliation": delivery_status == "sending",
+        "deliveryNeedsReconciliation": delivery_error or delivery_status == "sending",
         "deliveryError": delivery_error,
         "idempotent": idempotent,
     }
@@ -1674,14 +1674,22 @@ class EOMTermsAcceptanceService:
             else:
                 sender = send_onboarding_email
         if sender is not None:
-            delivery, delivery_error = await self._deliver(
-                delivery_id=UUID(str(acceptance["delivery_id"])),
-                secret=None,
-                previous_secret=None,
-                sender=sender,
-            )
             result_row = dict(acceptance)
-            result_row["delivery_status"] = delivery["status"]
+            try:
+                delivery, delivery_error = await self._deliver(
+                    delivery_id=UUID(str(acceptance["delivery_id"])),
+                    secret=None,
+                    previous_secret=None,
+                    sender=sender,
+                )
+            except EOMTermsAcceptanceConflictError:
+                logger.warning(
+                    "Accepted EOM Terms receipt delivery requires reconciliation",
+                    extra={"acceptance_id": str(acceptance["acceptance_id"])},
+                )
+                delivery_error = True
+            else:
+                result_row["delivery_status"] = delivery["status"]
         else:
             result_row = dict(acceptance)
         return _acceptance_result(
@@ -1883,11 +1891,12 @@ class EOMTermsAcceptanceService:
                      AND delivery.kind = 'executed_copy'
                     WHERE acceptance.contact_id = $1
                     ORDER BY version.publication_order DESC,
-                             acceptance.accepted_at DESC,
+                             (acceptance.audience = $2) DESC,
                              acceptance.id DESC
                     LIMIT 1
                     """,
                     parsed_contact_id,
+                    audience,
                 )
         except EOMTermsAcceptanceError:
             raise

@@ -196,9 +196,6 @@ BEGIN
           )) IS NOT NULL
        OR to_regprocedure(format(
             '%I.protect_eom_terms_delivery()', schema_name
-          )) IS NOT NULL
-       OR to_regprocedure(format(
-            '%I.assign_eom_terms_publication_order()', schema_name
           )) IS NOT NULL THEN
         RAISE EXCEPTION
             'refusing to adopt a pre-existing EOM Terms acceptance object';
@@ -213,15 +210,6 @@ BEGIN
            AND attribute.attname = 'publication_order'
            AND attribute.attnum > 0
            AND NOT attribute.attisdropped
-    ) OR EXISTS (
-        SELECT 1
-          FROM pg_trigger AS guard_trigger
-         WHERE guard_trigger.tgrelid = to_regclass(format(
-                   '%I.eom_terms_versions', schema_name
-               ))
-           AND guard_trigger.tgname =
-               'trg_assign_eom_terms_publication_order'
-           AND NOT guard_trigger.tgisinternal
     ) THEN
         RAISE EXCEPTION
             'refusing to adopt pre-existing EOM Terms publication ordering';
@@ -274,12 +262,39 @@ ALTER TABLE eom_terms_versions
             (status = 'published' AND publication_order > 0)
         );
 
-CREATE FUNCTION assign_eom_terms_publication_order()
+-- Extend migration 396's existing guard instead of adding another trigger.
+-- The previous application release attests exactly five authority triggers;
+-- keeping that boundary stable makes both a rolling deploy and app rollback
+-- safe after this migration commits.
+CREATE OR REPLACE FUNCTION protect_eom_terms_version()
 RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY INVOKER
 AS $$
 BEGIN
+    IF TG_OP = 'TRUNCATE' THEN
+        RAISE EXCEPTION 'EOM Terms version history is append-only';
+    END IF;
+    IF OLD.status = 'published' THEN
+        RAISE EXCEPTION 'Published EOM Terms versions are immutable';
+    END IF;
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    IF NEW.status = 'draft' THEN
+        RAISE EXCEPTION 'EOM Terms drafts cannot be edited; create a new version';
+    END IF;
+    IF NEW.id IS DISTINCT FROM OLD.id
+       OR NEW.business_context_id IS DISTINCT FROM OLD.business_context_id
+       OR NEW.version_label IS DISTINCT FROM OLD.version_label
+       OR NEW.material_change IS DISTINCT FROM OLD.material_change
+       OR NEW.documents IS DISTINCT FROM OLD.documents
+       OR NEW.content_hash IS DISTINCT FROM OLD.content_hash
+       OR NEW.created_by_id IS DISTINCT FROM OLD.created_by_id
+       OR NEW.created_by_name IS DISTINCT FROM OLD.created_by_name
+       OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'Publishing EOM Terms cannot rewrite draft content';
+    END IF;
     IF OLD.status = 'draft' AND NEW.status = 'published' THEN
         IF NEW.publication_order IS NOT NULL THEN
             RAISE EXCEPTION
@@ -292,18 +307,12 @@ BEGIN
           INTO NEW.publication_order
           FROM eom_terms_versions AS version
          WHERE version.status = 'published';
-        RETURN NEW;
-    END IF;
-    IF NEW.publication_order IS DISTINCT FROM OLD.publication_order THEN
+    ELSIF NEW.publication_order IS DISTINCT FROM OLD.publication_order THEN
         RAISE EXCEPTION 'EOM Terms publication order is immutable';
     END IF;
     RETURN NEW;
 END;
 $$;
-
-CREATE TRIGGER trg_assign_eom_terms_publication_order
-    BEFORE UPDATE ON eom_terms_versions
-    FOR EACH ROW EXECUTE FUNCTION assign_eom_terms_publication_order();
 
 CREATE TABLE eom_terms_invitations (
     id UUID CONSTRAINT pk_eom_terms_invitations PRIMARY KEY,
@@ -891,7 +900,7 @@ DECLARE
     grantee_name TEXT;
 BEGIN
     FOREACH function_name IN ARRAY ARRAY[
-        'assign_eom_terms_publication_order',
+        'protect_eom_terms_version',
         'validate_eom_terms_invitation',
         'protect_eom_terms_invitation',
         'validate_eom_terms_acceptance',
@@ -954,7 +963,7 @@ BEGIN
     END LOOP;
 
     FOREACH function_name IN ARRAY ARRAY[
-        'assign_eom_terms_publication_order',
+        'protect_eom_terms_version',
         'validate_eom_terms_invitation',
         'protect_eom_terms_invitation',
         'validate_eom_terms_acceptance',

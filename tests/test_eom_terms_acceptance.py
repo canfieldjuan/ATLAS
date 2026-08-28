@@ -1036,6 +1036,66 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
         assert current_readiness["reason"] == "accepted"
         assert current_readiness["acceptedVersionId"] == material_release["versionId"]
 
+        await dba.execute(
+            "UPDATE contacts SET customer_type = 'commercial' WHERE id = $1",
+            _CONTACT_ID,
+        )
+        changed_audience_readiness = await service.get_readiness(contact_id=_CONTACT_ID)
+        assert changed_audience_readiness["ready"] is False
+        assert changed_audience_readiness["reason"] == "audience_changed"
+        assert changed_audience_readiness["audience"] == "commercial"
+        commercial_invitation = await service.issue_and_send(
+            request_key="terms-request-current-version-commercial",
+            contact_id=_CONTACT_ID,
+            locale="en",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=_RecordingSender(),
+        )
+        commercial_acceptance = await service.accept_and_send(
+            token=authenticate_eom_terms_token(
+                token=format_eom_terms_token(
+                    invitation_id=UUID(commercial_invitation["invitationId"]),
+                    secret=_SECRET,
+                ),
+                secret=_SECRET,
+            ),
+            signer_name="Commercial Signer",
+            terms_accepted=True,
+            additional_work_accepted=True,
+            client_ip="192.0.2.35",
+            sender=_RecordingSender(),
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_acceptances
+            DISABLE TRIGGER trg_protect_eom_terms_acceptance
+            """
+        )
+        await dba.execute(
+            """
+            UPDATE eom_terms_acceptances
+            SET accepted_at = TIMESTAMPTZ '1999-01-01 00:00:00+00'
+            WHERE id = $1
+            """,
+            UUID(commercial_acceptance["acceptanceId"]),
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_terms_acceptances
+            ENABLE TRIGGER trg_protect_eom_terms_acceptance
+            """
+        )
+        commercial_readiness = await service.get_readiness(contact_id=_CONTACT_ID)
+        assert commercial_readiness["ready"] is True
+        assert commercial_readiness["reason"] == "accepted"
+        assert commercial_readiness["audience"] == "commercial"
+        assert (
+            commercial_readiness["acceptedVersionId"] == material_release["versionId"]
+        )
+
         with pytest.raises(EOMTermsAcceptanceConflictError):
             await service.revoke(
                 invitation_id=invitation["invitationId"],
@@ -1048,7 +1108,7 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
         await dba.execute(
             """
             ALTER TABLE eom_terms_versions
-            DISABLE TRIGGER trg_assign_eom_terms_publication_order
+            DISABLE TRIGGER trg_protect_eom_terms_version
             """
         )
         assert await eom_terms_acceptance_schema_ready(pool) is False
@@ -1056,7 +1116,7 @@ async def test_real_postgres_end_to_end_preserves_evidence_and_readiness() -> No
         await dba.execute(
             """
             ALTER TABLE eom_terms_versions
-            ENABLE TRIGGER trg_assign_eom_terms_publication_order
+            ENABLE TRIGGER trg_protect_eom_terms_version
             """
         )
         assert await eom_terms_acceptance_schema_ready(pool) is True
@@ -1328,14 +1388,15 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
             hmac_secret=_SECRET,
             sender=_RecordingSender(),
         )
-        executed_copy_acceptance = await no_delivery.accept_and_send(
-            token=authenticate_eom_terms_token(
-                token=format_eom_terms_token(
-                    invitation_id=UUID(executed_copy_invitation["invitationId"]),
-                    secret=_SECRET,
-                ),
+        executed_copy_token = authenticate_eom_terms_token(
+            token=format_eom_terms_token(
+                invitation_id=UUID(executed_copy_invitation["invitationId"]),
                 secret=_SECRET,
             ),
+            secret=_SECRET,
+        )
+        executed_copy_acceptance = await no_delivery.accept_and_send(
+            token=executed_copy_token,
             signer_name="Executed Copy Signer",
             terms_accepted=True,
             additional_work_accepted=True,
@@ -1348,16 +1409,22 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
             "executed-copy-after-change@example.com",
         )
         executed_copy_sender = _RecordingSender()
-        with pytest.raises(
-            EOMTermsAcceptanceConflictError,
-            match="customer changed before Terms delivery",
-        ):
-            await service._deliver(
-                delivery_id=UUID(executed_copy_acceptance["deliveryId"]),
-                secret=None,
-                previous_secret=None,
-                sender=executed_copy_sender,
-            )
+        accepted_after_contact_change = await service.accept_and_send(
+            token=executed_copy_token,
+            signer_name="Executed Copy Signer",
+            terms_accepted=True,
+            additional_work_accepted=True,
+            client_ip="192.0.2.34",
+            sender=executed_copy_sender,
+        )
+        assert (
+            accepted_after_contact_change["acceptanceId"]
+            == executed_copy_acceptance["acceptanceId"]
+        )
+        assert accepted_after_contact_change["idempotent"] is True
+        assert accepted_after_contact_change["deliveryError"] is True
+        assert accepted_after_contact_change["deliveryNeedsReconciliation"] is True
+        assert accepted_after_contact_change["executedCopyDeliveryStatus"] == "pending"
         assert executed_copy_sender.calls == []
         assert (
             await dba.fetchval(
@@ -1789,7 +1856,8 @@ def test_migration_is_guard_owned_append_only_and_seeds_no_content() -> None:
     assert "validate_eom_terms_invitation" in migration
     assert "validate_eom_terms_acceptance" in migration
     assert "protect_eom_terms_delivery" in migration
-    assert "assign_eom_terms_publication_order" in migration
+    assert "CREATE OR REPLACE FUNCTION protect_eom_terms_version()" in migration
+    assert "trg_assign_eom_terms_publication_order" not in migration
     assert "ADD COLUMN publication_order BIGINT" in migration
     assert "later.publication_order > invitation_row.publication_order" in migration
     assert "BEFORE TRUNCATE ON eom_terms_acceptances" in migration
