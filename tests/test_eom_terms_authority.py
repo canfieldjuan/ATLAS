@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
+import asyncpg
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -35,6 +38,8 @@ _MIGRATION = (
     Path(__file__).resolve().parent.parent
     / "atlas_brain/storage/migrations/396_eom_terms_authority.sql"
 )
+_RUNTIME_DATABASE_URL_ENV = "ATLAS_EOM_FIRST_CLEAN_TEST_DATABASE_URL"
+_DBA_DATABASE_URL_ENV = "ATLAS_EOM_FIRST_CLEAN_DBA_DATABASE_URL"
 
 
 def _documents(marker: str = "approved") -> dict[str, Any]:
@@ -105,6 +110,155 @@ class _SchemaProbePool:
     async def fetchval(self, query: str) -> object:
         self.query = query
         return self.result
+
+
+class _AsyncpgAuthorityPool:
+    """Expose the service pool protocol over a real asyncpg pool."""
+
+    is_initialized = True
+
+    def __init__(self, pool: Any) -> None:
+        self.raw_pool = pool
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self.raw_pool.acquire() as connection:
+            async with connection.transaction():
+                yield connection
+
+    async def fetchval(self, *args: Any, **kwargs: Any) -> Any:
+        async with self.raw_pool.acquire() as connection:
+            return await connection.fetchval(*args, **kwargs)
+
+    async def fetchrow(self, *args: Any, **kwargs: Any) -> Any:
+        async with self.raw_pool.acquire() as connection:
+            return await connection.fetchrow(*args, **kwargs)
+
+
+class _FailBeforeCurrentConnection:
+    """Inject one failure after publication UPDATE but before pointer UPSERT."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    async def execute(self, query: str, *args: Any) -> Any:
+        if "INSERT INTO eom_terms_current_version" in query:
+            raise OSError("injected pointer-write failure")
+        return await self._connection.execute(query, *args)
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        return await self._connection.fetchval(query, *args)
+
+    async def fetchrow(self, query: str, *args: Any) -> Any:
+        return await self._connection.fetchrow(query, *args)
+
+
+class _FailBeforeCurrentPool(_AsyncpgAuthorityPool):
+    @asynccontextmanager
+    async def transaction(self):
+        async with self.raw_pool.acquire() as connection:
+            async with connection.transaction():
+                yield _FailBeforeCurrentConnection(connection)
+
+
+class _RecordingCurrentConnection:
+    """Record successful current-pointer writes while holding the DB lock."""
+
+    def __init__(self, connection: Any, publication_order: list[UUID]) -> None:
+        self._connection = connection
+        self._publication_order = publication_order
+
+    async def execute(self, query: str, *args: Any) -> Any:
+        result = await self._connection.execute(query, *args)
+        if "INSERT INTO eom_terms_current_version" in query:
+            self._publication_order.append(UUID(str(args[0])))
+        return result
+
+    async def fetchval(self, query: str, *args: Any) -> Any:
+        return await self._connection.fetchval(query, *args)
+
+    async def fetchrow(self, query: str, *args: Any) -> Any:
+        return await self._connection.fetchrow(query, *args)
+
+
+class _RecordingCurrentPool(_AsyncpgAuthorityPool):
+    def __init__(self, pool: Any, publication_order: list[UUID]) -> None:
+        super().__init__(pool)
+        self._publication_order = publication_order
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self.raw_pool.acquire() as connection:
+            async with connection.transaction():
+                yield _RecordingCurrentConnection(
+                    connection,
+                    self._publication_order,
+                )
+
+
+def _database_url_or_skip(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        pytest.skip(f"{name} is not configured")
+    return value
+
+
+async def _provision_terms_guard(dba_connection: Any) -> None:
+    await dba_connection.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_roles
+                WHERE rolname = 'atlas_eom_handoff_owner'
+            ) THEN
+                ALTER ROLE atlas_eom_handoff_owner
+                    NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+                    NOREPLICATION NOBYPASSRLS;
+            ELSE
+                CREATE ROLE atlas_eom_handoff_owner
+                    NOLOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+                    NOREPLICATION NOBYPASSRLS;
+            END IF;
+        END;
+        $$;
+        """
+    )
+    await dba_connection.execute("REVOKE atlas_eom_handoff_owner FROM atlas")
+
+
+@asynccontextmanager
+async def _real_terms_store():
+    runtime_url = _database_url_or_skip(_RUNTIME_DATABASE_URL_ENV)
+    dba_url = _database_url_or_skip(_DBA_DATABASE_URL_ENV)
+    schema = f"atlas_eom_terms_{uuid4().hex}"
+    dba_connection = await asyncpg.connect(dba_url)
+    runtime_pool = None
+    try:
+        await _provision_terms_guard(dba_connection)
+        await dba_connection.execute(
+            f'CREATE SCHEMA "{schema}" AUTHORIZATION atlas_eom_handoff_owner'
+        )
+        await dba_connection.execute(
+            f'GRANT USAGE, CREATE ON SCHEMA "{schema}" TO atlas'
+        )
+        await dba_connection.execute(f'SET search_path TO "{schema}", pg_catalog')
+        await dba_connection.execute(_MIGRATION.read_text())
+        runtime_pool = await asyncpg.create_pool(
+            runtime_url,
+            min_size=1,
+            max_size=5,
+            statement_cache_size=0,
+            server_settings={"search_path": f'"{schema}", pg_catalog'},
+        )
+        yield _AsyncpgAuthorityPool(runtime_pool), dba_connection, schema
+    finally:
+        if runtime_pool is not None:
+            await runtime_pool.close()
+        try:
+            await dba_connection.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        finally:
+            await dba_connection.close()
 
 
 class _CreateConnection:
@@ -327,6 +481,318 @@ async def test_schema_guard_requires_relations_triggers_unique_keys_and_fk() -> 
         "foreign_key.confdeltype = 'r'",
     ):
         assert expected_boundary in ready_pool.query
+
+
+def test_slim_eom_profile_binds_terms_to_canonical_funnel_pool() -> None:
+    from atlas_brain import main_eom
+
+    assert main_eom.app.state.eom_funnel_terms_pool is main_eom.get_eom_funnel_db_pool
+
+
+@pytest.mark.asyncio
+async def test_real_postgres_enforces_guard_concurrency_and_rollback() -> None:
+    async with _real_terms_store() as (pool, dba_connection, schema):
+        authority = EOMTermsAuthority(pool=pool)
+
+        assert await eom_terms_authority_schema_ready(pool) is True
+        assert await pool.fetchval("SELECT COUNT(*) FROM eom_terms_versions") == 0
+        relation_owners = await dba_connection.fetch(
+            """
+            SELECT relation.relname, owner.rolname AS owner
+            FROM pg_class AS relation
+            JOIN pg_roles AS owner ON owner.oid = relation.relowner
+            WHERE relation.oid IN (
+                'eom_terms_versions'::regclass,
+                'eom_terms_current_version'::regclass
+            )
+            """
+        )
+        assert {
+            (str(row["relname"]), str(row["owner"])) for row in relation_owners
+        } == {
+            ("eom_terms_versions", "atlas_eom_handoff_owner"),
+            ("eom_terms_current_version", "atlas_eom_handoff_owner"),
+        }
+        assert (
+            await pool.fetchval(
+                """
+            SELECT NOT has_table_privilege(
+                       current_user, 'eom_terms_versions', 'UPDATE'
+                   )
+               AND NOT has_table_privilege(
+                       current_user, 'eom_terms_versions', 'INSERT'
+                   )
+               AND has_column_privilege(
+                       current_user, 'eom_terms_versions', 'status', 'UPDATE'
+                   )
+               AND NOT has_column_privilege(
+                       current_user, 'eom_terms_versions', 'documents', 'UPDATE'
+                   )
+               AND NOT has_function_privilege(
+                       current_user,
+                       'protect_eom_terms_version()'::regprocedure,
+                       'EXECUTE'
+                   )
+            """
+            )
+            is True
+        )
+
+        first = await authority.create_draft(
+            version_label="2026.1",
+            material_change=True,
+            documents=_documents("first"),
+            actor_id=7,
+            actor_name="Juan",
+        )
+        first_id = UUID(first["versionId"])
+        published = await authority.publish(
+            version_id=first_id,
+            actor_id=7,
+            actor_name="Juan",
+        )
+        assert published["status"] == "published"
+        assert published["idempotent"] is False
+
+        async with pool.raw_pool.acquire() as runtime_connection:
+            with pytest.raises(
+                asyncpg.PostgresError,
+                match="Published EOM Terms versions are immutable",
+            ):
+                await runtime_connection.execute(
+                    """
+                    UPDATE eom_terms_versions
+                    SET published_by_name = 'tampered'
+                    WHERE id = $1
+                    """,
+                    first_id,
+                )
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await runtime_connection.execute(
+                    """
+                    ALTER TABLE eom_terms_versions
+                    DISABLE TRIGGER trg_protect_eom_terms_version
+                    """
+                )
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await runtime_connection.execute(
+                    """
+                    CREATE OR REPLACE FUNCTION protect_eom_terms_version()
+                    RETURNS TRIGGER LANGUAGE plpgsql AS $$
+                    BEGIN
+                        RETURN NEW;
+                    END;
+                    $$
+                    """
+                )
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await runtime_connection.execute(
+                    "DELETE FROM eom_terms_current_version"
+                )
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await runtime_connection.execute("TRUNCATE eom_terms_versions")
+
+        duplicate = await authority.create_draft(
+            version_label="2026.2",
+            material_change=False,
+            documents=_documents("duplicate"),
+            actor_id=7,
+            actor_name="Juan",
+        )
+        duplicate_id = UUID(duplicate["versionId"])
+        async with pool.raw_pool.acquire() as runtime_connection:
+            with pytest.raises(
+                asyncpg.PostgresError,
+                match="Current EOM Terms version must be published",
+            ):
+                await runtime_connection.execute(
+                    """
+                    UPDATE eom_terms_current_version
+                    SET version_id = $1
+                    WHERE singleton
+                    """,
+                    duplicate_id,
+                )
+
+        duplicate_results = await asyncio.gather(
+            authority.publish(
+                version_id=duplicate_id,
+                actor_id=7,
+                actor_name="Juan",
+            ),
+            authority.publish(
+                version_id=duplicate_id,
+                actor_id=7,
+                actor_name="Juan",
+            ),
+        )
+        assert sorted(result["idempotent"] for result in duplicate_results) == [
+            False,
+            True,
+        ]
+
+        distinct_versions = []
+        for suffix in ("3", "4"):
+            created = await authority.create_draft(
+                version_label=f"2026.{suffix}",
+                material_change=True,
+                documents=_documents(f"distinct-{suffix}"),
+                actor_id=7,
+                actor_name="Juan",
+            )
+            distinct_versions.append(UUID(created["versionId"]))
+
+        publication_order: list[UUID] = []
+        recording_authority = EOMTermsAuthority(
+            pool=_RecordingCurrentPool(pool.raw_pool, publication_order)
+        )
+
+        async def publish_recorded(version_id: UUID) -> dict[str, Any]:
+            return await recording_authority.publish(
+                version_id=version_id,
+                actor_id=7,
+                actor_name="Juan",
+            )
+
+        distinct_results = await asyncio.gather(
+            *(publish_recorded(version_id) for version_id in distinct_versions)
+        )
+        assert all(result["status"] == "published" for result in distinct_results)
+        assert len(publication_order) == 2
+        current = await authority.get_current()
+        assert UUID(current["versionId"]) == publication_order[-1]
+        assert (
+            await pool.fetchval(
+                """
+            SELECT COUNT(*)
+            FROM eom_terms_versions
+            WHERE id = ANY($1::uuid[]) AND status = 'published'
+            """,
+                distinct_versions,
+            )
+            == 2
+        )
+        with pytest.raises(EOMTermsConflictError):
+            await authority.publish(
+                version_id=publication_order[0],
+                actor_id=7,
+                actor_name="Juan",
+            )
+
+        rollback_draft = await authority.create_draft(
+            version_label="2026.rollback",
+            material_change=True,
+            documents=_documents("rollback"),
+            actor_id=7,
+            actor_name="Juan",
+        )
+        rollback_id = UUID(rollback_draft["versionId"])
+        current_before_failure = await pool.fetchval(
+            "SELECT version_id FROM eom_terms_current_version WHERE singleton"
+        )
+        failing_authority = EOMTermsAuthority(
+            pool=_FailBeforeCurrentPool(pool.raw_pool)
+        )
+        with pytest.raises(
+            EOMTermsUnavailableError,
+            match="could not be published",
+        ):
+            await failing_authority.publish(
+                version_id=rollback_id,
+                actor_id=7,
+                actor_name="Juan",
+            )
+        assert (
+            await pool.fetchval(
+                "SELECT status FROM eom_terms_versions WHERE id = $1",
+                rollback_id,
+            )
+            == "draft"
+        )
+        assert (
+            await pool.fetchval(
+                "SELECT version_id FROM eom_terms_current_version WHERE singleton"
+            )
+            == current_before_failure
+        )
+
+        rewrite_probe = await authority.create_draft(
+            version_label="2026.rewrite",
+            material_change=True,
+            documents=_documents("rewrite"),
+            actor_id=7,
+            actor_name="Juan",
+        )
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="Publishing EOM Terms cannot rewrite draft content",
+        ):
+            await dba_connection.execute(
+                """
+                UPDATE eom_terms_versions
+                SET status = 'published',
+                    published_by_id = 7,
+                    published_by_name = 'Juan',
+                    published_at = CURRENT_TIMESTAMP,
+                    documents = '{"tampered": true}'::jsonb
+                WHERE id = $1
+                """,
+                UUID(rewrite_probe["versionId"]),
+            )
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match="Current EOM Terms authority cannot be removed",
+        ):
+            await dba_connection.execute("DELETE FROM eom_terms_current_version")
+        with pytest.raises(
+            asyncpg.PostgresError,
+            match=(
+                "EOM Terms version history is append-only"
+                "|Current EOM Terms authority cannot be removed"
+            ),
+        ):
+            await dba_connection.execute(
+                "TRUNCATE eom_terms_versions, eom_terms_current_version"
+            )
+
+        await dba_connection.execute(
+            """
+            ALTER TABLE eom_terms_versions
+            DISABLE TRIGGER trg_protect_eom_terms_version
+            """
+        )
+        assert await eom_terms_authority_schema_ready(pool) is False
+        await dba_connection.execute(
+            """
+            ALTER TABLE eom_terms_versions
+            ENABLE TRIGGER trg_protect_eom_terms_version
+            """
+        )
+        assert await eom_terms_authority_schema_ready(pool) is True
+
+        await dba_connection.execute(
+            "GRANT DELETE ON TABLE eom_terms_versions TO atlas"
+        )
+        assert await eom_terms_authority_schema_ready(pool) is False
+        await dba_connection.execute(
+            "REVOKE DELETE ON TABLE eom_terms_versions FROM atlas"
+        )
+        assert await eom_terms_authority_schema_ready(pool) is True
+
+        await dba_connection.execute(
+            """
+            ALTER FUNCTION protect_eom_terms_version()
+            SET search_path TO pg_catalog
+            """
+        )
+        assert await eom_terms_authority_schema_ready(pool) is False
+        await dba_connection.execute(
+            f"""
+            ALTER FUNCTION protect_eom_terms_version()
+            SET search_path TO pg_catalog, "{schema}", pg_temp
+            """
+        )
+        assert await eom_terms_authority_schema_ready(pool) is True
 
 
 @pytest.mark.asyncio

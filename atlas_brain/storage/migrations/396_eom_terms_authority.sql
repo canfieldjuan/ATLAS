@@ -2,11 +2,148 @@
 -- Immutable, bilingual EOM Terms releases. This migration stores no customer
 -- acceptance and seeds no Terms content; later invitation/acceptance slices
 -- reference the published version selected by the singleton pointer.
+--
+-- This is a controlled DBA-only migration. The direct Atlas runtime must be
+-- able to create drafts and publish them, but it must not own the relations or
+-- trigger functions that make published history immutable. Apply this through
+-- the dedicated Terms-authority preflight/apply command, never ordinary Atlas
+-- startup migrations.
 
-CREATE TABLE IF NOT EXISTS eom_terms_versions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+DO $$
+DECLARE
+    schema_name TEXT := current_schema();
+    executor_is_superuser BOOLEAN;
+    runtime_role_ready BOOLEAN;
+    guard_role_ready BOOLEAN;
+BEGIN
+    SELECT COALESCE(role.rolsuper, FALSE)
+      INTO executor_is_superuser
+      FROM pg_roles AS role
+     WHERE role.rolname = current_user;
+    IF NOT executor_is_superuser THEN
+        RAISE EXCEPTION
+            'database administrator must run 396_eom_terms_authority';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_roles AS runtime_role
+         WHERE runtime_role.rolname = 'atlas'
+           AND runtime_role.rolcanlogin
+           AND NOT runtime_role.rolsuper
+           AND NOT runtime_role.rolcreaterole
+           AND NOT runtime_role.rolcreatedb
+           AND NOT runtime_role.rolreplication
+           AND NOT runtime_role.rolbypassrls
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM pg_database AS database
+                WHERE database.datname = current_database()
+                  AND database.datdba = runtime_role.oid
+           )
+           AND NOT EXISTS (
+               SELECT 1
+                 FROM pg_roles AS elevated_role
+                WHERE elevated_role.oid <> runtime_role.oid
+                  AND (
+                      elevated_role.rolsuper
+                      OR elevated_role.rolcreaterole
+                      OR elevated_role.rolcreatedb
+                      OR elevated_role.rolreplication
+                      OR elevated_role.rolbypassrls
+                  )
+                  AND pg_has_role(
+                      runtime_role.oid, elevated_role.oid, 'MEMBER'
+                  )
+           )
+    )
+      INTO runtime_role_ready;
+    IF NOT runtime_role_ready THEN
+        RAISE EXCEPTION
+            'atlas must be an unprivileged login runtime role before running 396_eom_terms_authority';
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+          FROM pg_roles AS guard_role
+         WHERE guard_role.rolname = 'atlas_eom_handoff_owner'
+           AND NOT guard_role.rolcanlogin
+           AND NOT guard_role.rolinherit
+           AND NOT guard_role.rolsuper
+           AND NOT guard_role.rolcreaterole
+           AND NOT guard_role.rolcreatedb
+           AND NOT guard_role.rolreplication
+           AND NOT guard_role.rolbypassrls
+    )
+      INTO guard_role_ready;
+    IF NOT guard_role_ready THEN
+        RAISE EXCEPTION
+            'atlas_eom_handoff_owner must already be the isolated no-login EOM guard role before running 396_eom_terms_authority';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM pg_stat_activity AS activity
+          JOIN pg_roles AS guard_role
+            ON guard_role.rolname = 'atlas_eom_handoff_owner'
+         WHERE activity.usesysid = guard_role.oid
+           AND activity.datid = (
+               SELECT database.oid
+                 FROM pg_database AS database
+                WHERE database.datname = current_database()
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'atlas_eom_handoff_owner must have no live sessions before running 396_eom_terms_authority';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+          FROM pg_roles AS member_role
+          JOIN pg_roles AS guard_role
+            ON guard_role.rolname = 'atlas_eom_handoff_owner'
+         WHERE member_role.rolcanlogin
+           AND NOT member_role.rolsuper
+           AND pg_has_role(member_role.oid, guard_role.oid, 'MEMBER')
+    ) THEN
+        RAISE EXCEPTION
+            'no non-superuser login may retain membership in atlas_eom_handoff_owner';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_namespace AS namespace
+         WHERE namespace.nspname = schema_name
+           AND namespace.nspowner = (
+               SELECT oid
+                 FROM pg_roles
+                WHERE rolname = 'atlas_eom_handoff_owner'
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'the EOM funnel schema must already be owned by atlas_eom_handoff_owner; apply the guarded EOM schema boundary before 396_eom_terms_authority';
+    END IF;
+
+    IF to_regclass(format('%I.eom_terms_versions', schema_name)) IS NOT NULL
+       OR to_regclass(format('%I.eom_terms_current_version', schema_name)) IS NOT NULL
+       OR to_regprocedure(format('%I.protect_eom_terms_version()', schema_name))
+            IS NOT NULL
+       OR to_regprocedure(format(
+            '%I.require_published_eom_terms_current_version()', schema_name
+          )) IS NOT NULL
+       OR to_regprocedure(format(
+            '%I.prevent_eom_terms_current_removal()', schema_name
+          )) IS NOT NULL THEN
+        RAISE EXCEPTION
+            'refusing to adopt a pre-existing EOM Terms authority object';
+    END IF;
+END;
+$$;
+
+CREATE TABLE eom_terms_versions (
+    id UUID CONSTRAINT pk_eom_terms_versions PRIMARY KEY DEFAULT gen_random_uuid(),
     business_context_id VARCHAR(64) NOT NULL DEFAULT 'effingham_maids',
-    version_label VARCHAR(64) NOT NULL UNIQUE,
+    version_label VARCHAR(64) NOT NULL,
     status VARCHAR(16) NOT NULL DEFAULT 'draft',
     material_change BOOLEAN NOT NULL,
     documents JSONB NOT NULL,
@@ -17,6 +154,7 @@ CREATE TABLE IF NOT EXISTS eom_terms_versions (
     published_by_id BIGINT,
     published_by_name VARCHAR(128),
     published_at TIMESTAMPTZ,
+    CONSTRAINT uq_eom_terms_version_label UNIQUE (version_label),
     CONSTRAINT ck_eom_terms_context
         CHECK (business_context_id = 'effingham_maids'),
     CONSTRAINT ck_eom_terms_version_label
@@ -43,19 +181,27 @@ CREATE TABLE IF NOT EXISTS eom_terms_versions (
         )
 );
 
-CREATE TABLE IF NOT EXISTS eom_terms_current_version (
-    singleton BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (singleton),
-    version_id UUID NOT NULL UNIQUE
+CREATE TABLE eom_terms_current_version (
+    singleton BOOLEAN NOT NULL DEFAULT TRUE,
+    version_id UUID NOT NULL,
+    selected_by_id BIGINT NOT NULL,
+    selected_by_name VARCHAR(128) NOT NULL,
+    selected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT pk_eom_terms_current_version PRIMARY KEY (singleton),
+    CONSTRAINT ck_eom_terms_current_singleton CHECK (singleton),
+    CONSTRAINT uq_eom_terms_current_version UNIQUE (version_id),
+    CONSTRAINT fk_eom_terms_current_version
+        FOREIGN KEY (version_id)
         REFERENCES eom_terms_versions(id) ON DELETE RESTRICT,
-    selected_by_id BIGINT NOT NULL CHECK (selected_by_id > 0),
-    selected_by_name VARCHAR(128) NOT NULL
-        CHECK (length(btrim(selected_by_name)) > 0),
-    selected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+    CONSTRAINT ck_eom_terms_current_selector_id CHECK (selected_by_id > 0),
+    CONSTRAINT ck_eom_terms_current_selector_name
+        CHECK (length(btrim(selected_by_name)) > 0)
 );
 
-CREATE OR REPLACE FUNCTION protect_eom_terms_version()
+CREATE FUNCTION protect_eom_terms_version()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SECURITY INVOKER
 AS $$
 BEGIN
     IF TG_OP = 'TRUNCATE' THEN
@@ -85,21 +231,18 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_protect_eom_terms_version
-    ON eom_terms_versions;
 CREATE TRIGGER trg_protect_eom_terms_version
     BEFORE UPDATE OR DELETE ON eom_terms_versions
     FOR EACH ROW EXECUTE FUNCTION protect_eom_terms_version();
 
-DROP TRIGGER IF EXISTS trg_protect_eom_terms_version_truncate
-    ON eom_terms_versions;
 CREATE TRIGGER trg_protect_eom_terms_version_truncate
     BEFORE TRUNCATE ON eom_terms_versions
     FOR EACH STATEMENT EXECUTE FUNCTION protect_eom_terms_version();
 
-CREATE OR REPLACE FUNCTION require_published_eom_terms_current_version()
+CREATE FUNCTION require_published_eom_terms_current_version()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SECURITY INVOKER
 AS $$
 BEGIN
     IF NOT EXISTS (
@@ -114,32 +257,159 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_require_published_eom_terms_current_version
-    ON eom_terms_current_version;
 CREATE TRIGGER trg_require_published_eom_terms_current_version
     BEFORE INSERT OR UPDATE ON eom_terms_current_version
     FOR EACH ROW EXECUTE FUNCTION require_published_eom_terms_current_version();
 
-CREATE OR REPLACE FUNCTION prevent_eom_terms_current_removal()
+CREATE FUNCTION prevent_eom_terms_current_removal()
 RETURNS TRIGGER
 LANGUAGE plpgsql
+SECURITY INVOKER
 AS $$
 BEGIN
     RAISE EXCEPTION 'Current EOM Terms authority cannot be removed';
 END;
 $$;
 
-DROP TRIGGER IF EXISTS trg_prevent_eom_terms_current_truncate
-    ON eom_terms_current_version;
 CREATE TRIGGER trg_prevent_eom_terms_current_truncate
     BEFORE TRUNCATE ON eom_terms_current_version
     FOR EACH STATEMENT EXECUTE FUNCTION prevent_eom_terms_current_removal();
 
-DROP TRIGGER IF EXISTS trg_prevent_eom_terms_current_delete
-    ON eom_terms_current_version;
 CREATE TRIGGER trg_prevent_eom_terms_current_delete
     BEFORE DELETE ON eom_terms_current_version
     FOR EACH ROW EXECUTE FUNCTION prevent_eom_terms_current_removal();
 
-CREATE INDEX IF NOT EXISTS idx_eom_terms_versions_created
+CREATE INDEX idx_eom_terms_versions_created
     ON eom_terms_versions (created_at DESC, id DESC);
+
+DO $$
+DECLARE
+    schema_name TEXT := current_schema();
+    table_name TEXT;
+    function_name TEXT;
+    grantee_name TEXT;
+BEGIN
+    FOREACH function_name IN ARRAY ARRAY[
+        'protect_eom_terms_version',
+        'require_published_eom_terms_current_version',
+        'prevent_eom_terms_current_removal'
+    ]
+    LOOP
+        EXECUTE format(
+            'ALTER FUNCTION %I.%I() RESET ALL', schema_name, function_name
+        );
+        EXECUTE format(
+            'ALTER FUNCTION %I.%I() SET search_path TO pg_catalog, %I, pg_temp',
+            schema_name,
+            function_name,
+            schema_name
+        );
+        EXECUTE format(
+            'ALTER FUNCTION %I.%I() OWNER TO atlas_eom_handoff_owner',
+            schema_name,
+            function_name
+        );
+    END LOOP;
+
+    FOREACH table_name IN ARRAY ARRAY[
+        'eom_terms_versions',
+        'eom_terms_current_version'
+    ]
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE %I.%I OWNER TO atlas_eom_handoff_owner',
+            schema_name,
+            table_name
+        );
+        EXECUTE format(
+            'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM PUBLIC',
+            schema_name,
+            table_name
+        );
+        FOR grantee_name IN
+            SELECT DISTINCT grantee_role.rolname
+              FROM pg_class AS relation
+              JOIN pg_namespace AS namespace
+                ON namespace.oid = relation.relnamespace
+              CROSS JOIN LATERAL aclexplode(
+                  COALESCE(relation.relacl, ARRAY[]::aclitem[])
+              ) AS acl
+              JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+             WHERE namespace.nspname = schema_name
+               AND relation.relname = table_name
+               AND grantee_role.rolname <> 'atlas_eom_handoff_owner'
+        LOOP
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON TABLE %I.%I FROM %I',
+                schema_name,
+                table_name,
+                grantee_name
+            );
+        END LOOP;
+    END LOOP;
+
+    FOREACH function_name IN ARRAY ARRAY[
+        'protect_eom_terms_version',
+        'require_published_eom_terms_current_version',
+        'prevent_eom_terms_current_removal'
+    ]
+    LOOP
+        EXECUTE format(
+            'REVOKE ALL PRIVILEGES ON FUNCTION %I.%I() FROM PUBLIC',
+            schema_name,
+            function_name
+        );
+        FOR grantee_name IN
+            SELECT DISTINCT grantee_role.rolname
+              FROM pg_proc AS protected_function
+              JOIN pg_namespace AS namespace
+                ON namespace.oid = protected_function.pronamespace
+              CROSS JOIN LATERAL aclexplode(
+                  COALESCE(protected_function.proacl, ARRAY[]::aclitem[])
+              ) AS acl
+              JOIN pg_roles AS grantee_role ON grantee_role.oid = acl.grantee
+             WHERE namespace.nspname = schema_name
+               AND protected_function.proname = function_name
+               AND protected_function.pronargs = 0
+               AND grantee_role.rolname <> 'atlas_eom_handoff_owner'
+        LOOP
+            EXECUTE format(
+                'REVOKE ALL PRIVILEGES ON FUNCTION %I.%I() FROM %I',
+                schema_name,
+                function_name,
+                grantee_name
+            );
+        END LOOP;
+    END LOOP;
+
+    EXECUTE format(
+        'GRANT SELECT ON TABLE %I.eom_terms_versions TO atlas',
+        schema_name
+    );
+    EXECUTE format(
+        'GRANT INSERT (id, version_label, material_change, documents, '
+        || 'content_hash, created_by_id, created_by_name) '
+        || 'ON TABLE %I.eom_terms_versions TO atlas',
+        schema_name
+    );
+    EXECUTE format(
+        'GRANT UPDATE (status, published_by_id, published_by_name, published_at) '
+        || 'ON TABLE %I.eom_terms_versions TO atlas',
+        schema_name
+    );
+    EXECUTE format(
+        'GRANT SELECT ON TABLE %I.eom_terms_current_version TO atlas',
+        schema_name
+    );
+    EXECUTE format(
+        'GRANT INSERT (singleton, version_id, selected_by_id, selected_by_name) '
+        || 'ON TABLE %I.eom_terms_current_version TO atlas',
+        schema_name
+    );
+    EXECUTE format(
+        'GRANT UPDATE (version_id, selected_by_id, selected_by_name, selected_at) '
+        || 'ON TABLE %I.eom_terms_current_version TO atlas',
+        schema_name
+    );
+END;
+$$;

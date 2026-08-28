@@ -206,35 +206,265 @@ def _version_result(row: Mapping[str, Any], *, idempotent: bool) -> dict[str, An
 
 
 async def eom_terms_authority_schema_ready(pool: Any) -> bool:
+    """Return whether the connected runtime has the exact guarded boundary."""
+
     try:
         return bool(
             await pool.fetchval(
                 """
-                SELECT to_regclass('eom_terms_versions') IS NOT NULL
-                   AND to_regclass('eom_terms_current_version') IS NOT NULL
+                WITH boundary AS (
+                    SELECT pg_catalog.current_schema() AS schema_name,
+                           to_regclass(format(
+                               '%I.eom_terms_versions',
+                               pg_catalog.current_schema()
+                           )) AS versions_oid,
+                           to_regclass(format(
+                               '%I.eom_terms_current_version',
+                               pg_catalog.current_schema()
+                           )) AS current_oid,
+                           to_regprocedure(format(
+                               '%I.protect_eom_terms_version()',
+                               pg_catalog.current_schema()
+                           )) AS protect_version_oid,
+                           to_regprocedure(format(
+                               '%I.require_published_eom_terms_current_version()',
+                               pg_catalog.current_schema()
+                           )) AS require_current_oid,
+                           to_regprocedure(format(
+                               '%I.prevent_eom_terms_current_removal()',
+                               pg_catalog.current_schema()
+                           )) AS prevent_current_removal_oid,
+                           (
+                               SELECT oid
+                                 FROM pg_roles
+                                WHERE rolname = 'atlas'
+                           ) AS runtime_oid,
+                           (
+                               SELECT oid
+                                 FROM pg_roles
+                                WHERE rolname = 'atlas_eom_handoff_owner'
+                           ) AS guard_oid
+                )
+                SELECT boundary.versions_oid IS NOT NULL
+                   AND boundary.current_oid IS NOT NULL
+                   AND current_user = 'atlas'
+                   AND session_user = 'atlas'
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_roles AS runtime_role
+                        WHERE runtime_role.oid = boundary.runtime_oid
+                          AND runtime_role.rolcanlogin
+                          AND NOT runtime_role.rolsuper
+                          AND NOT runtime_role.rolcreaterole
+                          AND NOT runtime_role.rolcreatedb
+                          AND NOT runtime_role.rolreplication
+                          AND NOT runtime_role.rolbypassrls
+                          AND NOT EXISTS (
+                              SELECT 1
+                                FROM pg_database AS database
+                               WHERE database.datname = current_database()
+                                 AND database.datdba = runtime_role.oid
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1
+                                FROM pg_roles AS elevated_role
+                               WHERE elevated_role.oid <> runtime_role.oid
+                                 AND (
+                                     elevated_role.rolsuper
+                                     OR elevated_role.rolcreaterole
+                                     OR elevated_role.rolcreatedb
+                                     OR elevated_role.rolreplication
+                                     OR elevated_role.rolbypassrls
+                                 )
+                                 AND pg_has_role(
+                                     runtime_role.oid,
+                                     elevated_role.oid,
+                                     'MEMBER'
+                                 )
+                          )
+                   )
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_roles AS guard_role
+                        WHERE guard_role.oid = boundary.guard_oid
+                          AND NOT guard_role.rolcanlogin
+                          AND NOT guard_role.rolinherit
+                          AND NOT guard_role.rolsuper
+                          AND NOT guard_role.rolcreaterole
+                          AND NOT guard_role.rolcreatedb
+                          AND NOT guard_role.rolreplication
+                          AND NOT guard_role.rolbypassrls
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_stat_activity AS activity
+                        WHERE activity.usesysid = boundary.guard_oid
+                          AND activity.datid = (
+                              SELECT database.oid
+                                FROM pg_database AS database
+                               WHERE database.datname = current_database()
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_roles AS member_role
+                        WHERE member_role.rolcanlogin
+                          AND NOT member_role.rolsuper
+                          AND pg_has_role(
+                              member_role.oid,
+                              boundary.guard_oid,
+                              'MEMBER'
+                          )
+                   )
+                   AND EXISTS (
+                       SELECT 1
+                         FROM pg_namespace AS namespace
+                        WHERE namespace.nspname = boundary.schema_name
+                          AND namespace.nspowner = boundary.guard_oid
+                   )
+                   AND (
+                       SELECT COUNT(*) = 2
+                         FROM pg_class AS relation
+                        WHERE relation.oid IN (
+                                  boundary.versions_oid,
+                                  boundary.current_oid
+                              )
+                          AND relation.relkind = 'r'
+                          AND relation.relowner = boundary.guard_oid
+                   )
+                   AND (
+                       SELECT COUNT(*) = 3
+                         FROM pg_proc AS protected_function
+                        WHERE protected_function.oid IN (
+                                  boundary.protect_version_oid,
+                                  boundary.require_current_oid,
+                                  boundary.prevent_current_removal_oid
+                              )
+                          AND protected_function.pronargs = 0
+                          AND protected_function.proowner = boundary.guard_oid
+                          AND NOT protected_function.prosecdef
+                          AND protected_function.prorettype = 'trigger'::regtype
+                          AND protected_function.proconfig = ARRAY[
+                              format(
+                                  'search_path=pg_catalog, %I, pg_temp',
+                                  boundary.schema_name
+                              )
+                          ]
+                   )
                    AND (
                        SELECT COUNT(*) = 5
+                          AND BOOL_AND(
+                              guard_trigger.tgenabled = 'O'
+                              AND (
+                                  (
+                                      guard_trigger.tgrelid =
+                                          boundary.versions_oid
+                                      AND guard_trigger.tgfoid =
+                                          boundary.protect_version_oid
+                                      AND guard_trigger.tgname IN (
+                                          'trg_protect_eom_terms_version',
+                                          'trg_protect_eom_terms_version_truncate'
+                                      )
+                                  )
+                                  OR (
+                                      guard_trigger.tgrelid =
+                                          boundary.current_oid
+                                      AND guard_trigger.tgfoid =
+                                          boundary.require_current_oid
+                                      AND guard_trigger.tgname =
+                                          'trg_require_published_eom_terms_current_version'
+                                  )
+                                  OR (
+                                      guard_trigger.tgrelid =
+                                          boundary.current_oid
+                                      AND guard_trigger.tgfoid =
+                                          boundary.prevent_current_removal_oid
+                                      AND guard_trigger.tgname IN (
+                                          'trg_prevent_eom_terms_current_delete',
+                                          'trg_prevent_eom_terms_current_truncate'
+                                      )
+                                  )
+                              )
+                          )
                          FROM pg_trigger AS guard_trigger
                         WHERE NOT guard_trigger.tgisinternal
-                          AND guard_trigger.tgenabled = 'O'
-                          AND (
-                              (
-                                  guard_trigger.tgrelid =
-                                      to_regclass('eom_terms_versions')
-                                  AND guard_trigger.tgname IN (
-                                      'trg_protect_eom_terms_version',
-                                      'trg_protect_eom_terms_version_truncate'
-                                  )
-                              )
-                              OR (
-                                  guard_trigger.tgrelid =
-                                      to_regclass('eom_terms_current_version')
-                                  AND guard_trigger.tgname IN (
-                                      'trg_require_published_eom_terms_current_version',
-                                      'trg_prevent_eom_terms_current_delete',
-                                      'trg_prevent_eom_terms_current_truncate'
-                                  )
-                              )
+                          AND guard_trigger.tgrelid IN (
+                              boundary.versions_oid,
+                              boundary.current_oid
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM (
+                             VALUES
+                                 ('eom_terms_versions',
+                                  'pk_eom_terms_versions', 'p'),
+                                 ('eom_terms_versions',
+                                  'uq_eom_terms_version_label', 'u'),
+                                 ('eom_terms_versions',
+                                  'ck_eom_terms_context', 'c'),
+                                 ('eom_terms_versions',
+                                  'ck_eom_terms_version_label', 'c'),
+                                 ('eom_terms_versions',
+                                  'ck_eom_terms_status', 'c'),
+                                 ('eom_terms_versions',
+                                  'ck_eom_terms_documents_object', 'c'),
+                                 ('eom_terms_versions',
+                                  'ck_eom_terms_content_hash', 'c'),
+                                 ('eom_terms_versions',
+                                  'ck_eom_terms_creator', 'c'),
+                                 ('eom_terms_versions',
+                                  'ck_eom_terms_publication', 'c'),
+                                 ('eom_terms_current_version',
+                                  'pk_eom_terms_current_version', 'p'),
+                                 ('eom_terms_current_version',
+                                  'ck_eom_terms_current_singleton', 'c'),
+                                 ('eom_terms_current_version',
+                                  'uq_eom_terms_current_version', 'u'),
+                                 ('eom_terms_current_version',
+                                  'fk_eom_terms_current_version', 'f'),
+                                 ('eom_terms_current_version',
+                                  'ck_eom_terms_current_selector_id', 'c'),
+                                 ('eom_terms_current_version',
+                                  'ck_eom_terms_current_selector_name', 'c')
+                         ) AS expected_constraint(
+                             relation_name,
+                             constraint_name,
+                             constraint_type
+                         )
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                              FROM pg_constraint AS actual_constraint
+                             WHERE actual_constraint.conrelid = to_regclass(
+                                       format(
+                                           '%I.%I',
+                                           boundary.schema_name,
+                                           expected_constraint.relation_name
+                                       )
+                                   )
+                               AND actual_constraint.conname =
+                                   expected_constraint.constraint_name
+                               AND actual_constraint.contype::text =
+                                   expected_constraint.constraint_type
+                               AND actual_constraint.convalidated
+                        )
+                   )
+                   AND (
+                       SELECT COUNT(DISTINCT indexed_attribute.attname) = 2
+                         FROM pg_index AS unique_index
+                         JOIN pg_attribute AS indexed_attribute
+                           ON indexed_attribute.attrelid = unique_index.indrelid
+                          AND indexed_attribute.attnum = unique_index.indkey[0]
+                          AND NOT indexed_attribute.attisdropped
+                        WHERE unique_index.indrelid = boundary.versions_oid
+                          AND unique_index.indisunique
+                          AND unique_index.indisvalid
+                          AND unique_index.indpred IS NULL
+                          AND unique_index.indexprs IS NULL
+                          AND unique_index.indnkeyatts = 1
+                          AND unique_index.indnatts = 1
+                          AND indexed_attribute.attname IN (
+                              'id', 'version_label'
                           )
                    )
                    AND (
@@ -244,25 +474,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                            ON indexed_attribute.attrelid = unique_index.indrelid
                           AND indexed_attribute.attnum = unique_index.indkey[0]
                           AND NOT indexed_attribute.attisdropped
-                        WHERE unique_index.indrelid =
-                                  to_regclass('eom_terms_versions')
-                          AND unique_index.indisunique
-                          AND unique_index.indisvalid
-                          AND unique_index.indpred IS NULL
-                          AND unique_index.indexprs IS NULL
-                          AND unique_index.indnkeyatts = 1
-                          AND unique_index.indnatts = 1
-                          AND indexed_attribute.attname IN ('id', 'version_label')
-                   )
-                   AND (
-                       SELECT COUNT(DISTINCT indexed_attribute.attname) = 2
-                         FROM pg_index AS unique_index
-                         JOIN pg_attribute AS indexed_attribute
-                           ON indexed_attribute.attrelid = unique_index.indrelid
-                          AND indexed_attribute.attnum = unique_index.indkey[0]
-                          AND NOT indexed_attribute.attisdropped
-                        WHERE unique_index.indrelid =
-                                  to_regclass('eom_terms_current_version')
+                        WHERE unique_index.indrelid = boundary.current_oid
                           AND unique_index.indisunique
                           AND unique_index.indisvalid
                           AND unique_index.indpred IS NULL
@@ -277,26 +489,296 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                        SELECT 1
                          FROM pg_constraint AS foreign_key
                         WHERE foreign_key.contype = 'f'
-                          AND foreign_key.conrelid =
-                              to_regclass('eom_terms_current_version')
-                          AND foreign_key.confrelid =
-                              to_regclass('eom_terms_versions')
+                          AND foreign_key.conrelid = boundary.current_oid
+                          AND foreign_key.confrelid = boundary.versions_oid
                           AND foreign_key.conkey = ARRAY[
-                              (SELECT attnum FROM pg_attribute
-                                WHERE attrelid = foreign_key.conrelid
-                                  AND attname = 'version_id'
-                                  AND NOT attisdropped)
+                              (
+                                  SELECT attnum
+                                    FROM pg_attribute
+                                   WHERE attrelid = boundary.current_oid
+                                     AND attname = 'version_id'
+                                     AND NOT attisdropped
+                              )
                           ]::smallint[]
                           AND foreign_key.confkey = ARRAY[
-                              (SELECT attnum FROM pg_attribute
-                                WHERE attrelid = foreign_key.confrelid
-                                  AND attname = 'id'
-                                  AND NOT attisdropped)
+                              (
+                                  SELECT attnum
+                                    FROM pg_attribute
+                                   WHERE attrelid = boundary.versions_oid
+                                     AND attname = 'id'
+                                     AND NOT attisdropped
+                              )
                           ]::smallint[]
                           AND foreign_key.confdeltype = 'r'
                           AND foreign_key.convalidated
                           AND NOT foreign_key.condeferrable
                    )
+                   AND has_schema_privilege(
+                       current_user, boundary.schema_name, 'USAGE'
+                   )
+                   AND has_table_privilege(
+                       current_user, boundary.versions_oid, 'SELECT'
+                   )
+                   AND has_table_privilege(
+                       current_user, boundary.current_oid, 'SELECT'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.versions_oid, 'INSERT'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.versions_oid, 'UPDATE'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.current_oid, 'INSERT'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.current_oid, 'UPDATE'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.versions_oid, 'DELETE'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.versions_oid, 'TRUNCATE'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.versions_oid, 'REFERENCES'
+                   )
+                   AND NOT has_any_column_privilege(
+                       current_user, boundary.versions_oid, 'REFERENCES'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.versions_oid, 'TRIGGER'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.current_oid, 'DELETE'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.current_oid, 'TRUNCATE'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.current_oid, 'REFERENCES'
+                   )
+                   AND NOT has_any_column_privilege(
+                       current_user, boundary.current_oid, 'REFERENCES'
+                   )
+                   AND NOT has_table_privilege(
+                       current_user, boundary.current_oid, 'TRIGGER'
+                   )
+                   AND (
+                       SELECT COUNT(*) = 7
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.versions_oid
+                          AND attribute.attname IN (
+                              'id',
+                              'version_label',
+                              'material_change',
+                              'documents',
+                              'content_hash',
+                              'created_by_id',
+                              'created_by_name'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.versions_oid,
+                              attribute.attnum,
+                              'INSERT'
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.versions_oid
+                          AND attribute.attnum > 0
+                          AND NOT attribute.attisdropped
+                          AND attribute.attname NOT IN (
+                              'id',
+                              'version_label',
+                              'material_change',
+                              'documents',
+                              'content_hash',
+                              'created_by_id',
+                              'created_by_name'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.versions_oid,
+                              attribute.attnum,
+                              'INSERT'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 4
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.versions_oid
+                          AND attribute.attname IN (
+                              'status',
+                              'published_by_id',
+                              'published_by_name',
+                              'published_at'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.versions_oid,
+                              attribute.attnum,
+                              'UPDATE'
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.versions_oid
+                          AND attribute.attnum > 0
+                          AND NOT attribute.attisdropped
+                          AND attribute.attname NOT IN (
+                              'status',
+                              'published_by_id',
+                              'published_by_name',
+                              'published_at'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.versions_oid,
+                              attribute.attnum,
+                              'UPDATE'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 4
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.current_oid
+                          AND attribute.attname IN (
+                              'singleton',
+                              'version_id',
+                              'selected_by_id',
+                              'selected_by_name'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.current_oid,
+                              attribute.attnum,
+                              'INSERT'
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.current_oid
+                          AND attribute.attnum > 0
+                          AND NOT attribute.attisdropped
+                          AND attribute.attname NOT IN (
+                              'singleton',
+                              'version_id',
+                              'selected_by_id',
+                              'selected_by_name'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.current_oid,
+                              attribute.attnum,
+                              'INSERT'
+                          )
+                   )
+                   AND (
+                       SELECT COUNT(*) = 4
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.current_oid
+                          AND attribute.attname IN (
+                              'version_id',
+                              'selected_by_id',
+                              'selected_by_name',
+                              'selected_at'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.current_oid,
+                              attribute.attnum,
+                              'UPDATE'
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_attribute AS attribute
+                        WHERE attribute.attrelid = boundary.current_oid
+                          AND attribute.attnum > 0
+                          AND NOT attribute.attisdropped
+                          AND attribute.attname NOT IN (
+                              'version_id',
+                              'selected_by_id',
+                              'selected_by_name',
+                              'selected_at'
+                          )
+                          AND has_column_privilege(
+                              current_user,
+                              boundary.current_oid,
+                              attribute.attnum,
+                              'UPDATE'
+                          )
+                   )
+                   AND NOT has_function_privilege(
+                       current_user,
+                       boundary.protect_version_oid,
+                       'EXECUTE'
+                   )
+                   AND NOT has_function_privilege(
+                       current_user,
+                       boundary.require_current_oid,
+                       'EXECUTE'
+                   )
+                   AND NOT has_function_privilege(
+                       current_user,
+                       boundary.prevent_current_removal_oid,
+                       'EXECUTE'
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_class AS relation
+                         CROSS JOIN LATERAL aclexplode(
+                             relation.relacl
+                         ) AS acl
+                        WHERE relation.oid IN (
+                                  boundary.versions_oid,
+                                  boundary.current_oid
+                              )
+                          AND (
+                              acl.grantee NOT IN (
+                                  boundary.runtime_oid,
+                                  boundary.guard_oid
+                              )
+                              OR acl.is_grantable
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_attribute AS attribute
+                         CROSS JOIN LATERAL aclexplode(
+                             attribute.attacl
+                         ) AS acl
+                        WHERE attribute.attrelid IN (
+                                  boundary.versions_oid,
+                                  boundary.current_oid
+                              )
+                          AND (
+                              acl.grantee <> boundary.runtime_oid
+                              OR acl.is_grantable
+                          )
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM pg_proc AS protected_function
+                         CROSS JOIN LATERAL aclexplode(
+                             protected_function.proacl
+                         ) AS acl
+                        WHERE protected_function.oid IN (
+                                  boundary.protect_version_oid,
+                                  boundary.require_current_oid,
+                                  boundary.prevent_current_removal_oid
+                              )
+                          AND (
+                              acl.grantee <> boundary.guard_oid
+                              OR acl.is_grantable
+                          )
+                   )
+                  FROM boundary
                 """
             )
         )

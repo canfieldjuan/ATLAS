@@ -25,15 +25,20 @@ legal-version API.
 
 - Root cause: the code treats onboarding drafts/tokens as customer-handoff
   state, but no immutable, audience-specific, bilingual Terms version exists.
-  Without that authority, later invitations and acceptances could only point to
-  mutable prose or an ambiguous "current terms" claim.
-- Correct fix must touch/change: add a guarded Atlas migration for immutable
-  published versions plus the singleton current-version pointer; add one
-  service that validates the closed four-document bundle, hashes it
-  canonically, creates/replays drafts, publishes/replays versions under a
-  serialized transaction, and reads the current version; expose those actions
-  through authenticated, actor-attributed private funnel routes; add focused
-  model/service/route/migration tests.
+  A version owned by the mutable application role would not be immutable, and a
+  route bound to the global Atlas pool would not be canonical when the slim EOM
+  funnel uses its dedicated database. Without one guarded authority on that
+  exact database, later acceptances could point to mutable prose or an
+  ambiguous "current terms" claim.
+- Correct fix must touch/change: add a controlled-DBA Atlas migration that binds
+  the version tables/functions to the existing no-login EOM guard owner and
+  grants the runtime only required DML; attest ownership, trigger identity,
+  search path, constraints, and runtime privilege shape; add one service that
+  validates the closed four-document bundle, hashes it canonically,
+  creates/replays drafts, publishes/replays versions under the execution model
+  below, and reads the current version; bind the private routes to the slim EOM
+  funnel pool; add real-entrypoint and disposable-PostgreSQL tests enrolled in
+  the EOM workflow, plus focused validator/route coverage.
 - Must not change: no welcome draft, existing public-onboarding token, email,
   Customer/Site handoff, first-clean completion/candidate, payment, Stripe,
   calendar, Tracker, Website, employee timekeeping, commercial billing, or
@@ -68,12 +73,22 @@ Slice phase: Vertical slice
   - `EOMTermsAuthority.publish` locks the target/current state, permits only a
     draft or the already-current published version, and an unchanged retry
     returns the same version without another state transition.
+  - controlled migration 396 leaves both relations and all three guard
+    functions owned by `atlas_eom_handoff_owner`; the direct `atlas` login has
+    only table SELECT plus the exact column INSERT/UPDATE privileges the
+    service needs.
   - migration 396 prevents UPDATE/DELETE of a published version and prevents
-    the current pointer from referencing a draft or being removed.
+    the current pointer from referencing a draft or being removed; runtime SQL
+    cannot disable or replace those guard-owned triggers/functions.
   - route tests exercise `POST /api/v1/eom-funnel/terms/versions`,
     `POST /api/v1/eom-funnel/terms/versions/{id}/publish`, and
     `GET /api/v1/eom-funnel/terms/current` through the real router with service
     authentication and actor attribution.
+  - the slim `main_eom` app binds the Terms dependency to
+    `get_eom_funnel_db_pool`; a real entrypoint test pins that wiring.
+  - a disposable-PostgreSQL test runs the actual migration as DBA and the
+    service as the direct unprivileged `atlas` login, including concurrency,
+    rollback, trigger, ownership, and ACL probes.
   - the diff contains no seed INSERT and touches no existing onboarding,
     completion, money, calendar, or delivery implementation.
 - Reachability proof: the mounted EOM FastAPI router is called by an ASGI client;
@@ -84,7 +99,33 @@ Slice phase: Vertical slice
 - Risk areas: mutable published content, ambiguous document bundles, hash
   instability, duplicate labels, concurrent publication, missing schema,
   authorization/actor omission, accidental customer-visible publication.
-- Reviewer rules triggered: R1, R2, R3, R4, R6, R7, R9, R10, R11, R14.
+- Reviewer rules triggered: R1, R2, R3, R4, R6, R7, R8, R9, R10, R11, R14.
+
+### Publication execution model
+
+- PostgreSQL is the closed execution surface. Draft creation linearizes on the
+  unique version-label constraint. Publication runs in one database transaction
+  at the connection's configured isolation level (the service does not
+  override it) and first acquires one transaction-scoped advisory lock shared
+  by every Terms publication; correctness does not depend on a weaker
+  isolation level.
+- While holding that lock, the service row-locks the target version, reads the
+  singleton pointer, performs at most one content-preserving draft-to-published
+  transition, and then selects that version as current. Commit is the
+  linearization point for this service path. Its invariant is: the singleton
+  points to the last lock-ordered authority publication; every earlier
+  published row remains immutable history; an authority publish cannot commit
+  its version transition without its pointer update.
+- Duplicate requests for the current published version replay without a write.
+  A late retry for a published version already superseded by another committed
+  publication conflicts rather than rewinding the pointer. Distinct concurrent
+  publications serialize; both may remain published history and the one whose
+  lock-ordered transaction commits last is current.
+- Validation failures happen before the transaction. Database errors,
+  cancellation, process death, or connection loss before COMMIT release the
+  transaction-scoped lock and roll back both version and pointer changes. A
+  response lost after COMMIT is safe to retry under the replay/conflict rules
+  above. There is no lease, expiry, background worker, or cross-database write.
 
 ### Boundary-change enumeration
 
@@ -161,30 +202,39 @@ Parked hardening: none.
 
 ## Verification
 
-- PASS: `./ops test focused tests/test_eom_terms_authority.py -q` (27 passed).
-- PASS: `./ops test focused tests/test_migrations_runner.py -q` (117 passed,
-  1 environment-gated test skipped).
-- PASS: adjacent `tests/test_eom_public_onboarding.py` (41 passed) and
-  `tests/test_eom_first_clean_completion.py` (14 passed, 74 disposable-DB tests
-  skipped by focused-mode credential isolation).
-- PASS: targeted Ruff lint/format and Python compilation for changed Python.
-- PASS: migration 396 and the authority service were exercised against an
-  isolated PostgreSQL 16 container. Draft/replay/publish/current succeeded;
-  published edits, publish-time content rewrites, draft pointer selection, and
-  current-pointer deletion/truncation failed; disabling either a row or
-  statement integrity trigger made schema readiness fail. The throwaway
-  container was then removed.
-- Pending before push: plan sync, diff check, and `scripts/push_pr.sh` mechanical
-  local review bundle.
+- PASS: focused Terms suite without disposable credentials (28 passed, 1
+  environment-gated test skipped).
+- PASS: the same Terms suite against isolated PostgreSQL 16 (29 passed; no
+  skip), controlled DBA-runner suite (21 passed), and migration-runner suite
+  (117 passed, 1 unrelated environment-gated test skipped).
+- PASS: adjacent EOM render-profile and capability-manifest suites (76 passed).
+- PASS: targeted Ruff lint, canonical formatting for the new/rewritten Python,
+  Python compilation, and `git diff --check`.
+- PASS: the real database proof applies migration 396 as DBA and calls the
+  service as direct unprivileged `atlas`. It covers owner/ACL/function
+  attestation; runtime trigger-replacement denial; immutable updates; draft
+  pointer rejection; duplicate and distinct concurrent publications; stale
+  retry conflict; rollback after the version transition but before pointer
+  selection; DBA trigger execution; and readiness failure while a trigger is
+  disabled.
+- Pending before push: clean-tree `./ops test local-review`, mechanical push,
+  hosted reconciliation, and resolution of the four review threads.
 - Hosted full Unit Gate remains GitHub-only under `.agent/capabilities.yaml`.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
+| `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 9 |
 | `atlas_brain/eom_api/funnel.py` | 144 |
-| `atlas_brain/services/eom_terms_authority.py` | 467 |
-| `atlas_brain/storage/migrations/396_eom_terms_authority.sql` | 145 |
-| `plans/PR-EOM-Terms-Authority.md` | 190 |
-| `tests/test_eom_terms_authority.py` | 541 |
-| **Total** | **1487** |
+| `atlas_brain/main_eom.py` | 1 |
+| `atlas_brain/services/eom_terms_authority.py` | 949 |
+| `atlas_brain/storage/migrations/396_eom_terms_authority.sql` | 415 |
+| `atlas_brain/storage/migrations/__init__.py` | 1 |
+| `plans/PR-EOM-Terms-Authority.md` | 238 |
+| `scripts/apply_eom_first_clean_completion_schema.py` | 55 |
+| `scripts/apply_eom_terms_authority_schema.py` | 42 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 44 |
+| `tests/test_eom_terms_authority.py` | 947 |
+| `tests/test_migrations_runner.py` | 3 |
+| **Total** | **2848** |

@@ -24,6 +24,7 @@ CONTROLLED_DBA_MIGRATION_NAMES = frozenset(
     {
         "393_eom_missed_call_recovery_runtime_privileges",
         "394_eom_first_clean_completion_receipts",
+        "396_eom_terms_authority",
     }
 )
 

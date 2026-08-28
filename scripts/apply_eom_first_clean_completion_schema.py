@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Run the DBA-only EOM first-clean completion schema safely.
+"""Run one approved DBA-only EOM guarded schema migration safely.
 
 The normal Atlas runtime must never gain the authority needed to create a
 foreign key to the guard-owned handoff table or to own immutable completion
-evidence. This command defaults to a read-only preflight and applies only
-migration 394 after an explicit ``--apply`` using a protected typed DBA DSN
-configuration.
+or Terms evidence. This command defaults to a read-only preflight and applies
+only the selected allowlisted migration after an explicit ``--apply`` using a
+protected typed DBA DSN configuration.
 """
 
 from __future__ import annotations
@@ -42,6 +42,8 @@ DBA_DSN_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_DATABASE_URL_ENV
 DBA_SCHEMA_ENV = EOM_FIRST_CLEAN_COMPLETION_DBA_SCHEMA_ENV
 FUNNEL_DSN_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
 MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
+TERMS_AUTHORITY_MIGRATION_NAME = "396_eom_terms_authority"
+CONTROLLED_MIGRATION_NAMES = frozenset({MIGRATION_NAME, TERMS_AUTHORITY_MIGRATION_NAME})
 
 
 @dataclass(frozen=True)
@@ -86,14 +88,18 @@ class _PinnedMigrationPool:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Preflight or apply the DBA-only EOM first-clean completion schema."
-        )
+        description="Preflight or apply one approved DBA-only EOM schema migration."
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Run migration 394 after the read-only DBA preflight.",
+        help="Run the selected migration after the read-only DBA preflight.",
+    )
+    parser.add_argument(
+        "--migration",
+        choices=sorted(CONTROLLED_MIGRATION_NAMES),
+        default=MIGRATION_NAME,
+        help="Allowlisted controlled migration to preflight or apply.",
     )
     parser.add_argument(
         "--json",
@@ -269,6 +275,7 @@ async def _migration_state(
     pool: Any,
     *,
     expected_target: _TargetIdentity,
+    migration_name: str,
 ) -> tuple[bool, bool]:
     """Return executor/migration state after re-attesting its full target."""
 
@@ -307,7 +314,7 @@ async def _migration_state(
             migration_recorded = bool(
                 await connection.fetchval(
                     "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)",
-                    MIGRATION_NAME,
+                    migration_name,
                 )
             )
     return executor_is_superuser, migration_recorded
@@ -316,17 +323,19 @@ async def _migration_state(
 async def _run_pinned_controlled_migration(
     pool: Any,
     *,
+    migration_name: str,
     run_migrations_fn: Callable[..., Awaitable[None]],
 ) -> None:
-    """Run 394 under the canonical lock on one explicit database transaction.
+    """Run one allowlisted migration in the canonical pinned transaction.
 
     ``run_migrations`` uses a session advisory lock because ordinary catalog
-    runs can contain ``CREATE INDEX CONCURRENTLY``. Migration 394 is atomic and
-    cannot contain concurrent DDL, so the controlled runner can first acquire
-    that same lock inside an explicit transaction, then pin the canonical
-    runner to that connection. A transaction-pooling proxy consequently keeps
-    the lock, migration SQL, and bookkeeping on one backend; the outer release
-    removes the extra re-entrant session lock before the transaction ends.
+    runs can contain ``CREATE INDEX CONCURRENTLY``. Every migration admitted by
+    this controlled runner is atomic and cannot contain concurrent DDL, so the
+    runner can first acquire that same lock inside an explicit transaction,
+    then pin the canonical runner to that connection. A transaction-pooling
+    proxy consequently keeps the lock, migration SQL, and bookkeeping on one
+    backend; the outer release removes the extra re-entrant session lock before
+    the transaction ends.
     """
 
     async with pool.acquire() as connection:
@@ -343,7 +352,7 @@ async def _run_pinned_controlled_migration(
                     try:
                         await run_migrations_fn(
                             _PinnedMigrationPool(connection),
-                            only=(MIGRATION_NAME,),
+                            only=(migration_name,),
                         )
                     finally:
                         released = bool(
@@ -373,6 +382,9 @@ async def _run(
     ),
     funnel_config_factory: Callable[[], EOMFunnelConfig] = EOMFunnelConfig,
 ) -> dict[str, object]:
+    migration_name = str(args.migration)
+    if migration_name not in CONTROLLED_MIGRATION_NAMES:
+        raise RuntimeError("Refusing a non-allowlisted controlled EOM migration")
     config = config_factory()
     database_url = config.database_url.get_secret_value().strip()
     if not database_url:
@@ -405,33 +417,36 @@ async def _run(
             executor_is_superuser, migration_recorded = await _migration_state(
                 pool,
                 expected_target=runtime_target,
+                migration_name=migration_name,
             )
             result: dict[str, object] = {
                 "target": _safe_target_label(database_url, schema_name=schema_name),
                 "executor_is_superuser": executor_is_superuser,
-                "migration": MIGRATION_NAME,
+                "migration": migration_name,
                 "migration_recorded": migration_recorded,
                 "applied": False,
             }
             if not executor_is_superuser:
                 raise RuntimeError(
                     "Configured DBA connection is not a PostgreSQL superuser; "
-                    "refusing to run the first-clean completion schema migration"
+                    "refusing to run the controlled EOM schema migration"
                 )
             if args.apply and not migration_recorded:
                 await _run_pinned_controlled_migration(
                     pool,
+                    migration_name=migration_name,
                     run_migrations_fn=run_migrations_fn,
                 )
                 await _attest_shared_database_lock(runtime_pool, pool)
                 _executor_is_superuser, migration_recorded = await _migration_state(
                     pool,
                     expected_target=runtime_target,
+                    migration_name=migration_name,
                 )
                 if not migration_recorded:
                     raise RuntimeError(
                         "Migration runner returned without recording the EOM "
-                        "first-clean completion schema"
+                        "controlled schema"
                     )
                 result["migration_recorded"] = True
                 result["applied"] = True
