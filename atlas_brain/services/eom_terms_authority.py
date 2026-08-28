@@ -352,7 +352,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                           ]
                    )
                    AND (
-                       SELECT COUNT(*) = 5
+                       SELECT COUNT(*) = 4
                           AND BOOL_AND(
                               guard_trigger.tgenabled = 'O'
                               AND (
@@ -607,7 +607,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                           )
                    )
                    AND (
-                       SELECT COUNT(*) = 5
+                       SELECT COUNT(*) = 4
                          FROM pg_attribute AS attribute
                         WHERE attribute.attrelid = boundary.versions_oid
                           AND attribute.attname IN (
@@ -643,7 +643,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                           )
                    )
                    AND (
-                       SELECT COUNT(*) = 4
+                       SELECT COUNT(*) = 5
                          FROM pg_attribute AS attribute
                         WHERE attribute.attrelid = boundary.current_oid
                           AND attribute.attname IN (
