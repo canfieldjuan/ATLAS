@@ -409,7 +409,7 @@ BEGIN
         schema_name
     );
     EXECUTE format(
-        'GRANT INSERT (singleton, version_id, selected_by_id, selected_by_name) '
+        'GRANT INSERT (singleton, version_id, selected_by_id, selected_by_name, selected_at) '
         || 'ON TABLE %I.eom_terms_current_version TO atlas',
         schema_name
     );

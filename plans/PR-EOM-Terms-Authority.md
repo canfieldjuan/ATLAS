@@ -273,4 +273,4 @@ Parked hardening: none.
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 44 |
 | `tests/test_eom_terms_authority.py` | 1053 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **3205** |
+| **Total** | **3206** |

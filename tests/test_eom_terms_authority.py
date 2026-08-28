@@ -1050,4 +1050,5 @@ def test_migration_guards_published_history_and_seeds_no_terms_content() -> None
     assert "BEFORE DELETE ON eom_terms_current_version" in migration
     assert "Post-deployment rollback" in migration
     assert "Retain the guard-owned tables" in migration
+    assert "selected_by_name, selected_at) " in migration
     assert "INSERT INTO eom_terms_versions" not in migration

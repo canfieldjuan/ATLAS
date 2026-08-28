@@ -607,7 +607,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                           )
                    )
                    AND (
-                       SELECT COUNT(*) = 4
+                       SELECT COUNT(*) = 5
                          FROM pg_attribute AS attribute
                         WHERE attribute.attrelid = boundary.versions_oid
                           AND attribute.attname IN (
@@ -650,7 +650,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                               'singleton',
                               'version_id',
                               'selected_by_id',
-                              'selected_by_name'
+                              'selected_by_name', 'selected_at'
                           )
                           AND has_column_privilege(
                               current_user,
@@ -669,7 +669,7 @@ async def eom_terms_authority_schema_ready(pool: Any) -> bool:
                               'singleton',
                               'version_id',
                               'selected_by_id',
-                              'selected_by_name'
+                              'selected_by_name', 'selected_at'
                           )
                           AND has_column_privilege(
                               current_user,
