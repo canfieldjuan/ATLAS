@@ -13,7 +13,7 @@ import asyncpg
 
 
 EOM_TERMS_AUDIENCES = ("residential", "commercial")
-EOM_TERMS_LOCALES = ("en", "es")
+EOM_TERMS_LOCALES = ("en",)
 EOM_TERMS_DOCUMENT_FIELDS = (
     "terms",
     "servicesWeCannotProvide",

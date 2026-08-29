@@ -52,7 +52,7 @@ def _documents(marker: str = "approved") -> dict[str, Any]:
                     f"{marker} {audience} {locale} additional work"
                 ),
             }
-            for locale in ("en", "es")
+            for locale in ("en",)
         }
         for audience in ("residential", "commercial")
     }
@@ -313,7 +313,10 @@ class _PublishConnection:
     [
         lambda value: value.pop("commercial"),
         lambda value: value.update({"other": {}}),
-        lambda value: value["residential"].pop("es"),
+        lambda value: value["residential"].pop("en"),
+        lambda value: value["residential"].update(
+            {"es": dict(value["residential"]["en"])}
+        ),
         lambda value: value["residential"]["en"].pop("terms"),
         lambda value: value["residential"]["en"].update({"other": "x"}),
         lambda value: value["residential"]["en"].update({"terms": " "}),

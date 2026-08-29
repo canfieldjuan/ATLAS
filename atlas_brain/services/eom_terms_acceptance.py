@@ -26,6 +26,7 @@ from .eom_public_onboarding_tokens import (
     validate_eom_public_onboarding_hmac_secret,
 )
 from .eom_terms_authority import (
+    EOM_TERMS_LOCALES,
     EOM_TERMS_PUBLICATION_LOCK_KEY,
     EOMTermsValidationError,
     canonical_eom_terms_documents,
@@ -184,8 +185,8 @@ def _request_key(value: object) -> str:
 
 
 def _locale(value: object) -> str:
-    if value not in ("en", "es"):
-        raise EOMTermsAcceptanceValidationError("locale must be en or es")
+    if value not in EOM_TERMS_LOCALES:
+        raise EOMTermsAcceptanceValidationError("locale must be en")
     return str(value)
 
 
@@ -276,19 +277,12 @@ def _documents_from_version(
     return documents
 
 
-def _render_sections(*, documents: Mapping[str, str], locale: str) -> str:
-    labels = {
-        "en": (
-            "TERMS AND CONDITIONS",
-            "SERVICES WE CANNOT PROVIDE",
-            "SEPARATE ADDITIONAL-WORK ACKNOWLEDGEMENT",
-        ),
-        "es": (
-            "TERMINOS Y CONDICIONES",
-            "SERVICIOS QUE NO PODEMOS PROPORCIONAR",
-            "RECONOCIMIENTO SEPARADO DE TRABAJO ADICIONAL",
-        ),
-    }[locale]
+def _render_sections(*, documents: Mapping[str, str]) -> str:
+    labels = (
+        "TERMS AND CONDITIONS",
+        "SERVICES WE CANNOT PROVIDE",
+        "SEPARATE ADDITIONAL-WORK ACKNOWLEDGEMENT",
+    )
     return (
         f"{labels[0]}\n{documents['terms']}\n\n"
         f"{labels[1]}\n{documents['servicesWeCannotProvide']}\n\n"
@@ -304,35 +298,23 @@ def render_eom_terms_invitation(
     documents: Mapping[str, str],
     locale: str,
 ) -> tuple[str, str]:
-    """Render the exact published locale without inventing Terms prose."""
+    """Render the exact published English documents without inventing prose."""
 
-    sections = _render_sections(documents=documents, locale=locale)
-    if locale == "es":
-        subject = "Revise y acepte los terminos de Effingham Office Maids"
-        body = (
-            f"Hola {full_name},\n\n"
-            "Revise los documentos publicados a continuacion. El enlace seguro "
-            "para aceptar estos terminos aparece al final de este correo.\n\n"
-            f"Version: {version_label}\nHash: {content_hash}\n\n{sections}"
-        )
-    else:
-        subject = "Review and accept Effingham Office Maids terms"
-        body = (
-            f"Hello {full_name},\n\n"
-            "Please review the published documents below. The secure link to "
-            "accept these terms appears at the end of this email.\n\n"
-            f"Version: {version_label}\nHash: {content_hash}\n\n{sections}"
-        )
+    _locale(locale)
+    sections = _render_sections(documents=documents)
+    subject = "Review and accept Effingham Office Maids terms"
+    body = (
+        f"Hello {full_name},\n\n"
+        "Please review the published documents below. The secure link to "
+        "accept these terms appears at the end of this email.\n\n"
+        f"Version: {version_label}\nHash: {content_hash}\n\n{sections}"
+    )
     return subject, body
 
 
 def append_eom_terms_acceptance_link(*, body: str, link: str, locale: str) -> str:
-    prompt = (
-        "Aceptar los terminos de forma segura:"
-        if locale == "es"
-        else "Accept the terms securely:"
-    )
-    return f"{body}\n\n{prompt}\n{link}\n"
+    _locale(locale)
+    return f"{body}\n\nAccept the terms securely:\n{link}\n"
 
 
 def render_eom_terms_executed_copy(
@@ -347,28 +329,18 @@ def render_eom_terms_executed_copy(
 ) -> tuple[str, str]:
     """Render the immutable acceptance receipt plus the accepted documents."""
 
+    _locale(locale)
     accepted_iso = _iso(accepted_at)
-    sections = _render_sections(documents=documents, locale=locale)
-    if locale == "es":
-        subject = "Copia aceptada de los terminos de Effingham Office Maids"
-        body = (
-            f"Copia ejecutada para {full_name}\n"
-            f"Aceptado por: {signer_name}\n"
-            f"Aceptado: {accepted_iso}\n"
-            "Terminos generales aceptados: Si\n"
-            "Reconocimiento de trabajo adicional aceptado: Si\n"
-            f"Version: {version_label}\nHash: {content_hash}\n\n{sections}"
-        )
-    else:
-        subject = "Accepted copy of Effingham Office Maids terms"
-        body = (
-            f"Executed copy for {full_name}\n"
-            f"Accepted by: {signer_name}\n"
-            f"Accepted at: {accepted_iso}\n"
-            "General terms accepted: Yes\n"
-            "Additional-work acknowledgement accepted: Yes\n"
-            f"Version: {version_label}\nHash: {content_hash}\n\n{sections}"
-        )
+    sections = _render_sections(documents=documents)
+    subject = "Accepted copy of Effingham Office Maids terms"
+    body = (
+        f"Executed copy for {full_name}\n"
+        f"Accepted by: {signer_name}\n"
+        f"Accepted at: {accepted_iso}\n"
+        "General terms accepted: Yes\n"
+        "Additional-work acknowledgement accepted: Yes\n"
+        f"Version: {version_label}\nHash: {content_hash}\n\n{sections}"
+    )
     return subject, body
 
 
