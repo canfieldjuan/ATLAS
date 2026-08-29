@@ -325,7 +325,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `101 passed in 4.74s` after the terminal evidence-state repair.
+  `102 passed in 4.47s` after the short-inline adjacent-promotion repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -350,6 +350,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 355 |
-| `scripts/check_ai_reconciliation_live.py` | 81 |
-| `tests/test_check_ai_reconciliation_live.py` | 571 |
-| **Total** | **1007** |
+| `scripts/check_ai_reconciliation_live.py` | 82 |
+| `tests/test_check_ai_reconciliation_live.py` | 590 |
+| **Total** | **1027** |
