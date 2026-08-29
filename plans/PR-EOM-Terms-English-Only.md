@@ -145,8 +145,9 @@ Parked hardening: none.
 - PASS cold diff audit: every product/test change traces to the contract; every
   required provider boundary is present; no database migration, consumer,
   employee-facing, legal-document, token, or delivery-state module changed.
-- Pending before push: committed-diff local PR review and GitHub-owned unit
-  gate.
+- PASS: committed-diff local PR review, including PR-body, pre-push, plan,
+  cross-session drift, guard-closure, and diff checks.
+- Pending after push: GitHub-owned unit gate and automated review reconciliation.
 
 ## Estimated diff size
 
@@ -155,7 +156,7 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel.py` | 10 |
 | `atlas_brain/services/eom_terms_acceptance.py` | 94 |
 | `atlas_brain/services/eom_terms_authority.py` | 2 |
-| `plans/PR-EOM-Terms-English-Only.md` | 161 |
+| `plans/PR-EOM-Terms-English-Only.md` | 162 |
 | `tests/test_eom_terms_acceptance.py` | 90 |
 | `tests/test_eom_terms_authority.py` | 7 |
-| **Total** | **364** |
+| **Total** | **365** |
