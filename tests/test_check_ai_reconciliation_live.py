@@ -832,6 +832,24 @@ def test_adjacent_rule_evidence_rejects_unknown_leading_continuations():
         )
 
 
+def test_punctuation_wrapped_complete_colon_label_cannot_become_a_title():
+    c = load_check()
+    candidate = "(R4: malformed label used as a title with enough words)"
+    source_body = f"{candidate}\nR2: complete adjacent detail"
+
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(candidate),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
 def test_potential_rule_evidence_uses_a_complete_grammar_oracle_across_axes():
     c = load_check()
     tokens = tuple(f"R{number}" for number in (4, 10)) + (
@@ -850,6 +868,7 @@ def test_potential_rule_evidence_uses_a_complete_grammar_oracle_across_axes():
             "complete-colon": (": complete adjacent detail", False),
             "complete-dash": (" — complete adjacent detail", False),
             "immediate-suffix": ("é: malformed adjacent detail", True),
+            "unicode-decimal": ("٤: malformed adjacent detail", True),
             "spaced-colon": (" : malformed adjacent detail", True),
             "incomplete-chain": (" /R5: malformed adjacent detail", True),
         }.items()
@@ -872,12 +891,41 @@ def test_potential_rule_evidence_covers_every_immediate_unicode_suffix():
 
     for codepoint in range(0x110000):
         suffix = chr(codepoint)
-        if suffix.isspace() or suffix.isdecimal():
+        if suffix.isspace() or suffix in "0123456789":
             continue
 
         candidate = f"R4{suffix}: malformed label used as a title with enough words"
 
         assert c._has_unvalidated_rule_evidence(candidate)
+
+
+def test_complete_rule_evidence_requires_ascii_decimal_references():
+    c = load_check()
+    title = "Preserve the bounded title for this decision"
+    unicode_decimals = tuple(
+        chr(codepoint)
+        for codepoint in range(0x110000)
+        if chr(codepoint).isdecimal() and chr(codepoint) not in "0123456789"
+    )
+
+    for digit in unicode_decimals:
+        for reference in (f"R{digit}", f"R4{digit}", f"R4/R{digit}"):
+            candidate = f"{reference}: complete adjacent detail"
+
+            assert c._has_unvalidated_rule_evidence(candidate)
+
+    source_body = f"{title}\nR٤: complete adjacent detail"
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
 
 
 def test_potential_rule_evidence_uses_unicode_lexical_boundaries():

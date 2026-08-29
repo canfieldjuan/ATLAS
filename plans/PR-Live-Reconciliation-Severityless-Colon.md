@@ -46,6 +46,11 @@ behavioral surface.
   complete-label grammar must validate the line. Leading Unicode punctuation
   does not turn that ambiguous evidence into a title; genuinely embedded bare
   references after title text remain ordinary content.
+- Canonical identity rule: complete rule IDs use ASCII digits only. The broader
+  potential-evidence recognizer still detects Unicode-decimal lookalikes, but
+  they cannot satisfy the complete grammar. A complete-looking label whose rule
+  token is wrapped in leading punctuation is likewise not canonical line-start
+  evidence and cannot become a title.
 
 ### Problem-derived contract
 
@@ -67,9 +72,11 @@ behavioral surface.
   immediate suffixes as an open non-whitespace category and evidence-gate them
   with the complete-label grammar; require a leading rule reference with any
   nonblank whitespace continuation to pass that same grammar; preserve
-  existing dash and severity-qualified forms; and prove incomplete, malformed,
-  Unicode-suffixed, unknown-leading-continuation, short-title, label-only, and
-  unrelated inputs still fail closed.
+  existing dash and severity-qualified forms; restrict complete rule references
+  to ASCII digits while retaining broad Unicode-decimal malformed detection;
+  and prove incomplete, malformed, Unicode-suffixed, punctuation-wrapped,
+  unknown-leading-continuation, short-title, label-only, and unrelated inputs
+  still fail closed.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -116,6 +123,11 @@ Max files: 3
     grammar result, and embedded bare references remain title text. Settled by
     the leading-continuation end-to-end negative and generated Unicode
     continuation oracle.
+  - Only ASCII-decimal rule IDs are complete evidence. Every non-ASCII Unicode
+    decimal used as a whole or mixed rule ID remains malformed, and a colon
+    label after leading punctuation remains a no-decision line even when the
+    embedded token otherwise matches. Settled by the all-Unicode suffix oracle
+    and punctuation-wrapped colon end-to-end negative.
   - Bounded prefixes before rule-like colon text do not collapse distinct
     adjacent titles into one decision; settled by
     `test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct`, including
@@ -165,8 +177,9 @@ Max files: 3
   the complete grammar; every unmatched form retains the empty-decision
   fail-closed result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
-  reference, atomic longest-reference matching, Unicode non-alphanumeric token
-  boundary, the open immediate non-whitespace suffix category, optional
+  reference with ASCII digits, broader Unicode-decimal potential reference,
+  atomic longest-reference matching, Unicode non-alphanumeric token boundary,
+  leading punctuation, the open immediate non-whitespace suffix category, optional
   delimiter whitespace, first-lexical-token continuation state, colon/slash
   delimiter, and required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
@@ -185,6 +198,9 @@ Max files: 3
   rejected suffixes or boundary punctuation. It also treats every nonblank
   whitespace continuation after a leading rule reference as potential evidence;
   this finite structural position distinguishes it from embedded bare mentions.
+- Canonical complete references are ASCII-only. Unicode-decimal candidates are
+  deliberately part of the broader potential-reference recognizer so they are
+  rejected by evidence validation rather than ignored as ordinary title text.
 - This slice adds one finite delimiter member: exact rule reference + colon +
   nonempty detail. It does not classify title vocabulary or accept generic
   prose as evidence.
@@ -221,6 +237,8 @@ it at line start or after any Unicode non-alphanumeric boundary, then treat ever
 immediate non-whitespace continuation and every whitespace-separated rule-label
 operator as potential evidence. If a rule reference is the first lexical token,
 any nonblank whitespace continuation also requires complete-grammar validation.
+The leading-token check rejects any punctuation wrapper, and the complete
+grammar uses ASCII digits while the potential recognizer remains Unicode-wide.
 The established bounded-title floor and root matching remain downstream
 invariants, so recognizing the delimiter does not make arbitrary or short prose
 authoritative.
@@ -249,7 +267,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `95 passed in 3.24s` after the structural decision-seam repair.
+  `97 passed in 4.58s` after the structural decision-seam repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -273,7 +291,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 279 |
-| `scripts/check_ai_reconciliation_live.py` | 50 |
-| `tests/test_check_ai_reconciliation_live.py` | 368 |
-| **Total** | **697** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 297 |
+| `scripts/check_ai_reconciliation_live.py` | 61 |
+| `tests/test_check_ai_reconciliation_live.py` | 416 |
+| **Total** | **774** |

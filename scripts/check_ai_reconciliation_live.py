@@ -42,7 +42,8 @@ _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
 _DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
-_RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
+_RULE_REFERENCE_RE = r"R[0-9]+(?:/R[0-9]+)*"
+_POTENTIAL_RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
 _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
 _LEGACY_COMPLETE_RULE_LABEL_RE = (
     rf"{_RULE_REFERENCE_RE}(?:"
@@ -56,10 +57,11 @@ _COMPLETE_RULE_LABEL_RE = (
 _REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_LEGACY_COMPLETE_RULE_LABEL_RE}")
 _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
 _POTENTIAL_RULE_EVIDENCE_RE = re.compile(
-    rf"(?<![^\W_])(?>{_RULE_REFERENCE_RE})(?!\d)(?=\S|\s*(?:\(|:|/|[-—]))"
+    rf"(?<![^\W_])(?>{_POTENTIAL_RULE_REFERENCE_RE})(?!\d)"
+    rf"(?=\S|\s*(?:\(|:|/|[-—]))"
 )
-_LEADING_RULE_CONTINUATION_RE = re.compile(
-    rf"^[\W_]*(?>{_RULE_REFERENCE_RE})(?!\d)(?=\s+\S)"
+_LEADING_RULE_REFERENCE_RE = re.compile(
+    rf"^[\W_]*(?P<reference>(?>{_POTENTIAL_RULE_REFERENCE_RE}))(?!\d)"
 )
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
@@ -256,7 +258,7 @@ def _bounded_title_root(line: str) -> str:
         root = line[: match.start()].strip()
     elif (
         _POTENTIAL_RULE_EVIDENCE_RE.search(line)
-        or _LEADING_RULE_CONTINUATION_RE.search(line)
+        or _LEADING_RULE_REFERENCE_RE.search(line)
     ):
         return ""
     else:
@@ -269,11 +271,18 @@ def _bounded_title_root(line: str) -> str:
 def _has_unvalidated_rule_evidence(line: str) -> bool:
     """Return whether a potential title contains non-complete rule evidence."""
 
-    if (
-        _LEADING_RULE_CONTINUATION_RE.search(line)
-        and not _REVIEW_RULE_LABEL_RE.match(line)
-    ):
-        return True
+    leading_match = _LEADING_RULE_REFERENCE_RE.search(line)
+    if leading_match is not None:
+        prefix = line[: leading_match.start("reference")]
+        reference = leading_match.group("reference")
+        remainder = line[leading_match.end("reference") :]
+        is_canonical_reference = re.fullmatch(_RULE_REFERENCE_RE, reference) is not None
+        if (
+            prefix
+            or not is_canonical_reference
+            or (remainder.strip() and not _REVIEW_RULE_LABEL_RE.match(line))
+        ):
+            return True
     for match in _POTENTIAL_RULE_EVIDENCE_RE.finditer(line):
         candidate = line[match.start() :]
         if not _REVIEW_RULE_LABEL_RE.match(candidate):
