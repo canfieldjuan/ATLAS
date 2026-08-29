@@ -661,6 +661,7 @@ def test_adjacent_rule_evidence_property_preserves_rule_like_colon_text_inside_t
         "/".join(f"R{value}" for value in range(1, member_count + 1))
         for member_count in range(1, 5)
     )
+    title_prefixes = ("Preserve", "Ensure the report title preserves")
     title_details = (
         "validation semantics for export",
         "routing guarantees across service boundaries",
@@ -672,23 +673,67 @@ def test_adjacent_rule_evidence_property_preserves_rule_like_colon_text_inside_t
     )
 
     for reference in embedded_references:
-        for title_detail in title_details:
-            title = f"Preserve {reference}: {title_detail}"
-            for evidence_label in evidence_labels:
-                source_body = f"{title}\n{evidence_label}"
+        for title_prefix in title_prefixes:
+            for title_detail in title_details:
+                title = f"{title_prefix} {reference}: {title_detail}"
+                for evidence_label in evidence_labels:
+                    source_body = f"{title}\n{evidence_label}"
 
-                assert c._evidenced_root_decision(source_body) == title
-                code, messages = c.evaluate(
-                    [thread(resolved=True, body=source_body)],
-                    body_with_dispositions(title),
-                    BOTS,
-                )
+                    assert c._evidenced_root_decision(source_body) == title
+                    code, messages = c.evaluate(
+                        [thread(resolved=True, body=source_body)],
+                        body_with_dispositions(title),
+                        BOTS,
+                    )
 
-                assert code == 0
-                assert any(
-                    "no open scoped Codex review threads remain" in message
-                    for message in messages
-                )
+                    assert code == 0
+                    assert any(
+                        "no open scoped Codex review threads remain" in message
+                        for message in messages
+                    )
+
+
+def test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct():
+    c = load_check()
+    titles = (
+        "Ensure the report title preserves R4: validation semantics for export",
+        "Ensure the report title preserves R5: routing semantics for import",
+    )
+    nodes = [
+        thread(resolved=True, body=f"{title}\nR2: complete adjacent detail")
+        for title in titles
+    ]
+
+    assert [
+        c._evidenced_root_decision(node["comments"]["nodes"][0]["bodyText"])
+        for node in nodes
+    ] == list(titles)
+    code, messages = c.evaluate(nodes, body_with_dispositions(titles[0]), BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in message for message in messages)
+    assert any(titles[1] in message for message in messages)
+
+
+def test_adjacent_rule_evidence_preserves_bare_multi_digit_rule_mentions():
+    c = load_check()
+
+    for rule_number in range(10, 15):
+        title = f"Preserve compatibility with the R{rule_number} verification contract"
+        source_body = f"{title}\nR2 — complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == title
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any(
+            "no open scoped Codex review threads remain" in message
+            for message in messages
+        )
 
 
 def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline():

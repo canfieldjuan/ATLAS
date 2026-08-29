@@ -19,12 +19,13 @@ the parser rather than bypassed in #2506.
   normalizable decision and cannot be honestly reconciled.
 - Correct fix must touch/change: extend only the shared complete-label grammar
   to admit `R<n>(/R<n>)*: nonempty detail`; prove multiline and inline positive
-  correlation; scan candidates in source order so earlier complete inline
-  evidence keeps precedence, while a complete adjacent evidence line preserves
-  rule-like colon text inside its own title; recognize malformed fragments at
-  line start and mid-line; preserve existing dash and severity-qualified forms;
-  and prove incomplete, malformed, short-title, label-only, and unrelated inputs
-  still fail closed.
+  correlation; scan candidates in source order so inline evidence on an earlier
+  line keeps precedence, while a complete adjacent evidence line preserves the
+  whole current title before any inline-like text inside that title can truncate
+  it; recognize malformed fragments at line start and mid-line without splitting
+  bare multi-digit rule mentions; preserve existing dash and severity-qualified
+  forms; and prove incomplete, malformed, short-title, label-only, and unrelated
+  inputs still fail closed.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -59,6 +60,13 @@ Max files: 3
     the label-only negative case,
     `test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline`,
     and the existing incomplete-fragment matrix.
+  - Bounded prefixes before rule-like colon text do not collapse distinct
+    adjacent titles into one decision; settled by
+    `test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct`, including
+    a negative one-disposition/two-title assertion.
+  - Bare `R10` through `R14` mentions in adjacent titles remain ordinary title
+    text rather than backtracking into malformed fragments; settled by
+    `test_adjacent_rule_evidence_preserves_bare_multi_digit_rule_mentions`.
   - Earlier complete inline evidence retains its decision even when later prose
     forms an otherwise valid adjacent title/evidence pair; settled by
     `test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs`, including
@@ -86,10 +94,11 @@ Max files: 3
   `missing_thread_dispositions()` -> required gate result.
 - Replaced-path behaviors: a bounded title adjacent to or sharing a line with
   `R<n>(/R<n>)*: nonempty detail` changes from unparseable to correlatable;
-  source-order scanning preserves an earlier bounded inline root, while a
-  complete following evidence line preserves the current whole title when its
-  rule-like colon text cannot itself produce a bounded inline root; every
-  unmatched form retains the empty-decision fail-closed result.
+  source-order scanning preserves bounded inline evidence on an earlier line,
+  while a complete following evidence line preserves the current whole title
+  before rule-like colon text inside it can be truncated; complete multi-digit
+  references cannot backtrack into shorter malformed fragments; every unmatched
+  form retains the empty-decision fail-closed result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
   reference, colon delimiter, and required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
@@ -129,12 +138,13 @@ Max files: 3
 
 Add the colon-with-detail alternative at the same complete-label grammar choke
 point used by inline and adjacent-line parsing. Walk nonblank lines once in
-source order: return a bounded inline root when the current line supplies one,
-otherwise allow a complete following evidence line to preserve the current
-whole title unless that title begins as a rule label or contains a fragment that
-cannot satisfy the complete-label grammar. The established bounded-title floor
-and root matching remain downstream invariants, so recognizing the delimiter
-does not make arbitrary or short prose authoritative.
+source order: when the next line supplies complete evidence, preserve the
+current whole bounded title unless it begins as a rule label or contains a
+malformed fragment; otherwise return the current bounded inline root. Prevent
+fragment matching from backtracking a complete multi-digit reference into a
+shorter reference plus digit suffix. The established bounded-title floor and
+root matching remain downstream invariants, so recognizing the delimiter does
+not make arbitrary or short prose authoritative.
 
 ## Intentional
 
@@ -157,7 +167,7 @@ Parked hardening: none.
 ## Verification
 
 - `./ops test focused tests/test_check_ai_reconciliation_live.py -q` ->
-  `85 passed in 0.53s` after the current-head review repairs.
+  `87 passed in 0.58s` after the current-head review repairs.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -181,7 +191,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 187 |
-| `scripts/check_ai_reconciliation_live.py` | 33 |
-| `tests/test_check_ai_reconciliation_live.py` | 157 |
-| **Total** | **377** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 197 |
+| `scripts/check_ai_reconciliation_live.py` | 31 |
+| `tests/test_check_ai_reconciliation_live.py` | 200 |
+| **Total** | **428** |
