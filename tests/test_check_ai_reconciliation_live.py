@@ -627,33 +627,43 @@ def test_severity_colon_rule_labels_correlate_multiline_and_inline_titles():
         assert any("no open scoped Codex review threads remain" in message for message in messages)
 
 
-def test_severity_less_colon_rule_labels_correlate_multiline_and_inline_titles():
+def test_severity_less_colon_rule_labels_correlate_adjacent_titles():
     c = load_check()
-    cases = (
-        (
-            "Exercise the deployed manifest entrypoint",
-            "Exercise the deployed manifest entrypoint\n"
-            "R2/R14: this test must call the deployed application",
-        ),
-        (
-            "Correlate the trusted producer colon delimiter",
-            "Correlate the trusted producer colon delimiter "
-            "R4: detail from the connector review",
-        ),
+    title = "Exercise the deployed manifest entrypoint"
+    source_body = (
+        "Exercise the deployed manifest entrypoint\n"
+        "R2/R14: this test must call the deployed application"
     )
 
-    for title, source_body in cases:
-        code, messages = c.evaluate(
-            [thread(resolved=True, body=source_body)],
-            body_with_dispositions(title),
-            BOTS,
-        )
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
 
-        assert code == 0
-        assert any(
-            "no open scoped Codex review threads remain" in message
-            for message in messages
-        )
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message
+        for message in messages
+    )
+
+
+def test_severity_less_colon_rule_labels_do_not_create_ambiguous_inline_roots():
+    c = load_check()
+    title = "Correlate the trusted producer colon delimiter"
+    source_body = f"{title} R4: detail from the connector review"
+
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
 
 
 def test_adjacent_rule_evidence_property_preserves_rule_like_colon_text_inside_titles():
@@ -772,7 +782,11 @@ def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline(
             for suffix in incomplete_chain_suffixes
         ),
     )
-    candidate_templates = ("{}", "Context before {}")
+    candidate_templates = (
+        "{}",
+        "Context before {}",
+        "Reject malformed ({}) before admission",
+    )
 
     for malformed_fragment in malformed_fragments:
         for candidate_template in candidate_templates:
@@ -798,7 +812,9 @@ def test_potential_rule_evidence_uses_a_complete_grammar_oracle_across_axes():
     tokens = tuple(f"R{number}" for number in (4, 10)) + (
         "/".join(f"R{number}" for number in (4, 5)),
     )
-    containers = tuple(f"{prefix}{{}}" for prefix in ("", "Context before "))
+    containers = tuple(
+        f"{prefix}{{}}" for prefix in ("", "Context before ", "Punctuation boundary (")
+    )
     families = tuple(
         {
             "bare-reference": (" verification contract", False),
@@ -831,6 +847,17 @@ def test_potential_rule_evidence_covers_every_immediate_unicode_suffix():
         assert c._has_unvalidated_rule_evidence(candidate)
 
 
+def test_potential_rule_evidence_uses_unicode_lexical_boundaries():
+    c = load_check()
+
+    for codepoint in range(0x110000):
+        prefix = chr(codepoint)
+        candidate = f"{prefix}R4é: malformed label used as a title with enough words"
+        expected = not prefix.isalnum()
+
+        assert c._has_unvalidated_rule_evidence(candidate) is expected
+
+
 def test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs():
     c = load_check()
     title = "Keep legacy inline root extraction"
@@ -838,7 +865,6 @@ def test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs():
     inline_labels = (
         "R2 (BLOCKER) details",
         "R2 — complete inline detail",
-        "R2: complete inline detail",
     )
 
     for inline_label in inline_labels:
@@ -863,6 +889,36 @@ def test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs():
         )
         assert wrong_code == 1
         assert any("missing dispositions" in message for message in wrong_messages)
+
+
+def test_inline_rule_evidence_precedes_an_immediately_adjacent_label():
+    c = load_check()
+    title = "Keep legacy inline root extraction"
+    wrong_disposition = "R2 BLOCKER details about the affected parser"
+    source_body = (
+        f"{title} R2 (BLOCKER) details about the affected parser\n"
+        "R4: additional context"
+    )
+
+    assert c._evidenced_root_decision(source_body) == title
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+    wrong_code, wrong_messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(wrong_disposition),
+        BOTS,
+    )
+
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message
+        for message in messages
+    )
+    assert wrong_code == 1
+    assert any("missing dispositions" in message for message in wrong_messages)
 
 
 def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_evidence():

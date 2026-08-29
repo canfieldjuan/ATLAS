@@ -33,6 +33,14 @@ behavioral surface.
   adjacent pair. Ambiguity fails closed because a false rejection leaves the
   required check visibly red, while a false acceptance can clear unreconciled
   reviewer evidence.
+- Evidence ordering and lexical boundary: an existing severity/dash inline
+  label is direct evidence on the current line and must win before a following
+  label is considered. The new severity-less colon form is admitted only as a
+  line-start adjacent label because inline `R<n>: text` is indistinguishable
+  from rule-like title prose. Potential evidence starts at line start or after
+  any Unicode non-alphanumeric boundary; alphanumeric-embedded text remains an
+  ordinary word. Ambiguous severity-less inline input takes the fail-closed
+  path.
 
 ### Problem-derived contract
 
@@ -41,12 +49,14 @@ behavioral surface.
   admission also inferred validity from an enumerated malformed-suffix
   denylist. The producer form was therefore unparseable, and later repairs
   could still admit an unenumerated incomplete suffix.
-- Correct fix must touch/change: extend only the shared complete-label grammar
-  to admit `R<n>(/R<n>)*: nonempty detail`; prove multiline and inline positive
-  correlation; scan candidates in source order so inline evidence on an earlier
-  line keeps precedence, while a complete adjacent evidence line preserves the
-  whole current title before any inline-like text inside that title can truncate
-  it; recognize malformed fragments at line start and mid-line without splitting
+- Correct fix must touch/change: extend the line-start complete-label grammar
+  to admit `R<n>(/R<n>)*: nonempty detail`; prove adjacent positive correlation
+  while keeping the severity-less inline form fail closed; scan candidates in
+  source order so existing severity/dash inline evidence on the current line
+  keeps precedence, while a complete adjacent evidence line preserves a title
+  containing colon-like text that is not an admitted inline label; recognize
+  malformed fragments at line start and after any Unicode non-alphanumeric
+  lexical boundary without splitting
   bare multi-digit or complete chained rule mentions; recognize incomplete slash
   continuations with immediate or whitespace-separated delimiters; classify
   immediate suffixes as an open non-whitespace category and evidence-gate them
@@ -76,9 +86,11 @@ Max files: 3
     `Exercise the deployed manifest entrypoint\nR2/R14: detail` yields only the
     bounded title and lets `evaluate()` correlate a matching `fixed-in`
     disposition for a resolved thread; settled by focused unit tests.
-  - The same complete rule label works inline, while existing dash and
-    severity-qualified colon forms retain their current roots; settled by
-    parser boundary tests.
+  - Severity-less colon evidence remains unambiguous by being line-start only;
+    the same form inline yields no root, while existing dash and
+    severity-qualified inline forms retain their current roots and take
+    precedence over an immediately following complete label; settled by parser
+    ordering and negative substring-disposition tests.
   - A following complete evidence line preserves the entire bounded title even
     when that title contains generated `R<n>(/R<n>)*: text` combinations, while
     a line that itself begins as a rule label or contains potential rule
@@ -88,8 +100,9 @@ Max files: 3
     the label-only negative case,
     `test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline`,
     the existing incomplete-fragment matrix, the evidence-keyed product over
-    rule tokens, title containers, and label families, and the generated
-    all-Unicode immediate-suffix property.
+    rule tokens, title containers, and label families, the generated
+    all-Unicode immediate-suffix property, and the generated Unicode lexical
+    boundary oracle.
   - Bounded prefixes before rule-like colon text do not collapse distinct
     adjacent titles into one decision; settled by
     `test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct`, including
@@ -129,17 +142,20 @@ Max files: 3
   `missing_thread_dispositions()` -> required gate result.
 - Replaced-path behaviors: a bounded title adjacent to or sharing a line with
   `R<n>(/R<n>)*: nonempty detail` changes from unparseable to correlatable;
-  source-order scanning preserves bounded inline evidence on an earlier line,
-  while a complete following evidence line preserves the current whole title
-  before rule-like colon text inside it can be truncated; complete multi-digit
+  source-order scanning preserves existing direct inline evidence before an
+  immediately following complete label, while a complete following evidence
+  line preserves the current whole title when colon-like text is not an
+  admitted inline form; severity-less inline evidence remains unparseable;
+  complete multi-digit
   references cannot backtrack into shorter malformed fragments; any immediate
   non-whitespace continuation is structurally potential evidence and must pass
   the complete grammar; every unmatched form retains the empty-decision
   fail-closed result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
-  reference, atomic longest-reference matching, the open immediate
-  non-whitespace suffix category, optional delimiter whitespace, colon/slash
-  delimiter, and required nonempty detail token.
+  reference, atomic longest-reference matching, Unicode non-alphanumeric token
+  boundary, the open immediate non-whitespace suffix category, optional
+  delimiter whitespace, colon/slash delimiter, and required nonempty detail
+  token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
   colon form can match only its named structured disposition; untrusted author,
   empty detail, malformed rule reference, short title, mismatched disposition,
@@ -147,11 +163,13 @@ Max files: 3
 
 ### Capability-set closure declaration
 
-- Producer prose and malformed suffixes are OPEN. The accepted evidence grammar
-  is CLOSED and ENUMERATED in `_COMPLETE_RULE_LABEL_RE`; the inline and
-  adjacent-line matchers derive accepted forms from that grammar, while the
-  potential-evidence recognizer treats every immediate non-whitespace suffix as
-  requiring validation rather than enumerating rejected suffixes.
+- Producer prose and malformed suffixes are OPEN. The accepted line-start
+  evidence grammar is CLOSED and ENUMERATED in `_COMPLETE_RULE_LABEL_RE`; the
+  inline matcher intentionally uses the pre-existing severity/dash subset so
+  colon-like title prose cannot become ambiguous inline evidence. The
+  potential-evidence recognizer treats every immediate non-whitespace suffix at
+  a Unicode lexical boundary as requiring validation rather than enumerating
+  rejected suffixes or boundary punctuation.
 - This slice adds one finite delimiter member: exact rule reference + colon +
   nonempty detail. It does not classify title vocabulary or accept generic
   prose as evidence.
@@ -177,17 +195,18 @@ Max files: 3
 
 ## Mechanism
 
-Add the colon-with-detail alternative at the same complete-label grammar choke
-point used by inline and adjacent-line parsing. Walk nonblank lines once in
-source order: when the next line supplies complete evidence, preserve the
-current whole bounded title unless it begins as a rule label or contains
-potential rule evidence that the complete-label grammar cannot validate;
-otherwise return the current bounded inline root. Prevent reference matching
-from backtracking by atomically consuming the longest complete reference, then
-treat every immediate non-whitespace continuation and every
-whitespace-separated rule-label operator as potential evidence. The established
-bounded-title floor and root matching remain downstream invariants, so
-recognizing the delimiter does not make arbitrary or short prose authoritative.
+Add the colon-with-detail alternative to the line-start complete-label grammar
+while retaining the pre-existing severity/dash subset for inline extraction.
+Walk nonblank lines once in source order: return direct legacy inline evidence
+before considering the following line; otherwise, when that next line supplies
+complete evidence, preserve the current whole bounded title unless it begins as
+a rule label or contains potential rule evidence that the complete-label grammar
+cannot validate. Atomically consume the longest complete reference and detect
+it at line start or after any Unicode non-alphanumeric boundary, then treat every
+immediate non-whitespace continuation and every whitespace-separated rule-label
+operator as potential evidence. The established bounded-title floor and root
+matching remain downstream invariants, so recognizing the delimiter does not
+make arbitrary or short prose authoritative.
 
 ## Intentional
 
@@ -197,6 +216,8 @@ recognizing the delimiter does not make arbitrary or short prose authoritative.
 - No acceptance of a colon without detail or of a rule-like prefix with trailing
   letters or an incomplete slash chain. The complete-evidence requirement
   remains fail closed.
+- No severity-less colon inline admission. That unobserved shape is ambiguous
+  with title prose; only the observed line-start producer form is added.
 
 ## Deferred
 
@@ -211,7 +232,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `90 passed in 1.20s` after the structural decision-seam repair.
+  `93 passed in 2.09s` after the structural decision-seam repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -235,7 +256,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 241 |
-| `scripts/check_ai_reconciliation_live.py` | 33 |
-| `tests/test_check_ai_reconciliation_live.py` | 268 |
-| **Total** | **542** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 262 |
+| `scripts/check_ai_reconciliation_live.py` | 39 |
+| `tests/test_check_ai_reconciliation_live.py` | 318 |
+| **Total** | **619** |

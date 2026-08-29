@@ -44,17 +44,19 @@ _DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
 _RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
 _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
-_COMPLETE_RULE_LABEL_RE = (
+_LEGACY_COMPLETE_RULE_LABEL_RE = (
     rf"{_RULE_REFERENCE_RE}(?:"
     rf"\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+\S|\s*:\s+\S|\s+(?![:—-])\S)"
-    rf"|:\s+\S"
     rf"|\s+[—-]\s+\S"
     rf")"
 )
-_REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
+_COMPLETE_RULE_LABEL_RE = (
+    rf"(?:{_LEGACY_COMPLETE_RULE_LABEL_RE}|{_RULE_REFERENCE_RE}:\s+\S)"
+)
+_REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_LEGACY_COMPLETE_RULE_LABEL_RE}")
 _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
 _POTENTIAL_RULE_EVIDENCE_RE = re.compile(
-    rf"(?:^|\s+)(?>{_RULE_REFERENCE_RE})(?!\d)(?=\S|\s*(?:\(|:|/|[-—]))"
+    rf"(?<![^\W_])(?>{_RULE_REFERENCE_RE})(?!\d)(?=\S|\s*(?:\(|:|/|[-—]))"
 )
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
@@ -262,7 +264,7 @@ def _has_unvalidated_rule_evidence(line: str) -> bool:
     """Return whether a potential title contains non-complete rule evidence."""
 
     for match in _POTENTIAL_RULE_EVIDENCE_RE.finditer(line):
-        candidate = line[match.start() :].lstrip()
+        candidate = line[match.start() :]
         if not _REVIEW_RULE_LABEL_RE.match(candidate):
             return True
     return False
@@ -273,6 +275,9 @@ def _evidenced_root_decision(body_text: str) -> str:
 
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     for index, line in enumerate(lines):
+        root = _bounded_title_root(line)
+        if root and _REVIEW_TITLE_STOP_RE.search(line):
+            return root
         if (
             index + 1 < len(lines)
             and _REVIEW_RULE_LABEL_RE.match(lines[index + 1])
@@ -281,9 +286,6 @@ def _evidenced_root_decision(body_text: str) -> str:
             and _has_bounded_decision_evidence(line)
         ):
             return line
-        root = _bounded_title_root(line)
-        if root and _REVIEW_TITLE_STOP_RE.search(line):
-            return root
     return ""
 
 
