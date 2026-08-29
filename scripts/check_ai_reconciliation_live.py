@@ -323,11 +323,18 @@ def _evidenced_root_decision(body_text: str) -> str:
 
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     for index, line in enumerate(lines):
+        inline_match = _REVIEW_TITLE_STOP_RE.search(line)
+        if inline_match:
+            title_prefix = line[: inline_match.start()]
+            if (
+                _REVIEW_RULE_LABEL_RE.match(line)
+                or _has_unvalidated_rule_evidence(title_prefix)
+            ):
+                return ""
+            return _bounded_title_root(line)
         if _has_unvalidated_rule_evidence(line):
             return ""
         root = _bounded_title_root(line)
-        if root and _REVIEW_TITLE_STOP_RE.search(line):
-            return root
         if (
             index + 1 < len(lines)
             and _REVIEW_RULE_LABEL_RE.match(lines[index + 1])

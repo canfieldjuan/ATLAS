@@ -82,7 +82,10 @@ behavioral surface.
   potential-reference regex also relies on Python `\d`, which covers Unicode
   decimal digits but misses non-decimal numeric classes such as superscripts,
   fractions, circled numbers, and Roman numerals; those malformed identities can
-  therefore be promoted as adjacent titles.
+  therefore be promoted as adjacent titles. Finally, source-order validation
+  currently scans an entire line for malformed evidence before honoring its
+  first complete legacy inline label, so rule-like prose in the already-bounded
+  detail can erase an otherwise valid inline root.
 - Correct fix must touch/change: extend the line-start complete-label grammar
   to admit `R<n>(/R<n>)*: nonempty detail`; prove adjacent positive correlation
   while keeping the severity-less inline form fail closed; scan candidates in
@@ -111,7 +114,11 @@ behavioral surface.
   titles. Route every non-ASCII `str.isnumeric()` character immediately after a
   lexical-boundary `R`/`r` through the fail-closed evidence path, with an
   all-code-point oracle and representative end-to-end negatives; preserve
-  alphanumeric-embedded title text and canonical ASCII rule IDs.
+  alphanumeric-embedded title text and canonical ASCII rule IDs. Treat the first
+  complete legacy inline label as an evidence boundary: validate potential
+  evidence only in the title prefix before that boundary, preserve the bounded
+  root when later detail contains rule-like prose, and continue to reject
+  malformed evidence before the boundary.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, structured disposition extraction,
   title normalization, pairwise bounded-containment compatibility outside the
@@ -206,6 +213,10 @@ Max files: 3
     forms an otherwise valid adjacent title/evidence pair; settled by
     `test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs`, including
     a negative assertion that the later prose cannot clear reconciliation.
+  - A complete legacy inline label terminates title validation: malformed-looking
+    rule text in its following detail does not erase the bounded title, while the
+    same malformed text before the complete label remains terminal. Settled by
+    direct parser and end-to-end disposition assertions for both orderings.
   - `R2/R14:` with empty detail, `R2/R14   : detail` with pre-colon
     whitespace, `R2/R14foo: detail`, a short title, and text with no adjacent
     complete rule label yield no decision; settled by negative unit assertions.
@@ -385,7 +396,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 391 |
-| `scripts/check_ai_reconciliation_live.py` | 128 |
-| `tests/test_check_ai_reconciliation_live.py` | 651 |
-| **Total** | **1170** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 402 |
+| `scripts/check_ai_reconciliation_live.py` | 137 |
+| `tests/test_check_ai_reconciliation_live.py` | 687 |
+| **Total** | **1226** |

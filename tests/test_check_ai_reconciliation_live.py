@@ -1233,6 +1233,42 @@ def test_inline_rule_evidence_precedes_an_immediately_adjacent_label():
     assert any("missing dispositions" in message for message in wrong_messages)
 
 
+def test_inline_rule_evidence_bounds_validation_of_following_detail():
+    c = load_check()
+    title = "Keep legacy inline root extraction"
+    detail_after_evidence = (
+        f"{title} R2 (BLOCKER) detail cites R999: as malformed evidence"
+    )
+    malformed_before_evidence = (
+        f"{title} cites R999: as malformed evidence R2 (BLOCKER) complete detail"
+    )
+
+    assert c._evidenced_root_decision(detail_after_evidence) == title
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=detail_after_evidence)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message for message in messages
+    )
+
+    assert c._evidenced_root_decision(malformed_before_evidence) == ""
+    malformed_code, malformed_messages = c.evaluate(
+        [thread(resolved=True, body=malformed_before_evidence)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert malformed_code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message
+        for message in malformed_messages
+    )
+
+
 def test_short_inline_rule_evidence_is_terminal_before_an_adjacent_label():
     c = load_check()
     promoted_line = "x R2 (BLOCKER) complete but short inline evidence"
