@@ -807,13 +807,42 @@ def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline(
             )
 
 
+def test_adjacent_rule_evidence_rejects_unknown_leading_continuations():
+    c = load_check()
+    continuations = (
+        "R4 BLOCKER: malformed label used as a title with enough words",
+        "R4 R5: malformed label used as a title with enough words",
+    )
+    wrappers = ("{}", "({})")
+
+    for continuation, wrapper in product(continuations, wrappers):
+        candidate = wrapper.format(continuation)
+        source_body = f"{candidate}\nR2: complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == ""
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(candidate),
+            BOTS,
+        )
+
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
+
+
 def test_potential_rule_evidence_uses_a_complete_grammar_oracle_across_axes():
     c = load_check()
     tokens = tuple(f"R{number}" for number in (4, 10)) + (
         "/".join(f"R{number}" for number in (4, 5)),
     )
     containers = tuple(
-        f"{prefix}{{}}" for prefix in ("", "Context before ", "Punctuation boundary (")
+        {
+            "leading": ("{}", True),
+            "embedded": ("Context before {}", False),
+            "embedded-punctuation": ("Punctuation boundary ({})", False),
+        }.items()
     )
     families = tuple(
         {
@@ -826,10 +855,14 @@ def test_potential_rule_evidence_uses_a_complete_grammar_oracle_across_axes():
         }.items()
     )
 
-    for token, container, (family, (suffix, expected)) in product(
+    for token, (_container, (template, is_leading)), (
+        family,
+        (suffix, family_expected),
+    ) in product(
         tokens, containers, families
     ):
-        candidate = container.format(f"{token}{suffix}")
+        candidate = template.format(f"{token}{suffix}")
+        expected = family_expected or (is_leading and family == "bare-reference")
 
         assert c._has_unvalidated_rule_evidence(candidate) is expected, family
 
@@ -853,7 +886,24 @@ def test_potential_rule_evidence_uses_unicode_lexical_boundaries():
     for codepoint in range(0x110000):
         prefix = chr(codepoint)
         candidate = f"{prefix}R4é: malformed label used as a title with enough words"
+        leading_candidate = (
+            f"{prefix}R4 BLOCKER: malformed label used as a title with enough words"
+        )
         expected = not prefix.isalnum()
+
+        assert c._has_unvalidated_rule_evidence(candidate) is expected
+        assert c._has_unvalidated_rule_evidence(leading_candidate) is expected
+
+
+def test_leading_rule_continuations_are_complete_grammar_gated():
+    c = load_check()
+
+    for codepoint in range(0x110000):
+        continuation = chr(codepoint)
+        if continuation.isspace():
+            continue
+        candidate = f"R4 {continuation} continued evidence"
+        expected = continuation not in ("-", "—")
 
         assert c._has_unvalidated_rule_evidence(candidate) is expected
 

@@ -41,6 +41,11 @@ behavioral surface.
   any Unicode non-alphanumeric boundary; alphanumeric-embedded text remains an
   ordinary word. Ambiguous severity-less inline input takes the fail-closed
   path.
+- Leading continuation rule: when the first lexical token of a candidate line
+  is a rule reference and nonblank whitespace-delimited text follows, the
+  complete-label grammar must validate the line. Leading Unicode punctuation
+  does not turn that ambiguous evidence into a title; genuinely embedded bare
+  references after title text remain ordinary content.
 
 ### Problem-derived contract
 
@@ -60,9 +65,11 @@ behavioral surface.
   bare multi-digit or complete chained rule mentions; recognize incomplete slash
   continuations with immediate or whitespace-separated delimiters; classify
   immediate suffixes as an open non-whitespace category and evidence-gate them
-  with the complete-label grammar; preserve existing dash and
-  severity-qualified forms; and prove incomplete, malformed, Unicode-suffixed,
-  short-title, label-only, and unrelated inputs still fail closed.
+  with the complete-label grammar; require a leading rule reference with any
+  nonblank whitespace continuation to pass that same grammar; preserve
+  existing dash and severity-qualified forms; and prove incomplete, malformed,
+  Unicode-suffixed, unknown-leading-continuation, short-title, label-only, and
+  unrelated inputs still fail closed.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -103,6 +110,12 @@ Max files: 3
     rule tokens, title containers, and label families, the generated
     all-Unicode immediate-suffix property, and the generated Unicode lexical
     boundary oracle.
+  - A rule reference that is the first lexical token cannot become a title by
+    adding an unknown whitespace-delimited continuation, including after
+    leading Unicode punctuation; complete dash/severity labels retain their
+    grammar result, and embedded bare references remain title text. Settled by
+    the leading-continuation end-to-end negative and generated Unicode
+    continuation oracle.
   - Bounded prefixes before rule-like colon text do not collapse distinct
     adjacent titles into one decision; settled by
     `test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct`, including
@@ -154,8 +167,8 @@ Max files: 3
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
   reference, atomic longest-reference matching, Unicode non-alphanumeric token
   boundary, the open immediate non-whitespace suffix category, optional
-  delimiter whitespace, colon/slash delimiter, and required nonempty detail
-  token.
+  delimiter whitespace, first-lexical-token continuation state, colon/slash
+  delimiter, and required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
   colon form can match only its named structured disposition; untrusted author,
   empty detail, malformed rule reference, short title, mismatched disposition,
@@ -169,7 +182,9 @@ Max files: 3
   colon-like title prose cannot become ambiguous inline evidence. The
   potential-evidence recognizer treats every immediate non-whitespace suffix at
   a Unicode lexical boundary as requiring validation rather than enumerating
-  rejected suffixes or boundary punctuation.
+  rejected suffixes or boundary punctuation. It also treats every nonblank
+  whitespace continuation after a leading rule reference as potential evidence;
+  this finite structural position distinguishes it from embedded bare mentions.
 - This slice adds one finite delimiter member: exact rule reference + colon +
   nonempty detail. It does not classify title vocabulary or accept generic
   prose as evidence.
@@ -204,9 +219,11 @@ a rule label or contains potential rule evidence that the complete-label grammar
 cannot validate. Atomically consume the longest complete reference and detect
 it at line start or after any Unicode non-alphanumeric boundary, then treat every
 immediate non-whitespace continuation and every whitespace-separated rule-label
-operator as potential evidence. The established bounded-title floor and root
-matching remain downstream invariants, so recognizing the delimiter does not
-make arbitrary or short prose authoritative.
+operator as potential evidence. If a rule reference is the first lexical token,
+any nonblank whitespace continuation also requires complete-grammar validation.
+The established bounded-title floor and root matching remain downstream
+invariants, so recognizing the delimiter does not make arbitrary or short prose
+authoritative.
 
 ## Intentional
 
@@ -232,7 +249,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `93 passed in 2.09s` after the structural decision-seam repair.
+  `95 passed in 3.24s` after the structural decision-seam repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -256,7 +273,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 262 |
-| `scripts/check_ai_reconciliation_live.py` | 39 |
-| `tests/test_check_ai_reconciliation_live.py` | 318 |
-| **Total** | **619** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 279 |
+| `scripts/check_ai_reconciliation_live.py` | 50 |
+| `tests/test_check_ai_reconciliation_live.py` | 368 |
+| **Total** | **697** |

@@ -58,6 +58,9 @@ _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
 _POTENTIAL_RULE_EVIDENCE_RE = re.compile(
     rf"(?<![^\W_])(?>{_RULE_REFERENCE_RE})(?!\d)(?=\S|\s*(?:\(|:|/|[-—]))"
 )
+_LEADING_RULE_CONTINUATION_RE = re.compile(
+    rf"^[\W_]*(?>{_RULE_REFERENCE_RE})(?!\d)(?=\s+\S)"
+)
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
 _MIN_REVIEW_TITLE_CHARS = 24
@@ -251,7 +254,10 @@ def _bounded_title_root(line: str) -> str:
     match = _REVIEW_TITLE_STOP_RE.search(line)
     if match:
         root = line[: match.start()].strip()
-    elif _POTENTIAL_RULE_EVIDENCE_RE.search(line):
+    elif (
+        _POTENTIAL_RULE_EVIDENCE_RE.search(line)
+        or _LEADING_RULE_CONTINUATION_RE.search(line)
+    ):
         return ""
     else:
         root = line.strip()
@@ -263,6 +269,11 @@ def _bounded_title_root(line: str) -> str:
 def _has_unvalidated_rule_evidence(line: str) -> bool:
     """Return whether a potential title contains non-complete rule evidence."""
 
+    if (
+        _LEADING_RULE_CONTINUATION_RE.search(line)
+        and not _REVIEW_RULE_LABEL_RE.match(line)
+    ):
+        return True
     for match in _POTENTIAL_RULE_EVIDENCE_RE.finditer(line):
         candidate = line[match.start() :]
         if not _REVIEW_RULE_LABEL_RE.match(candidate):
