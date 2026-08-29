@@ -42,17 +42,39 @@ _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
 _DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
-_RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
+_DEFINED_REVIEW_RULE_IDS = tuple(f"R{number}" for number in range(1, 15))
+_DEFINED_RULE_ID_RE = "(?:" + "|".join(
+    sorted((re.escape(rule_id) for rule_id in _DEFINED_REVIEW_RULE_IDS), key=len, reverse=True)
+) + ")"
+_RULE_REFERENCE_RE = rf"{_DEFINED_RULE_ID_RE}(?:/{_DEFINED_RULE_ID_RE})*"
+_NUMERIC_POTENTIAL_RULE_REFERENCE_RE = r"[Rr]\d+(?:/[Rr]\d+)*"
+_PARTIAL_INITIAL_RULE_REFERENCE_RE = r"[Rr](?=\s*(?:\(|:|/|[-—]))"
+_LEADING_PARTIAL_RULE_REFERENCE_RE = r"[Rr](?=$|\s+\S|\s*(?:\(|:|/|[-—]))"
+_POTENTIAL_RULE_REFERENCE_RE = (
+    rf"(?:{_NUMERIC_POTENTIAL_RULE_REFERENCE_RE}|{_PARTIAL_INITIAL_RULE_REFERENCE_RE})"
+)
+_LEADING_POTENTIAL_RULE_REFERENCE_RE = (
+    rf"(?:{_NUMERIC_POTENTIAL_RULE_REFERENCE_RE}|{_LEADING_PARTIAL_RULE_REFERENCE_RE})"
+)
 _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
-_COMPLETE_RULE_LABEL_RE = (
+_LEGACY_COMPLETE_RULE_LABEL_RE = (
     rf"{_RULE_REFERENCE_RE}(?:"
     rf"\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+\S|\s*:\s+\S|\s+(?![:—-])\S)"
     rf"|\s+[—-]\s+\S"
     rf")"
 )
-_REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
+_COMPLETE_RULE_LABEL_RE = (
+    rf"(?:{_LEGACY_COMPLETE_RULE_LABEL_RE}|{_RULE_REFERENCE_RE}:\s+\S)"
+)
+_REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_LEGACY_COMPLETE_RULE_LABEL_RE}")
 _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
-_RULE_LABEL_FRAGMENT_RE = re.compile(rf"\s+{_RULE_REFERENCE_RE}\s*(?:\(|[-—])")
+_POTENTIAL_RULE_EVIDENCE_RE = re.compile(
+    rf"(?<![^\W_])(?>{_POTENTIAL_RULE_REFERENCE_RE})(?!\d)"
+    rf"(?=\S|\s*(?:\(|:|/|[-—]))"
+)
+_LEADING_RULE_REFERENCE_RE = re.compile(
+    rf"^[\W_]*(?P<reference>(?>{_LEADING_POTENTIAL_RULE_REFERENCE_RE}))(?!\d)"
+)
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
 _MIN_REVIEW_TITLE_CHARS = 24
@@ -246,7 +268,10 @@ def _bounded_title_root(line: str) -> str:
     match = _REVIEW_TITLE_STOP_RE.search(line)
     if match:
         root = line[: match.start()].strip()
-    elif _RULE_LABEL_FRAGMENT_RE.search(line):
+    elif (
+        _POTENTIAL_RULE_EVIDENCE_RE.search(line)
+        or _LEADING_RULE_REFERENCE_RE.search(line)
+    ):
         return ""
     else:
         root = line.strip()
@@ -255,18 +280,76 @@ def _bounded_title_root(line: str) -> str:
     return root
 
 
+def _has_non_ascii_numeric_rule_identity(line: str) -> bool:
+    """Return whether a lexical-boundary rule marker starts with Unicode numeric data."""
+
+    for index, marker in enumerate(line[:-1]):
+        if marker not in ("R", "r"):
+            continue
+        if index and line[index - 1].isalnum():
+            continue
+        candidate = line[index + 1]
+        if not candidate.isascii() and candidate.isnumeric():
+            return True
+    return False
+
+
+def _has_unvalidated_rule_evidence(line: str) -> bool:
+    """Return whether a potential title contains non-complete rule evidence."""
+
+    if _has_non_ascii_numeric_rule_identity(line):
+        return True
+    leading_match = _LEADING_RULE_REFERENCE_RE.search(line)
+    if leading_match is not None:
+        prefix = line[: leading_match.start("reference")]
+        reference = leading_match.group("reference")
+        remainder = line[leading_match.end("reference") :]
+        is_canonical_reference = re.fullmatch(_RULE_REFERENCE_RE, reference) is not None
+        if (
+            prefix
+            or not is_canonical_reference
+            or (remainder.strip() and not _REVIEW_RULE_LABEL_RE.match(line))
+        ):
+            return True
+    for match in _POTENTIAL_RULE_EVIDENCE_RE.finditer(line):
+        candidate = line[match.start() :]
+        if not _REVIEW_RULE_LABEL_RE.match(candidate):
+            return True
+    return False
+
+
 def _evidenced_root_decision(body_text: str) -> str:
-    """Return a full title only when its existing rule evidence is adjacent."""
+    """Return a bounded title with complete adjacent or inline rule evidence."""
 
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     for index, line in enumerate(lines):
+        inline_match = _REVIEW_TITLE_STOP_RE.search(line)
+        if inline_match:
+            title_prefix = line[: inline_match.start()]
+            if (
+                _REVIEW_RULE_LABEL_RE.match(line)
+                or _has_unvalidated_rule_evidence(title_prefix)
+            ):
+                return ""
+            return _bounded_title_root(line)
+        if _has_unvalidated_rule_evidence(line):
+            return ""
         root = _bounded_title_root(line)
-        if not root:
-            continue
-        if _REVIEW_TITLE_STOP_RE.search(line):
-            return root
-        if index + 1 < len(lines) and _REVIEW_RULE_LABEL_RE.match(lines[index + 1]):
-            return root
+        if (
+            index + 1 < len(lines)
+            and _REVIEW_RULE_LABEL_RE.match(lines[index + 1])
+            and not _REVIEW_RULE_LABEL_RE.match(line)
+            and not _REVIEW_TITLE_STOP_RE.search(line)
+            and _has_bounded_decision_evidence(line)
+        ):
+            return line
+        if not root and (
+            _REVIEW_RULE_LABEL_RE.match(line)
+            or _REVIEW_TITLE_STOP_RE.search(line)
+            or _POTENTIAL_RULE_EVIDENCE_RE.search(line)
+            or _LEADING_RULE_REFERENCE_RE.search(line)
+        ):
+            return ""
     return ""
 
 
@@ -325,6 +408,24 @@ def root_decision_matches_thread(root: str, decision: str) -> bool:
     return root in decision or decision in root
 
 
+def _covered_thread_decisions(roots: Sequence[str], decisions: Sequence[str]) -> set[str]:
+    """Return distinct decisions covered without ambiguous root reuse."""
+
+    distinct_decisions = tuple(dict.fromkeys(decisions))
+    covered: set[str] = set()
+    for root in roots:
+        candidates = tuple(
+            decision
+            for decision in distinct_decisions
+            if root_decision_matches_thread(root, decision)
+        )
+        if root in candidates:
+            covered.add(root)
+        elif len(candidates) == 1:
+            covered.add(candidates[0])
+    return covered
+
+
 def missing_thread_dispositions(
     thread_summaries: Sequence[dict],
     body: str,
@@ -332,16 +433,22 @@ def missing_thread_dispositions(
     """Return bot-thread summaries not named by any structured disposition."""
 
     roots = reconciliation_disposition_roots(body)
+    prepared = [
+        (summary, _thread_root_decision(summary)) for summary in thread_summaries
+    ]
+    normalized_decisions = [
+        _normalized_decision(decision) for _, decision in prepared if decision
+    ]
+    covered = _covered_thread_decisions(roots, normalized_decisions)
     missing: list[dict] = []
-    for summary in thread_summaries:
-        decision = _thread_root_decision(summary)
+    for summary, decision in prepared:
         normalized = _normalized_decision(decision)
         if not normalized:
             copy = dict(summary)
             copy["decision"] = _UNPARSEABLE_THREAD_DECISION
             missing.append(copy)
             continue
-        if not any(root_decision_matches_thread(root, normalized) for root in roots):
+        if normalized not in covered:
             copy = dict(summary)
             copy["decision"] = decision
             missing.append(copy)
