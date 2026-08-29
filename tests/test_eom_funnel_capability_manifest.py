@@ -19,6 +19,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from atlas_brain import main_eom
 from atlas_brain.eom_api import funnel as funnel_mod
 from atlas_brain.eom_api import funnel_auth as auth_mod
 from atlas_brain.eom_api.config import EOMFunnelConfig
@@ -26,6 +27,23 @@ from atlas_brain.eom_api.config import EOMFunnelConfig
 _GENERATED_SERVICE_TOKEN = auth_mod.generate_eom_funnel_service_token()
 _SERVICE_TOKEN = _GENERATED_SERVICE_TOKEN.token
 _SERVICE_TOKEN_SHA256 = _GENERATED_SERVICE_TOKEN.sha256
+_TERMS_CAPABILITY_ROUTES = {
+    "terms.invitation.issue": ("POST", "/eom-funnel/terms/invitations"),
+    "terms.invitation.revoke": (
+        "POST",
+        "/eom-funnel/terms/invitations/{invitation_id}/revoke",
+    ),
+    "terms.readiness.read": (
+        "GET",
+        "/eom-funnel/terms/readiness/{contact_id}",
+    ),
+    "terms.delivery.confirm_sent": (
+        "POST",
+        "/eom-funnel/terms/deliveries/{delivery_id}/confirm-sent",
+    ),
+    "terms.public.session": ("POST", "/eom-funnel/terms/public/session"),
+    "terms.public.accept": ("POST", "/eom-funnel/terms/public/accept"),
+}
 
 
 class _CRM:
@@ -115,6 +133,14 @@ def test_capability_map_has_no_entry_for_an_unregistered_route() -> None:
     assert unmatched == {}, f"capability map references unregistered routes: {unmatched}"
 
 
+def test_terms_capabilities_pin_the_existing_route_contract() -> None:
+    """The Tracker contract names each existing Terms route exactly."""
+    registered = _registered_routes()
+    for name, signature in _TERMS_CAPABILITY_ROUTES.items():
+        assert funnel_mod._CAPABILITY_ROUTES[name] == signature
+        assert signature in registered
+
+
 def test_manifest_omits_a_capability_whose_route_is_not_registered(monkeypatch) -> None:
     """The degradation path itself, forced.
 
@@ -192,6 +218,35 @@ async def test_manifest_is_present_even_when_the_queue_is_empty() -> None:
     body = response.json()
     assert body["leads"] == []
     assert "lead.lost" in body["capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_lead_review_response_advertises_terms_routes() -> None:
+    """The deployed slim-app entrypoint exposes the Terms bridge contract."""
+    app = main_eom.app
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[funnel_mod._crm_dependency] = lambda: _CRM([])
+    app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
+        EOMFunnelConfig(api_enabled=True, service_token_sha256=_SERVICE_TOKEN_SHA256)
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/eom-funnel/leads", headers=_headers()
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(_TERMS_CAPABILITY_ROUTES).issubset(body["capabilities"])
+    advertised_routes = {
+        (route["method"], route["path"]) for route in body["capabilityRoutes"]
+    }
+    assert set(_TERMS_CAPABILITY_ROUTES.values()).issubset(advertised_routes)
 
 
 @pytest.mark.asyncio
