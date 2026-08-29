@@ -593,7 +593,10 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
 
         assert code == expected_code
         if expected_code:
-            assert any(actual in message for message in messages)
+            assert any(
+                "unparseable trusted-bot review title" in message for message in messages
+            )
+            assert all(actual not in message for message in messages)
 
     node = thread(resolved=True, body=f"{prefix} R1(\nR2 — complete rule detail")
     code, messages = c.evaluate([node], body_with_dispositions(prefix), BOTS)
@@ -992,6 +995,90 @@ def test_complete_rule_evidence_requires_a_defined_rule_id():
     assert any(
         "unparseable trusted-bot review title" in message for message in messages
     )
+
+
+def test_partial_initial_rule_id_evidence_fails_closed():
+    c = load_check()
+    operator_continuations = (
+        ": missing initial numeric identity",
+        " : missing initial numeric identity",
+        "/R4: missing initial numeric identity",
+        " /R4: missing initial numeric identity",
+        "/r4: missing initial numeric identity",
+        " (BLOCKER) missing initial numeric identity",
+        " — missing initial numeric identity",
+        " - missing initial numeric identity",
+    )
+    containers = ("{}", "({})", "Context before ({})")
+
+    for marker, continuation, container in product(
+        ("R", "r"), operator_continuations, containers
+    ):
+        candidate = container.format(f"{marker}{continuation}")
+        assert c._has_unvalidated_rule_evidence(candidate)
+
+    for marker, continuation in product(("R", "r"), ("", " BLOCKER", "\tR4")):
+        assert c._has_unvalidated_rule_evidence(f"{marker}{continuation}")
+
+    case_variant_references = tuple(
+        f"r{number}" for number in range(1, 15)
+    ) + ("r4/r14", "r4/R14", "R4/r14")
+    for reference, suffix in product(
+        case_variant_references,
+        (": lowercase marker", " — lowercase marker", " (BLOCKER) lowercase marker"),
+    ):
+        assert c._has_unvalidated_rule_evidence(f"{reference}{suffix}")
+
+    ordinary_title = "Review ordinary title words without rule evidence"
+    assert not c._has_unvalidated_rule_evidence(ordinary_title)
+    assert not c._has_unvalidated_rule_evidence("Use R for an ordinary variable name")
+    assert c._evidenced_root_decision(f"{ordinary_title}\nR2: complete detail") == ordinary_title
+
+    malformed_title = "R: malformed label used as a title with enough words"
+    source_body = f"{malformed_title}\nR2: detail"
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(malformed_title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
+def test_earlier_nonroot_rule_evidence_stops_later_adjacent_pairs():
+    c = load_check()
+    later_title = "This explanatory context has enough title words"
+    earlier_nonroot_lines = (
+        "R999: malformed rule evidence",
+        "R: malformed rule evidence",
+        "R/R4: malformed rule evidence",
+        "R2: complete but unrooted rule evidence",
+        "x R2 (BLOCKER) complete but short inline evidence",
+        "Ambiguous title contains R4: inline evidence without an adjacent label",
+    )
+
+    for earlier_line in earlier_nonroot_lines:
+        source_body = f"{earlier_line}\n{later_title}\nR2: complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == ""
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(later_title),
+            BOTS,
+        )
+
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
+
+    earlier_title = "Keep the first valid adjacent decision before later evidence"
+    later_malformed = f"{earlier_title}\nR2: complete adjacent detail\nR999: later malformed evidence"
+    assert c._evidenced_root_decision(later_malformed) == earlier_title
 
 
 def test_potential_rule_evidence_uses_unicode_lexical_boundaries():

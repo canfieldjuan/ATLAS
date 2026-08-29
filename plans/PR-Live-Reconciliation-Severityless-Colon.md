@@ -55,6 +55,19 @@ behavioral surface.
   the complete grammar. A complete-looking label whose rule token is wrapped in
   leading punctuation is likewise not canonical line-start evidence and cannot
   become a title.
+- Partial-identity rule: the broader potential recognizer includes case-variant
+  numeric markers and a bare `R`/`r` only when it is structurally followed by a
+  rule-label operator or chain delimiter. At the first lexical position, a bare
+  marker with any nonblank continuation is also potential evidence.
+  Missing-initial-ID forms such as `R:`, `R/R4:`, `R BLOCKER`, case variants,
+  and spacing variants therefore reach complete-grammar validation and fail
+  closed without classifying ordinary `R`-initial words as evidence.
+- Terminal-malformation rule: source-order scanning stops with no decision on
+  the first evidence-shaped line that cannot produce a bounded root in its
+  position. This includes unvalidated evidence, a standalone complete label, a
+  short inline label, and an ambiguous severity-less inline label without
+  adjacent evidence. A later complete adjacent pair cannot bypass it; an earlier
+  valid inline or adjacent decision still wins before later lines are inspected.
 
 ### Problem-derived contract
 
@@ -80,8 +93,11 @@ behavioral surface.
   from the defined reviewer-rule identities while retaining broad numeric
   malformed detection; prove the derived identity tuple agrees with the
   reviewer-rule headings; and prove zero, zero-padded, out-of-range,
-  Unicode-suffixed, punctuation-wrapped, unknown-leading-continuation,
-  short-title, label-only, and unrelated inputs still fail closed.
+  Unicode-suffixed, punctuation-wrapped, missing-initial, incomplete-chain,
+  unknown-leading-continuation, short-title, label-only, and unrelated inputs
+  still fail closed. Stop source-order selection when any evidence-shaped line
+  fails to produce a root before a later candidate, without changing
+  earlier-valid inline or adjacent precedence.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -137,6 +153,19 @@ Max files: 3
     embedded token otherwise matches. Settled by the rule-registry synchronization
     assertion, defined-edge positives, generated ASCII outside-set negatives,
     all-Unicode suffix oracle, and punctuation-wrapped colon end-to-end negative.
+  - Missing or partial initial identities with structural operators (`R:`,
+    `R/R4:`, ASCII case variants, and whitespace variants) remain no-decision
+    inputs at line start and punctuation/whitespace boundaries. A bare marker
+    plus unknown continuation such as `R BLOCKER` is rejected at first lexical
+    position, while ordinary `R`-initial words and embedded variable-name prose
+    remain title text. Settled by the structural partial-identity matrix and
+    exact end-to-end negative.
+  - An unvalidated, standalone-complete, short-inline, or ambiguous-inline
+    evidence line before a later complete adjacent pair makes the whole trusted
+    body no-decision; a matching disposition for the later title cannot clear
+    reconciliation. An earlier valid inline or adjacent root still wins.
+    Settled by the evidence-state ordering matrix alongside the existing
+    earlier-valid-inline precedence proof.
   - Bounded prefixes before rule-like colon text do not collapse distinct
     adjacent titles into one decision; settled by
     `test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct`, including
@@ -183,12 +212,16 @@ Max files: 3
   complete multi-digit
   references cannot backtrack into shorter malformed fragments; any immediate
   non-whitespace continuation is structurally potential evidence and must pass
-  the complete grammar; every unmatched form retains the empty-decision
-  fail-closed result.
+  the complete grammar; missing-initial and case-variant identities followed by
+  structural label operators also enter that validation path; and the first
+  evidence-shaped line without a root terminates source-order selection before
+  later candidates. Every unmatched form retains the empty-decision fail-closed
+  result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
   reference from the defined `R1`-`R14` identity set, broader numeric potential
   reference, atomic longest-reference matching, Unicode non-alphanumeric token
-  boundary, leading punctuation, the open immediate non-whitespace suffix category, optional
+  boundary, partial initial `R`/`r`, leading punctuation, the open immediate
+  non-whitespace suffix category, optional
   delimiter whitespace, first-lexical-token continuation state, colon/slash
   delimiter, and required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
@@ -212,6 +245,12 @@ Max files: 3
   Zero, zero-padded, out-of-range ASCII, and Unicode-decimal candidates are
   deliberately part of the broader potential-reference recognizer so they are
   rejected by evidence validation rather than ignored as ordinary title text.
+- A partial-initial branch is closed by structural delimiters rather than title
+  vocabulary: bare `R`/`r` is potential evidence before a rule-label operator
+  or chain slash, plus at first lexical position with nonblank continuation.
+  Numeric marker case variants are also potential but never complete. Any
+  evidence-shaped non-root line is a terminal source-order state; the parser
+  does not search later lines for a more convenient decision.
 - This slice adds one finite delimiter member: exact rule reference + colon +
   nonempty detail. It does not classify title vocabulary or accept generic
   prose as evidence.
@@ -252,6 +291,12 @@ The leading-token check rejects any punctuation wrapper, and the complete
 grammar is generated from the defined reviewer-rule identity tuple while the
 potential recognizer remains Unicode-wide. A synchronization test makes rule-doc
 growth fail visibly until that tuple and its admission proof are updated.
+The potential grammar also recognizes case-variant numeric markers and a
+digitless initial `R`/`r` before structural label or chain operators, plus at the
+first lexical position before nonblank continuation. Each source-order candidate
+is checked for unvalidated evidence before root selection; after the two valid
+root paths, any remaining evidence-shaped line returns no decision immediately.
+Valid inline and adjacent roots still return before any later line is considered.
 The established bounded-title floor and root matching remain downstream
 invariants, so recognizing the delimiter does not make arbitrary or short prose
 authoritative.
@@ -280,7 +325,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `99 passed in 4.47s` after the defined-identity repair.
+  `101 passed in 4.74s` after the terminal evidence-state repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -304,7 +349,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 310 |
-| `scripts/check_ai_reconciliation_live.py` | 65 |
-| `tests/test_check_ai_reconciliation_live.py` | 482 |
-| **Total** | **857** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 355 |
+| `scripts/check_ai_reconciliation_live.py` | 81 |
+| `tests/test_check_ai_reconciliation_live.py` | 571 |
+| **Total** | **1007** |

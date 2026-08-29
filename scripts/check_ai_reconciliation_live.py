@@ -47,7 +47,15 @@ _DEFINED_RULE_ID_RE = "(?:" + "|".join(
     sorted((re.escape(rule_id) for rule_id in _DEFINED_REVIEW_RULE_IDS), key=len, reverse=True)
 ) + ")"
 _RULE_REFERENCE_RE = rf"{_DEFINED_RULE_ID_RE}(?:/{_DEFINED_RULE_ID_RE})*"
-_POTENTIAL_RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
+_NUMERIC_POTENTIAL_RULE_REFERENCE_RE = r"[Rr]\d+(?:/[Rr]\d+)*"
+_PARTIAL_INITIAL_RULE_REFERENCE_RE = r"[Rr](?=\s*(?:\(|:|/|[-—]))"
+_LEADING_PARTIAL_RULE_REFERENCE_RE = r"[Rr](?=$|\s+\S|\s*(?:\(|:|/|[-—]))"
+_POTENTIAL_RULE_REFERENCE_RE = (
+    rf"(?:{_NUMERIC_POTENTIAL_RULE_REFERENCE_RE}|{_PARTIAL_INITIAL_RULE_REFERENCE_RE})"
+)
+_LEADING_POTENTIAL_RULE_REFERENCE_RE = (
+    rf"(?:{_NUMERIC_POTENTIAL_RULE_REFERENCE_RE}|{_LEADING_PARTIAL_RULE_REFERENCE_RE})"
+)
 _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
 _LEGACY_COMPLETE_RULE_LABEL_RE = (
     rf"{_RULE_REFERENCE_RE}(?:"
@@ -65,7 +73,7 @@ _POTENTIAL_RULE_EVIDENCE_RE = re.compile(
     rf"(?=\S|\s*(?:\(|:|/|[-—]))"
 )
 _LEADING_RULE_REFERENCE_RE = re.compile(
-    rf"^[\W_]*(?P<reference>(?>{_POTENTIAL_RULE_REFERENCE_RE}))(?!\d)"
+    rf"^[\W_]*(?P<reference>(?>{_LEADING_POTENTIAL_RULE_REFERENCE_RE}))(?!\d)"
 )
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
@@ -299,6 +307,8 @@ def _evidenced_root_decision(body_text: str) -> str:
 
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
     for index, line in enumerate(lines):
+        if _has_unvalidated_rule_evidence(line):
+            return ""
         root = _bounded_title_root(line)
         if root and _REVIEW_TITLE_STOP_RE.search(line):
             return root
@@ -306,10 +316,16 @@ def _evidenced_root_decision(body_text: str) -> str:
             index + 1 < len(lines)
             and _REVIEW_RULE_LABEL_RE.match(lines[index + 1])
             and not _REVIEW_RULE_LABEL_RE.match(line)
-            and not _has_unvalidated_rule_evidence(line)
             and _has_bounded_decision_evidence(line)
         ):
             return line
+        if not root and (
+            _REVIEW_RULE_LABEL_RE.match(line)
+            or _REVIEW_TITLE_STOP_RE.search(line)
+            or _POTENTIAL_RULE_EVIDENCE_RE.search(line)
+            or _LEADING_RULE_REFERENCE_RE.search(line)
+        ):
+            return ""
     return ""
 
 
