@@ -736,11 +736,36 @@ def test_adjacent_rule_evidence_preserves_bare_multi_digit_rule_mentions():
         )
 
 
+def test_adjacent_rule_evidence_preserves_bare_complete_chained_rule_mentions():
+    c = load_check()
+
+    for reference in ("R4/R5", "R10/R14"):
+        title = f"Preserve compatibility with the {reference} verification contract"
+        source_body = f"{title}\nR2 — complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == title
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any(
+            "no open scoped Codex review threads remain" in message
+            for message in messages
+        )
+
+
 def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline():
     c = load_check()
     malformed_fragments = (
         "R4   : malformed label used as a title",
         "R4foo: malformed label used as a title",
+        "R4/R: malformed label used as a title",
+        "R4//R5: malformed label used as a title",
+        "R4/Rfoo: malformed label used as a title",
+        "R4/R5/R: malformed label used as a title",
     )
     candidate_templates = ("{}", "Context before {}")
 

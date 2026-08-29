@@ -23,9 +23,10 @@ the parser rather than bypassed in #2506.
   line keeps precedence, while a complete adjacent evidence line preserves the
   whole current title before any inline-like text inside that title can truncate
   it; recognize malformed fragments at line start and mid-line without splitting
-  bare multi-digit rule mentions; preserve existing dash and severity-qualified
-  forms; and prove incomplete, malformed, short-title, label-only, and unrelated
-  inputs still fail closed.
+  bare multi-digit or complete chained rule mentions; recognize incomplete slash
+  continuations; preserve existing dash and severity-qualified forms; and prove
+  incomplete, malformed, short-title, label-only, and unrelated inputs still
+  fail closed.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -67,6 +68,10 @@ Max files: 3
   - Bare `R10` through `R14` mentions in adjacent titles remain ordinary title
     text rather than backtracking into malformed fragments; settled by
     `test_adjacent_rule_evidence_preserves_bare_multi_digit_rule_mentions`.
+  - Bare complete chains such as `R4/R5` and `R10/R14` remain title text, while
+    incomplete chains such as `R4/R`, `R4//R5`, `R4/Rfoo`, and `R4/R5/R` remain
+    unparseable at line start and mid-line; settled by the complete-chain test
+    and expanded malformed-fragment matrix.
   - Earlier complete inline evidence retains its decision even when later prose
     forms an otherwise valid adjacent title/evidence pair; settled by
     `test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs`, including
@@ -100,7 +105,8 @@ Max files: 3
   references cannot backtrack into shorter malformed fragments; every unmatched
   form retains the empty-decision fail-closed result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
-  reference, colon delimiter, and required nonempty detail token.
+  reference, atomic longest-reference matching, colon/slash delimiter, and
+  required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
   colon form can match only its named structured disposition; untrusted author,
   empty detail, malformed rule reference, short title, mismatched disposition,
@@ -141,10 +147,11 @@ point used by inline and adjacent-line parsing. Walk nonblank lines once in
 source order: when the next line supplies complete evidence, preserve the
 current whole bounded title unless it begins as a rule label or contains a
 malformed fragment; otherwise return the current bounded inline root. Prevent
-fragment matching from backtracking a complete multi-digit reference into a
-shorter reference plus digit suffix. The established bounded-title floor and
-root matching remain downstream invariants, so recognizing the delimiter does
-not make arbitrary or short prose authoritative.
+fragment matching from backtracking by atomically consuming the longest complete
+reference, then treat any leftover slash continuation as malformed. The
+established bounded-title floor and root matching remain downstream invariants,
+so recognizing the delimiter does not make arbitrary or short prose
+authoritative.
 
 ## Intentional
 
@@ -152,7 +159,8 @@ not make arbitrary or short prose authoritative.
   special case for #2506. Those would hide the provider incompatibility rather
   than make the trusted producer and consumer contract agree.
 - No acceptance of a colon without detail or of a rule-like prefix with trailing
-  letters. The complete-evidence requirement remains fail closed.
+  letters or an incomplete slash chain. The complete-evidence requirement
+  remains fail closed.
 
 ## Deferred
 
@@ -167,7 +175,7 @@ Parked hardening: none.
 ## Verification
 
 - `./ops test focused tests/test_check_ai_reconciliation_live.py -q` ->
-  `87 passed in 0.58s` after the current-head review repairs.
+  `88 passed in 0.60s` after the current-head review repairs.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -191,7 +199,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 197 |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 205 |
 | `scripts/check_ai_reconciliation_live.py` | 31 |
-| `tests/test_check_ai_reconciliation_live.py` | 200 |
-| **Total** | **428** |
+| `tests/test_check_ai_reconciliation_live.py` | 225 |
+| **Total** | **461** |
