@@ -50,11 +50,11 @@ behavioral surface.
   reviewer-rule set in `docs/REVIEWER_RULES.md` (currently `R1` through `R14`),
   without zero padding. The checker derives its complete-reference grammar from
   one explicit identity tuple, and a test keeps that tuple synchronized with the
-  rule headings. The broader potential-evidence recognizer still detects
-  ASCII out-of-set values and Unicode-decimal lookalikes, but they cannot satisfy
-  the complete grammar. A complete-looking label whose rule token is wrapped in
-  leading punctuation is likewise not canonical line-start evidence and cannot
-  become a title.
+  rule headings. The broader potential-evidence recognizer still detects ASCII
+  out-of-set values and every non-ASCII Unicode numeric lookalike, but they
+  cannot satisfy the complete grammar. A complete-looking label whose rule token
+  is wrapped in leading punctuation is likewise not canonical line-start
+  evidence and cannot become a title.
 - Partial-identity rule: the broader potential recognizer includes case-variant
   numeric markers and a bare `R`/`r` only when it is structurally followed by a
   rule-label operator or chain delimiter. At the first lexical position, a bare
@@ -78,7 +78,11 @@ behavioral surface.
   could still admit an unenumerated incomplete suffix. Once the parser returns
   distinct full adjacent titles, downstream disposition correlation still
   evaluates symmetric substring containment independently for each thread, so
-  one disposition can clear multiple distinct nested titles.
+  one disposition can clear multiple distinct nested titles. The broader
+  potential-reference regex also relies on Python `\d`, which covers Unicode
+  decimal digits but misses non-decimal numeric classes such as superscripts,
+  fractions, circled numbers, and Roman numerals; those malformed identities can
+  therefore be promoted as adjacent titles.
 - Correct fix must touch/change: extend the line-start complete-label grammar
   to admit `R<n>(/R<n>)*: nonempty detail`; prove adjacent positive correlation
   while keeping the severity-less inline form fail closed; scan candidates in
@@ -104,7 +108,10 @@ behavioral surface.
   the set of distinct normalized thread decisions: an exact root covers only
   that exact decision, bounded containment remains available only when it has
   one unambiguous candidate, and no single disposition can clear two distinct
-  titles.
+  titles. Route every non-ASCII `str.isnumeric()` character immediately after a
+  lexical-boundary `R`/`r` through the fail-closed evidence path, with an
+  all-code-point oracle and representative end-to-end negatives; preserve
+  alphanumeric-embedded title text and canonical ASCII rule IDs.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, structured disposition extraction,
   title normalization, pairwise bounded-containment compatibility outside the
@@ -156,13 +163,14 @@ Max files: 3
     continuation oracle.
   - Only reviewer-rule IDs defined by `docs/REVIEWER_RULES.md` are complete
     evidence. `R1`, `R14`, and defined chains remain accepted; zero,
-    zero-padded, and out-of-range ASCII IDs plus every non-ASCII Unicode decimal
-    used as a whole or mixed rule ID remain malformed across colon, dash, and
-    severity label forms. A colon label after
+    zero-padded, and out-of-range ASCII IDs plus every non-ASCII Unicode numeric
+    character used as an initial or mixed rule ID remain malformed across colon,
+    dash, and severity label forms. A colon label after
     leading punctuation likewise remains a no-decision line even when the
     embedded token otherwise matches. Settled by the rule-registry synchronization
     assertion, defined-edge positives, generated ASCII outside-set negatives,
-    all-Unicode suffix oracle, and punctuation-wrapped colon end-to-end negative.
+    all-Unicode numeric-identity and suffix oracles, representative non-decimal
+    numeric end-to-end negatives, and punctuation-wrapped colon negative.
   - Missing or partial initial identities with structural operators (`R:`,
     `R/R4:`, ASCII case variants, and whitespace variants) remain no-decision
     inputs at line start and punctuation/whitespace boundaries. A bare marker
@@ -261,9 +269,11 @@ Max files: 3
   this finite structural position distinguishes it from embedded bare mentions.
 - Canonical complete references are derived from the explicit reviewer-rule
   identity tuple, which is synchronized by test with `docs/REVIEWER_RULES.md`.
-  Zero, zero-padded, out-of-range ASCII, and Unicode-decimal candidates are
-  deliberately part of the broader potential-reference recognizer so they are
-  rejected by evidence validation rather than ignored as ordinary title text.
+  Zero, zero-padded, out-of-range ASCII, and every non-ASCII Unicode numeric
+  candidate are deliberately part of the broader potential-reference
+  recognizer so they are rejected by evidence validation rather than ignored as
+  ordinary title text. The non-decimal numeric class is detected semantically
+  with `str.isnumeric()` because Python `\d` covers only decimal digits.
 - A partial-initial branch is closed by structural delimiters rather than title
   vocabulary: bare `R`/`r` is potential evidence before a rule-label operator
   or chain slash, plus at first lexical position with nonblank continuation.
@@ -315,6 +325,10 @@ digitless initial `R`/`r` before structural label or chain operators, plus at th
 first lexical position before nonblank continuation. Each source-order candidate
 is checked for unvalidated evidence before root selection; after the two valid
 root paths, any remaining evidence-shaped line returns no decision immediately.
+An additional lexical-boundary scan routes every non-ASCII numeric character
+immediately following `R`/`r` into that same terminal validation path, including
+Unicode numeric classes outside `\d`, without classifying alphanumeric-embedded
+title text as evidence.
 Valid inline and adjacent roots still return before any later line is considered.
 The established bounded-title floor remains a downstream invariant. Correlation
 then builds the distinct normalized decision set and, for each disposition root,
@@ -347,7 +361,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `104 passed in 4.63s` after the cardinality-aware disposition repair.
+  `104 passed in 11.16s` after the full Unicode-numeric identity repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -371,7 +385,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 377 |
-| `scripts/check_ai_reconciliation_live.py` | 112 |
-| `tests/test_check_ai_reconciliation_live.py` | 643 |
-| **Total** | **1132** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 391 |
+| `scripts/check_ai_reconciliation_live.py` | 128 |
+| `tests/test_check_ai_reconciliation_live.py` | 651 |
+| **Total** | **1170** |

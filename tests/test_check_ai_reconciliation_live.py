@@ -956,33 +956,41 @@ def test_potential_rule_evidence_covers_every_immediate_unicode_suffix():
         assert c._has_unvalidated_rule_evidence(candidate)
 
 
-def test_complete_rule_evidence_requires_ascii_decimal_references():
+def test_complete_rule_evidence_rejects_every_non_ascii_unicode_numeric_identity():
     c = load_check()
-    title = "Preserve the bounded title for this decision"
-    unicode_decimals = tuple(
+    unicode_numerics = tuple(
         chr(codepoint)
         for codepoint in range(0x110000)
-        if chr(codepoint).isdecimal() and chr(codepoint) not in "0123456789"
+        if chr(codepoint).isnumeric() and not chr(codepoint).isascii()
     )
 
-    for digit in unicode_decimals:
-        for reference in (f"R{digit}", f"R4{digit}", f"R4/R{digit}"):
+    for numeric in unicode_numerics:
+        for reference in (f"R{numeric}", f"R4{numeric}", f"R4/R{numeric}"):
             candidate = f"{reference}: complete adjacent detail"
 
             assert c._has_unvalidated_rule_evidence(candidate)
 
-    source_body = f"{title}\nR٤: complete adjacent detail"
-    assert c._evidenced_root_decision(source_body) == ""
-    code, messages = c.evaluate(
-        [thread(resolved=True, body=source_body)],
-        body_with_dispositions(title),
-        BOTS,
-    )
+    for numeric in ("٤", "²", "①", "½", "Ⅳ"):
+        source_body = f"R{numeric}: malformed label used as a title with enough words\nR2: detail"
+        assert c._evidenced_root_decision(source_body) == ""
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(source_body.splitlines()[0]),
+            BOTS,
+        )
 
-    assert code == 1
-    assert any(
-        "unparseable trusted-bot review title" in message for message in messages
-    )
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
+
+        embedded_title = f"Preserve embedded wordR{numeric} content inside this bounded title"
+        assert (
+            c._evidenced_root_decision(f"{embedded_title}\nR2: complete adjacent detail")
+            == embedded_title
+        )
+
+    assert unicode_numerics
 
 
 def test_defined_review_rule_ids_match_reviewer_rule_pack():

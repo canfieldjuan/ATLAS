@@ -280,9 +280,25 @@ def _bounded_title_root(line: str) -> str:
     return root
 
 
+def _has_non_ascii_numeric_rule_identity(line: str) -> bool:
+    """Return whether a lexical-boundary rule marker starts with Unicode numeric data."""
+
+    for index, marker in enumerate(line[:-1]):
+        if marker not in ("R", "r"):
+            continue
+        if index and line[index - 1].isalnum():
+            continue
+        candidate = line[index + 1]
+        if not candidate.isascii() and candidate.isnumeric():
+            return True
+    return False
+
+
 def _has_unvalidated_rule_evidence(line: str) -> bool:
     """Return whether a potential title contains non-complete rule evidence."""
 
+    if _has_non_ascii_numeric_rule_identity(line):
+        return True
     leading_match = _LEADING_RULE_REFERENCE_RE.search(line)
     if leading_match is not None:
         prefix = line[: leading_match.start("reference")]
