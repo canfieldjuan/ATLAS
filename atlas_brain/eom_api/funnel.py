@@ -216,7 +216,7 @@ class EOMPostCleanOnboardingCandidateResponse(BaseModel):
 
 
 class EOMTermsVersionCreateRequest(BaseModel):
-    """One exact bilingual residential/commercial Terms release candidate."""
+    """One exact English residential/commercial Terms release candidate."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
@@ -252,7 +252,7 @@ class EOMTermsInvitationRequest(BaseModel):
 
     request_key: object = Field(alias="requestKey")
     contact_id: object = Field(alias="contactId")
-    locale: object
+    locale: Literal["en"]
 
 
 class EOMTermsInvitationResponse(BaseModel):
@@ -266,7 +266,7 @@ class EOMTermsInvitationResponse(BaseModel):
     version_label: str = Field(alias="versionLabel")
     content_hash: str = Field(alias="contentHash")
     audience: Literal["residential", "commercial"]
-    locale: Literal["en", "es"]
+    locale: Literal["en"]
     recipient_email: str = Field(alias="recipientEmail")
     status: Literal["issued", "accepted", "revoked", "expired"]
     issued_at: datetime = Field(alias="issuedAt")
@@ -311,7 +311,7 @@ class EOMTermsSessionResponse(BaseModel):
     version_label: str = Field(alias="versionLabel")
     content_hash: str = Field(alias="contentHash")
     audience: Literal["residential", "commercial"]
-    locale: Literal["en", "es"]
+    locale: Literal["en"]
     customer_name: str | None = Field(default=None, alias="customerName")
     documents: dict[str, str] | None = None
     expires_at: datetime | None = Field(default=None, alias="expiresAt")
@@ -350,7 +350,7 @@ class EOMTermsAcceptanceResponse(BaseModel):
     version_label: str = Field(alias="versionLabel")
     content_hash: str = Field(alias="contentHash")
     audience: Literal["residential", "commercial"]
-    locale: Literal["en", "es"]
+    locale: Literal["en"]
     signer_name: str = Field(alias="signerName")
     terms_accepted: Literal[True] = Field(alias="termsAccepted")
     additional_work_accepted: Literal[True] = Field(alias="additionalWorkAccepted")

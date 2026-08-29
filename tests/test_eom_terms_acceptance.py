@@ -73,7 +73,7 @@ def _documents(marker: str = "approved") -> dict[str, Any]:
                     f"{marker} {audience} {locale} additional work"
                 ),
             }
-            for locale in ("en", "es")
+            for locale in ("en",)
         }
         for audience in ("residential", "commercial")
     }
@@ -365,35 +365,81 @@ def test_terms_bearer_rejects_every_noncanonical_boundary(token: object) -> None
 
 
 def test_renderers_use_only_the_selected_published_document_text() -> None:
-    selected = _documents("selected")["commercial"]["es"]
+    selected = _documents("selected")["commercial"]["en"]
     subject, body = render_eom_terms_invitation(
-        full_name="Cliente",
+        full_name="Customer",
         version_label="2026.1",
         content_hash="a" * 64,
         documents=selected,
-        locale="es",
+        locale="en",
     )
     linked = append_eom_terms_acceptance_link(
         body=body,
         link="https://example.test/#termsToken=opaque",
-        locale="es",
+        locale="en",
     )
     executed_subject, executed_body = render_eom_terms_executed_copy(
-        full_name="Cliente",
-        signer_name="Cliente",
+        full_name="Customer",
+        signer_name="Customer",
         accepted_at=_NOW,
         version_label="2026.1",
         content_hash="a" * 64,
         documents=selected,
-        locale="es",
+        locale="en",
     )
-    assert subject
-    assert executed_subject
+    assert subject == "Review and accept Effingham Office Maids terms"
+    assert executed_subject == "Accepted copy of Effingham Office Maids terms"
     assert all(value in body for value in selected.values())
     assert all(value in executed_body for value in selected.values())
     assert "termsToken=opaque" not in body
     assert "termsToken=opaque" in linked
-    assert "Reconocimiento de trabajo adicional aceptado: Si" in executed_body
+    assert "Accept the terms securely:" in linked
+    assert "Additional-work acknowledgement accepted: Yes" in executed_body
+
+
+def test_customer_renderers_reject_spanish_locale() -> None:
+    selected = _documents("selected")["commercial"]["en"]
+    with pytest.raises(EOMTermsAcceptanceValidationError, match="locale must be en"):
+        render_eom_terms_invitation(
+            full_name="Customer",
+            version_label="2026.1",
+            content_hash="a" * 64,
+            documents=selected,
+            locale="es",
+        )
+    with pytest.raises(EOMTermsAcceptanceValidationError, match="locale must be en"):
+        append_eom_terms_acceptance_link(
+            body="Terms",
+            link="https://example.test/#termsToken=opaque",
+            locale="es",
+        )
+    with pytest.raises(EOMTermsAcceptanceValidationError, match="locale must be en"):
+        render_eom_terms_executed_copy(
+            full_name="Customer",
+            signer_name="Customer",
+            accepted_at=_NOW,
+            version_label="2026.1",
+            content_hash="a" * 64,
+            documents=selected,
+            locale="es",
+        )
+
+
+@pytest.mark.asyncio
+async def test_invitation_rejects_spanish_before_dependencies_or_delivery() -> None:
+    sender = _RecordingSender()
+    with pytest.raises(EOMTermsAcceptanceValidationError, match="locale must be en"):
+        await EOMTermsAcceptanceService(pool=object()).issue_and_send(
+            request_key="terms-request-spanish-rejected",
+            contact_id=_CONTACT_ID,
+            locale="es",
+            actor_id=7,
+            actor_name="Juan",
+            public_base_url="https://example.test/onboarding",
+            hmac_secret=_SECRET,
+            sender=sender,
+        )
+    assert sender.calls == []
 
 
 @pytest.mark.asyncio
@@ -658,6 +704,23 @@ async def test_mounted_routes_enforce_trust_boundaries_and_closed_projections() 
                 "locale": "en",
             },
         )
+        spanish = await client.post(
+            "/api/v1/eom-funnel/terms/invitations",
+            headers=_headers(actor=True),
+            json={
+                "requestKey": "terms-request-spanish",
+                "contactId": str(_CONTACT_ID),
+                "locale": "es",
+            },
+        )
+        missing_locale = await client.post(
+            "/api/v1/eom-funnel/terms/invitations",
+            headers=_headers(actor=True),
+            json={
+                "requestKey": "terms-request-missing-locale",
+                "contactId": str(_CONTACT_ID),
+            },
+        )
         session = await client.post(
             "/api/v1/eom-funnel/terms/public/session",
             headers=_headers(),
@@ -700,6 +763,8 @@ async def test_mounted_routes_enforce_trust_boundaries_and_closed_projections() 
     assert missing_actor.status_code == 422
     assert missing_ip.status_code == 422
     assert issued.status_code == 201
+    assert spanish.status_code == 422
+    assert missing_locale.status_code == 422
     assert session.status_code == 200
     assert accepted.status_code == 201
     assert revoked.status_code == 200
@@ -709,6 +774,7 @@ async def test_mounted_routes_enforce_trust_boundaries_and_closed_projections() 
     assert accept_call["client_ip"] == "192.0.2.9"
     assert isinstance(accept_call["token"], AuthenticatedEOMTermsToken)
     issue_call = next(kwargs for name, kwargs in service.calls if name == "issue")
+    assert sum(name == "issue" for name, _kwargs in service.calls) == 1
     assert "audience" not in issue_call
     assert "recipient_email" not in issue_call
     assert "version_id" not in issue_call
@@ -1391,7 +1457,7 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
                 hmac_secret=_SECRET,
                 sender=invitation_sender,
             )
-        with pytest.raises(EOMTermsAcceptanceConflictError):
+        with pytest.raises(EOMTermsAcceptanceValidationError):
             await service.issue_and_send(
                 request_key="terms-request-race-duplicate",
                 contact_id=contact_duplicate,
