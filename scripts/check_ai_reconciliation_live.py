@@ -47,12 +47,13 @@ _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
 _COMPLETE_RULE_LABEL_RE = (
     rf"{_RULE_REFERENCE_RE}(?:"
     rf"\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+\S|\s*:\s+\S|\s+(?![:—-])\S)"
+    rf"|\s*:\s+\S"
     rf"|\s+[—-]\s+\S"
     rf")"
 )
 _REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
 _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
-_RULE_LABEL_FRAGMENT_RE = re.compile(rf"\s+{_RULE_REFERENCE_RE}\s*(?:\(|[-—])")
+_RULE_LABEL_FRAGMENT_RE = re.compile(rf"\s+{_RULE_REFERENCE_RE}\s*(?:\(|:|[-—])")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
 _MIN_REVIEW_TITLE_CHARS = 24

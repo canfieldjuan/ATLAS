@@ -563,6 +563,7 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
         for suffix in (
             " — ",
             " - ",
+            ": ",
             " (BLOCKER) ",
             " (BLOCKER) — ",
             " (BLOCKER): ",
@@ -579,6 +580,8 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
             " (BLOCKER)- detail",
             " (BLOCKER):",
             " (BLOCKER): ",
+            ":",
+            ": ",
             " —",
         )
     )
@@ -623,18 +626,57 @@ def test_severity_colon_rule_labels_correlate_multiline_and_inline_titles():
         assert any("no open scoped Codex review threads remain" in message for message in messages)
 
 
-def test_severity_less_colon_rule_label_cannot_supply_a_reconciled_title():
+def test_severity_less_colon_rule_labels_correlate_multiline_and_inline_titles():
     c = load_check()
-    title = "Require strict severity evidence for a review title"
-
-    code, messages = c.evaluate(
-        [thread(resolved=True, body=f"{title}\nR4: detail without severity evidence")],
-        body_with_dispositions(title),
-        BOTS,
+    cases = (
+        (
+            "Exercise the deployed manifest entrypoint",
+            "Exercise the deployed manifest entrypoint\n"
+            "R2/R14: this test must call the deployed application",
+        ),
+        (
+            "Correlate the trusted producer colon delimiter",
+            "Correlate the trusted producer colon delimiter "
+            "R4: detail from the connector review",
+        ),
     )
 
-    assert code == 1
-    assert any("unparseable trusted-bot review title" in message for message in messages)
+    for title, source_body in cases:
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any(
+            "no open scoped Codex review threads remain" in message
+            for message in messages
+        )
+
+
+def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_evidence():
+    c = load_check()
+    title = "Require complete colon evidence for a review title"
+    malformed_bodies = (
+        f"{title}\nR4:",
+        f"{title}\nR4: ",
+        f"{title}\nR4foo: detail",
+        "x\nR4: detail",
+        f"{title} R4:\nR2 — separate complete evidence",
+    )
+
+    for source_body in malformed_bodies:
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
 
 
 def test_legacy_inline_rule_label_remains_a_resolved_thread_disposition_title():
