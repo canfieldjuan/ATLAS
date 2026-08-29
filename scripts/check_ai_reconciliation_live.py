@@ -53,7 +53,9 @@ _COMPLETE_RULE_LABEL_RE = (
 )
 _REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
 _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
-_RULE_LABEL_FRAGMENT_RE = re.compile(rf"\s+{_RULE_REFERENCE_RE}\s*(?:\(|:|[-—])")
+_RULE_LABEL_FRAGMENT_RE = re.compile(
+    rf"(?:^|\s+){_RULE_REFERENCE_RE}(?:\s*(?:\(|:|[-—])|[A-Za-z0-9_])"
+)
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"
 _MIN_REVIEW_TITLE_CHARS = 24
@@ -270,7 +272,12 @@ def _evidenced_root_decision(body_text: str) -> str:
     """Return a bounded title with complete adjacent or inline rule evidence."""
 
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
-    for index, line in enumerate(lines[:-1]):
+    for index, line in enumerate(lines):
+        root = _bounded_title_root(line)
+        if root and _REVIEW_TITLE_STOP_RE.search(line):
+            return root
+        if index + 1 >= len(lines):
+            continue
         if not _REVIEW_RULE_LABEL_RE.match(lines[index + 1]):
             continue
         if _REVIEW_RULE_LABEL_RE.match(line):
@@ -279,13 +286,6 @@ def _evidenced_root_decision(body_text: str) -> str:
             continue
         if _has_bounded_decision_evidence(line):
             return line
-
-    for line in lines:
-        root = _bounded_title_root(line)
-        if not root:
-            continue
-        if _REVIEW_TITLE_STOP_RE.search(line):
-            return root
     return ""
 
 

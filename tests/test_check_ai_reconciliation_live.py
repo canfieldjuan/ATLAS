@@ -691,6 +691,67 @@ def test_adjacent_rule_evidence_property_preserves_rule_like_colon_text_inside_t
                 )
 
 
+def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline():
+    c = load_check()
+    malformed_fragments = (
+        "R4   : malformed label used as a title",
+        "R4foo: malformed label used as a title",
+    )
+    candidate_templates = ("{}", "Context before {}")
+
+    for malformed_fragment in malformed_fragments:
+        for candidate_template in candidate_templates:
+            candidate = candidate_template.format(malformed_fragment)
+            source_body = f"{candidate}\nR2: complete adjacent detail"
+
+            assert c._evidenced_root_decision(source_body) == ""
+            code, messages = c.evaluate(
+                [thread(resolved=True, body=source_body)],
+                body_with_dispositions(candidate),
+                BOTS,
+            )
+
+            assert code == 1
+            assert any(
+                "unparseable trusted-bot review title" in message
+                for message in messages
+            )
+
+
+def test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs():
+    c = load_check()
+    title = "Keep legacy inline root extraction"
+    unrelated = "This explanatory context has enough title words"
+    inline_labels = (
+        "R2 (BLOCKER) details",
+        "R2 — complete inline detail",
+        "R2: complete inline detail",
+    )
+
+    for inline_label in inline_labels:
+        source_body = f"{title} {inline_label}\n{unrelated}\nR4: additional context"
+
+        assert c._evidenced_root_decision(source_body) == title
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+        wrong_code, wrong_messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(unrelated),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any(
+            "no open scoped Codex review threads remain" in message
+            for message in messages
+        )
+        assert wrong_code == 1
+        assert any("missing dispositions" in message for message in wrong_messages)
+
+
 def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_evidence():
     c = load_check()
     title = "Require complete colon evidence for a review title"
