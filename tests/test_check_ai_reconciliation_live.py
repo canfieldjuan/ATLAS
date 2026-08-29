@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from datetime import UTC, datetime
+from itertools import product
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_ai_reconciliation_live.py"
@@ -764,6 +765,7 @@ def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline(
     malformed_fragments = (
         "R4   : malformed label used as a title",
         "R4foo: malformed label used as a title",
+        "R4é: malformed label used as a title",
         *(
             f"R4{spacing}{suffix}: malformed label used as a title"
             for spacing in chain_spacing
@@ -789,6 +791,44 @@ def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline(
                 "unparseable trusted-bot review title" in message
                 for message in messages
             )
+
+
+def test_potential_rule_evidence_uses_a_complete_grammar_oracle_across_axes():
+    c = load_check()
+    tokens = tuple(f"R{number}" for number in (4, 10)) + (
+        "/".join(f"R{number}" for number in (4, 5)),
+    )
+    containers = tuple(f"{prefix}{{}}" for prefix in ("", "Context before "))
+    families = tuple(
+        {
+            "bare-reference": (" verification contract", False),
+            "complete-colon": (": complete adjacent detail", False),
+            "complete-dash": (" — complete adjacent detail", False),
+            "immediate-suffix": ("é: malformed adjacent detail", True),
+            "spaced-colon": (" : malformed adjacent detail", True),
+            "incomplete-chain": (" /R5: malformed adjacent detail", True),
+        }.items()
+    )
+
+    for token, container, (family, (suffix, expected)) in product(
+        tokens, containers, families
+    ):
+        candidate = container.format(f"{token}{suffix}")
+
+        assert c._has_unvalidated_rule_evidence(candidate) is expected, family
+
+
+def test_potential_rule_evidence_covers_every_immediate_unicode_suffix():
+    c = load_check()
+
+    for codepoint in range(0x110000):
+        suffix = chr(codepoint)
+        if suffix.isspace() or suffix.isdecimal():
+            continue
+
+        candidate = f"R4{suffix}: malformed label used as a title with enough words"
+
+        assert c._has_unvalidated_rule_evidence(candidate)
 
 
 def test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs():
