@@ -38,6 +38,7 @@ customer-visible surface by itself.
 
 Ownership lane: eom/terms-bridge
 Slice phase: Vertical slice
+Max files: 3
 
 1. Extend Atlas's existing enumerated EOM funnel capability map with six
    semantic Terms name-to-method/path entries for routes already registered by
@@ -72,6 +73,26 @@ Slice phase: Vertical slice
   typo under-advertising a working Terms control, semantic-name drift between
   Atlas and Tracker, response regressions for an empty lead queue.
 - Reviewer rules triggered: R1, R2, R3, R5, R10, R12, R13, R14.
+
+### Fix-loop disposition preflight
+
+- Root decision: the reachability proof must exercise the canonical deployed
+  `atlas_brain.main_eom:app`, not a test-authored router assembly.
+- Source trace: Codex R2/R14 thread at
+  `tests/test_eom_funnel_capability_manifest.py:229` -> local `_app()` mounts
+  `funnel_mod.router` directly -> `atlas_brain/main_eom.py` mounts the real
+  funnel router beneath `/api/v1`.
+- Upstream files: `tests/test_eom_funnel_capability_manifest.py`.
+- Fix strategy: upstream-root. Replace only the new Terms reachability test's
+  synthetic app with the canonical `main_eom.app`, call the deployed path, and
+  restore dependency overrides after the assertion.
+- Blocking predicate: the test can remain green while the Render entrypoint
+  omits or remounts the funnel router.
+- Disposition: fix the confirmed in-scope reachability gap in this PR.
+- Allowed files: `tests/test_eom_funnel_capability_manifest.py` and this plan.
+- Max files: 3.
+- Parked hardening target: none; this is required reachability proof, not
+  adjacent hardening.
 
 ### Guard-class closure declaration
 
@@ -191,6 +212,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 15 |
-| `plans/PR-EOM-Terms-Capability-Manifest.md` | 196 |
-| `tests/test_eom_funnel_capability_manifest.py` | 43 |
-| **Total** | **254** |
+| `plans/PR-EOM-Terms-Capability-Manifest.md` | 217 |
+| `tests/test_eom_funnel_capability_manifest.py` | 55 |
+| **Total** | **287** |

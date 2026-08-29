@@ -19,6 +19,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from atlas_brain import main_eom
 from atlas_brain.eom_api import funnel as funnel_mod
 from atlas_brain.eom_api import funnel_auth as auth_mod
 from atlas_brain.eom_api.config import EOMFunnelConfig
@@ -221,12 +222,23 @@ async def test_manifest_is_present_even_when_the_queue_is_empty() -> None:
 
 @pytest.mark.asyncio
 async def test_lead_review_response_advertises_terms_routes() -> None:
-    """The existing manifest entrypoint exposes the Terms bridge contract."""
-    app = _app(_CRM([]))
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        response = await client.get("/eom-funnel/leads", headers=_headers())
+    """The deployed slim-app entrypoint exposes the Terms bridge contract."""
+    app = main_eom.app
+    original_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[funnel_mod._crm_dependency] = lambda: _CRM([])
+    app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
+        EOMFunnelConfig(api_enabled=True, service_token_sha256=_SERVICE_TOKEN_SHA256)
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.get(
+                "/api/v1/eom-funnel/leads", headers=_headers()
+            )
+    finally:
+        app.dependency_overrides.clear()
+        app.dependency_overrides.update(original_overrides)
 
     assert response.status_code == 200
     body = response.json()
