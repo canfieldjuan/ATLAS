@@ -10,6 +10,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_ai_reconciliat
 ROOT = Path(__file__).resolve().parents[1]
 LIVE_WORKFLOW = ROOT / ".github" / "workflows" / "ai_reconciliation_live.yml"
 RETRIGGER_WORKFLOW = ROOT / ".github" / "workflows" / "ai_reconciliation_review_retrigger.yml"
+REVIEWER_RULES = ROOT / "docs" / "REVIEWER_RULES.md"
 
 
 def load_check():
@@ -915,6 +916,71 @@ def test_complete_rule_evidence_requires_ascii_decimal_references():
             assert c._has_unvalidated_rule_evidence(candidate)
 
     source_body = f"{title}\nR٤: complete adjacent detail"
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
+def test_defined_review_rule_ids_match_reviewer_rule_pack():
+    c = load_check()
+    documented_ids = tuple(
+        token
+        for line in REVIEWER_RULES.read_text(encoding="utf-8").splitlines()
+        if line.startswith("### R")
+        for token in line.split()[1:2]
+        if token[1:].isdigit()
+    )
+
+    assert c._DEFINED_REVIEW_RULE_IDS == documented_ids
+
+
+def test_complete_rule_evidence_requires_a_defined_rule_id():
+    c = load_check()
+    title = "Preserve the bounded title for this decision"
+    valid_references = (*c._DEFINED_REVIEW_RULE_IDS, "R1/R14", "R14/R1", "R1/R2/R14")
+    evidence_suffixes = (
+        ": complete adjacent detail",
+        " — complete adjacent detail",
+        " (BLOCKER) complete adjacent detail",
+    )
+
+    for reference in valid_references:
+        for evidence_suffix in evidence_suffixes:
+            candidate = f"{reference}{evidence_suffix}"
+
+            assert not c._has_unvalidated_rule_evidence(candidate)
+            assert c._REVIEW_RULE_LABEL_RE.match(candidate)
+
+    undefined_references = tuple(
+        f"R{number}"
+        for number in range(1000)
+        if f"R{number}" not in c._DEFINED_REVIEW_RULE_IDS
+    ) + (
+        "R1/R0",
+        "R14/R15",
+        "R0/R1",
+        "R999999999999999999999999",
+    ) + tuple(
+        f"R{number:0{width}d}"
+        for width in (2, 3)
+        for number in range(15)
+        if f"{number:0{width}d}" != str(number)
+    )
+    for reference in undefined_references:
+        for evidence_suffix in evidence_suffixes:
+            candidate = f"{reference}{evidence_suffix}"
+
+            assert c._has_unvalidated_rule_evidence(candidate)
+
+    source_body = f"{title}\nR999: complete adjacent detail"
     assert c._evidenced_root_decision(source_body) == ""
     code, messages = c.evaluate(
         [thread(resolved=True, body=source_body)],

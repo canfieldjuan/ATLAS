@@ -42,7 +42,11 @@ _DEFAULT_BOTS = ("chatgpt-codex-connector", "chatgpt-codex-connector[bot]")
 _CLEAN_CODEX_REVIEW_TEXT = "didn't find any major issues"
 _DEFAULT_CODEX_REVIEW_GRACE_SECONDS = 300
 _REVIEWED_COMMIT_RE = re.compile(r"\*\*Reviewed commit:\*\*\s*`(?P<sha>[0-9a-f]{10,40})`", re.IGNORECASE)
-_RULE_REFERENCE_RE = r"R[0-9]+(?:/R[0-9]+)*"
+_DEFINED_REVIEW_RULE_IDS = tuple(f"R{number}" for number in range(1, 15))
+_DEFINED_RULE_ID_RE = "(?:" + "|".join(
+    sorted((re.escape(rule_id) for rule_id in _DEFINED_REVIEW_RULE_IDS), key=len, reverse=True)
+) + ")"
+_RULE_REFERENCE_RE = rf"{_DEFINED_RULE_ID_RE}(?:/{_DEFINED_RULE_ID_RE})*"
 _POTENTIAL_RULE_REFERENCE_RE = r"R\d+(?:/R\d+)*"
 _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
 _LEGACY_COMPLETE_RULE_LABEL_RE = (

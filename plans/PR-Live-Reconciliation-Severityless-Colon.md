@@ -46,11 +46,15 @@ behavioral surface.
   complete-label grammar must validate the line. Leading Unicode punctuation
   does not turn that ambiguous evidence into a title; genuinely embedded bare
   references after title text remain ordinary content.
-- Canonical identity rule: complete rule IDs use ASCII digits only. The broader
-  potential-evidence recognizer still detects Unicode-decimal lookalikes, but
-  they cannot satisfy the complete grammar. A complete-looking label whose rule
-  token is wrapped in leading punctuation is likewise not canonical line-start
-  evidence and cannot become a title.
+- Canonical identity rule: complete rule IDs come from the repository's defined
+  reviewer-rule set in `docs/REVIEWER_RULES.md` (currently `R1` through `R14`),
+  without zero padding. The checker derives its complete-reference grammar from
+  one explicit identity tuple, and a test keeps that tuple synchronized with the
+  rule headings. The broader potential-evidence recognizer still detects
+  ASCII out-of-set values and Unicode-decimal lookalikes, but they cannot satisfy
+  the complete grammar. A complete-looking label whose rule token is wrapped in
+  leading punctuation is likewise not canonical line-start evidence and cannot
+  become a title.
 
 ### Problem-derived contract
 
@@ -72,11 +76,12 @@ behavioral surface.
   immediate suffixes as an open non-whitespace category and evidence-gate them
   with the complete-label grammar; require a leading rule reference with any
   nonblank whitespace continuation to pass that same grammar; preserve
-  existing dash and severity-qualified forms; restrict complete rule references
-  to ASCII digits while retaining broad Unicode-decimal malformed detection;
-  and prove incomplete, malformed, Unicode-suffixed, punctuation-wrapped,
-  unknown-leading-continuation, short-title, label-only, and unrelated inputs
-  still fail closed.
+  existing dash and severity-qualified forms; derive complete rule references
+  from the defined reviewer-rule identities while retaining broad numeric
+  malformed detection; prove the derived identity tuple agrees with the
+  reviewer-rule headings; and prove zero, zero-padded, out-of-range,
+  Unicode-suffixed, punctuation-wrapped, unknown-leading-continuation,
+  short-title, label-only, and unrelated inputs still fail closed.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -123,11 +128,15 @@ Max files: 3
     grammar result, and embedded bare references remain title text. Settled by
     the leading-continuation end-to-end negative and generated Unicode
     continuation oracle.
-  - Only ASCII-decimal rule IDs are complete evidence. Every non-ASCII Unicode
-    decimal used as a whole or mixed rule ID remains malformed, and a colon
-    label after leading punctuation remains a no-decision line even when the
-    embedded token otherwise matches. Settled by the all-Unicode suffix oracle
-    and punctuation-wrapped colon end-to-end negative.
+  - Only reviewer-rule IDs defined by `docs/REVIEWER_RULES.md` are complete
+    evidence. `R1`, `R14`, and defined chains remain accepted; zero,
+    zero-padded, and out-of-range ASCII IDs plus every non-ASCII Unicode decimal
+    used as a whole or mixed rule ID remain malformed across colon, dash, and
+    severity label forms. A colon label after
+    leading punctuation likewise remains a no-decision line even when the
+    embedded token otherwise matches. Settled by the rule-registry synchronization
+    assertion, defined-edge positives, generated ASCII outside-set negatives,
+    all-Unicode suffix oracle, and punctuation-wrapped colon end-to-end negative.
   - Bounded prefixes before rule-like colon text do not collapse distinct
     adjacent titles into one decision; settled by
     `test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct`, including
@@ -177,9 +186,9 @@ Max files: 3
   the complete grammar; every unmatched form retains the empty-decision
   fail-closed result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
-  reference with ASCII digits, broader Unicode-decimal potential reference,
-  atomic longest-reference matching, Unicode non-alphanumeric token boundary,
-  leading punctuation, the open immediate non-whitespace suffix category, optional
+  reference from the defined `R1`-`R14` identity set, broader numeric potential
+  reference, atomic longest-reference matching, Unicode non-alphanumeric token
+  boundary, leading punctuation, the open immediate non-whitespace suffix category, optional
   delimiter whitespace, first-lexical-token continuation state, colon/slash
   delimiter, and required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
@@ -198,7 +207,9 @@ Max files: 3
   rejected suffixes or boundary punctuation. It also treats every nonblank
   whitespace continuation after a leading rule reference as potential evidence;
   this finite structural position distinguishes it from embedded bare mentions.
-- Canonical complete references are ASCII-only. Unicode-decimal candidates are
+- Canonical complete references are derived from the explicit reviewer-rule
+  identity tuple, which is synchronized by test with `docs/REVIEWER_RULES.md`.
+  Zero, zero-padded, out-of-range ASCII, and Unicode-decimal candidates are
   deliberately part of the broader potential-reference recognizer so they are
   rejected by evidence validation rather than ignored as ordinary title text.
 - This slice adds one finite delimiter member: exact rule reference + colon +
@@ -238,7 +249,9 @@ immediate non-whitespace continuation and every whitespace-separated rule-label
 operator as potential evidence. If a rule reference is the first lexical token,
 any nonblank whitespace continuation also requires complete-grammar validation.
 The leading-token check rejects any punctuation wrapper, and the complete
-grammar uses ASCII digits while the potential recognizer remains Unicode-wide.
+grammar is generated from the defined reviewer-rule identity tuple while the
+potential recognizer remains Unicode-wide. A synchronization test makes rule-doc
+growth fail visibly until that tuple and its admission proof are updated.
 The established bounded-title floor and root matching remain downstream
 invariants, so recognizing the delimiter does not make arbitrary or short prose
 authoritative.
@@ -267,7 +280,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `97 passed in 4.58s` after the structural decision-seam repair.
+  `99 passed in 4.47s` after the defined-identity repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -291,7 +304,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 297 |
-| `scripts/check_ai_reconciliation_live.py` | 61 |
-| `tests/test_check_ai_reconciliation_live.py` | 416 |
-| **Total** | **774** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 310 |
+| `scripts/check_ai_reconciliation_live.py` | 65 |
+| `tests/test_check_ai_reconciliation_live.py` | 482 |
+| **Total** | **857** |
