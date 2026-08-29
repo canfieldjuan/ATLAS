@@ -53,8 +53,9 @@ Max files: 3
     proves each of the six semantic names maps to the exact method/path served by
     the current Terms decorators.
   - `tests/test_eom_funnel_capability_manifest.py::test_lead_review_response_advertises_terms_routes`
-    calls `GET /eom-funnel/leads` through the mounted ASGI router with an empty
-    queue and observes all six names and exact route pairs in the response.
+    calls `GET /api/v1/eom-funnel/leads` through the canonical
+    `atlas_brain.main_eom:app` with an empty queue and observes all six names
+    and exact route pairs in the response.
   - Existing `test_every_advertised_capability_has_a_registered_route`,
     `test_every_mapped_and_registered_route_is_advertised`, and
     `test_capability_map_has_no_entry_for_an_unregistered_route` settle both
@@ -64,9 +65,9 @@ Max files: 3
     the router is omitted while unrelated names remain available.
   - Cold diff reconstruction confirms no Terms decorator, model, service,
     persistence, auth, email, token, or consumer repository changed.
-- Reachability proof: an authenticated ASGI request to the existing
-  `GET /eom-funnel/leads` entrypoint returns the six Terms names and method/path
-  pairs even when no lead rows exist.
+- Reachability proof: an authenticated ASGI request to the deployed
+  `GET /api/v1/eom-funnel/leads` entrypoint returns the six Terms names and
+  method/path pairs even when no lead rows exist.
 - Affected surfaces: `atlas_brain/eom_api/funnel.py` capability metadata and
   the focused EOM funnel capability-manifest tests.
 - Risk areas: over-advertising a route the build does not serve, method/path
@@ -212,6 +213,6 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `atlas_brain/eom_api/funnel.py` | 15 |
-| `plans/PR-EOM-Terms-Capability-Manifest.md` | 217 |
+| `plans/PR-EOM-Terms-Capability-Manifest.md` | 218 |
 | `tests/test_eom_funnel_capability_manifest.py` | 55 |
-| **Total** | **287** |
+| **Total** | **288** |
