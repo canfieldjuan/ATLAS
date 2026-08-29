@@ -3,12 +3,14 @@ from __future__ import annotations
 import importlib.util
 import json
 from datetime import UTC, datetime
+from itertools import product
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_ai_reconciliation_live.py"
 ROOT = Path(__file__).resolve().parents[1]
 LIVE_WORKFLOW = ROOT / ".github" / "workflows" / "ai_reconciliation_live.yml"
 RETRIGGER_WORKFLOW = ROOT / ".github" / "workflows" / "ai_reconciliation_review_retrigger.yml"
+REVIEWER_RULES = ROOT / "docs" / "REVIEWER_RULES.md"
 
 
 def load_check():
@@ -434,6 +436,59 @@ def test_clear_body_passes_when_each_resolved_codex_thread_is_named():
     assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
+def test_nested_thread_decisions_require_distinct_disposition_roots():
+    c = load_check()
+    short_title = "Ensure the report title preserves validation semantics"
+    long_title = f"{short_title} for export"
+    nodes = [
+        thread(resolved=True, body=f"{title}\nR2: complete adjacent detail")
+        for title in (short_title, long_title)
+    ]
+
+    code, messages = c.evaluate(
+        nodes,
+        body_with_dispositions(short_title),
+        BOTS,
+    )
+    ambiguous_code, ambiguous_messages = c.evaluate(
+        nodes,
+        body_with_dispositions(f"Review {long_title}"),
+        BOTS,
+    )
+    complete_code, complete_messages = c.evaluate(
+        list(reversed(nodes)),
+        body_with_dispositions(long_title, short_title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(long_title in message for message in messages)
+    assert ambiguous_code == 1
+    assert all(any(title in message for message in ambiguous_messages) for title in (short_title, long_title))
+    assert complete_code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message
+        for message in complete_messages
+    )
+
+
+def test_unambiguous_disposition_variants_and_duplicate_decisions_remain_compatible():
+    c = load_check()
+    title = "Require a disposition for every resolved thread"
+    variant = f"{title} in the current history"
+    nodes = [
+        thread(resolved=True, path=path, body=f"{title}\nR2: complete adjacent detail")
+        for path in ("scripts/x.py", "scripts/y.py")
+    ]
+
+    code, messages = c.evaluate(nodes, body_with_dispositions(variant), BOTS)
+
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message for message in messages
+    )
+
+
 def test_multiline_bodytext_uses_title_paired_with_rule_evidence_for_resolved_thread_dispositions():
     c = load_check()
     cases = (
@@ -563,6 +618,7 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
         for suffix in (
             " — ",
             " - ",
+            ": ",
             " (BLOCKER) ",
             " (BLOCKER) — ",
             " (BLOCKER): ",
@@ -579,6 +635,8 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
             " (BLOCKER)- detail",
             " (BLOCKER):",
             " (BLOCKER): ",
+            ":",
+            ": ",
             " —",
         )
     )
@@ -588,7 +646,10 @@ def test_complete_rule_label_evidence_rejects_incomplete_separator_forms():
 
         assert code == expected_code
         if expected_code:
-            assert any(actual in message for message in messages)
+            assert any(
+                "unparseable trusted-bot review title" in message for message in messages
+            )
+            assert all(actual not in message for message in messages)
 
     node = thread(resolved=True, body=f"{prefix} R1(\nR2 — complete rule detail")
     code, messages = c.evaluate([node], body_with_dispositions(prefix), BOTS)
@@ -623,18 +684,634 @@ def test_severity_colon_rule_labels_correlate_multiline_and_inline_titles():
         assert any("no open scoped Codex review threads remain" in message for message in messages)
 
 
-def test_severity_less_colon_rule_label_cannot_supply_a_reconciled_title():
+def test_severity_less_colon_rule_labels_correlate_adjacent_titles():
     c = load_check()
-    title = "Require strict severity evidence for a review title"
+    title = "Exercise the deployed manifest entrypoint"
+    source_body = (
+        "Exercise the deployed manifest entrypoint\n"
+        "R2/R14: this test must call the deployed application"
+    )
 
     code, messages = c.evaluate(
-        [thread(resolved=True, body=f"{title}\nR4: detail without severity evidence")],
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message
+        for message in messages
+    )
+
+
+def test_severity_less_colon_rule_labels_do_not_create_ambiguous_inline_roots():
+    c = load_check()
+    title = "Correlate the trusted producer colon delimiter"
+    source_body = f"{title} R4: detail from the connector review"
+
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
         body_with_dispositions(title),
         BOTS,
     )
 
     assert code == 1
-    assert any("unparseable trusted-bot review title" in message for message in messages)
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
+def test_adjacent_rule_evidence_property_preserves_rule_like_colon_text_inside_titles():
+    c = load_check()
+    embedded_references = tuple(
+        "/".join(f"R{value}" for value in range(1, member_count + 1))
+        for member_count in range(1, 5)
+    )
+    title_prefixes = ("Preserve", "Ensure the report title preserves")
+    title_details = (
+        "validation semantics for export",
+        "routing guarantees across service boundaries",
+    )
+    evidence_labels = (
+        "R2 (BLOCKER) complete adjacent detail",
+        "R1/R4 — complete adjacent detail",
+        "R4: complete adjacent detail",
+    )
+
+    for reference in embedded_references:
+        for title_prefix in title_prefixes:
+            for title_detail in title_details:
+                title = f"{title_prefix} {reference}: {title_detail}"
+                for evidence_label in evidence_labels:
+                    source_body = f"{title}\n{evidence_label}"
+
+                    assert c._evidenced_root_decision(source_body) == title
+                    code, messages = c.evaluate(
+                        [thread(resolved=True, body=source_body)],
+                        body_with_dispositions(title),
+                        BOTS,
+                    )
+
+                    assert code == 0
+                    assert any(
+                        "no open scoped Codex review threads remain" in message
+                        for message in messages
+                    )
+
+
+def test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct():
+    c = load_check()
+    titles = (
+        "Ensure the report title preserves R4: validation semantics for export",
+        "Ensure the report title preserves R5: routing semantics for import",
+    )
+    nodes = [
+        thread(resolved=True, body=f"{title}\nR2: complete adjacent detail")
+        for title in titles
+    ]
+
+    assert [
+        c._evidenced_root_decision(node["comments"]["nodes"][0]["bodyText"])
+        for node in nodes
+    ] == list(titles)
+    code, messages = c.evaluate(nodes, body_with_dispositions(titles[0]), BOTS)
+
+    assert code == 1
+    assert any("missing dispositions" in message for message in messages)
+    assert any(titles[1] in message for message in messages)
+
+
+def test_adjacent_rule_evidence_preserves_bare_multi_digit_rule_mentions():
+    c = load_check()
+
+    for rule_number in range(10, 15):
+        title = f"Preserve compatibility with the R{rule_number} verification contract"
+        source_body = f"{title}\nR2 — complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == title
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any(
+            "no open scoped Codex review threads remain" in message
+            for message in messages
+        )
+
+
+def test_adjacent_rule_evidence_preserves_bare_complete_chained_rule_mentions():
+    c = load_check()
+
+    for reference in ("R4/R5", "R10/R14"):
+        title = f"Preserve compatibility with the {reference} verification contract"
+        source_body = f"{title}\nR2 — complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == title
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any(
+            "no open scoped Codex review threads remain" in message
+            for message in messages
+        )
+
+
+def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline():
+    c = load_check()
+    incomplete_chain_suffixes = ("/R", "//R5", "/Rfoo", "/R5/R")
+    chain_spacing = ("", " ", "\t", " \t ")
+    malformed_fragments = (
+        "R4   : malformed label used as a title",
+        "R4foo: malformed label used as a title",
+        "R4é: malformed label used as a title",
+        *(
+            f"R4{spacing}{suffix}: malformed label used as a title"
+            for spacing in chain_spacing
+            for suffix in incomplete_chain_suffixes
+        ),
+    )
+    candidate_templates = (
+        "{}",
+        "Context before {}",
+        "Reject malformed ({}) before admission",
+    )
+
+    for malformed_fragment in malformed_fragments:
+        for candidate_template in candidate_templates:
+            candidate = candidate_template.format(malformed_fragment)
+            source_body = f"{candidate}\nR2: complete adjacent detail"
+
+            assert c._evidenced_root_decision(source_body) == ""
+            code, messages = c.evaluate(
+                [thread(resolved=True, body=source_body)],
+                body_with_dispositions(candidate),
+                BOTS,
+            )
+
+            assert code == 1
+            assert any(
+                "unparseable trusted-bot review title" in message
+                for message in messages
+            )
+
+
+def test_adjacent_rule_evidence_rejects_unknown_leading_continuations():
+    c = load_check()
+    continuations = (
+        "R4 BLOCKER: malformed label used as a title with enough words",
+        "R4 R5: malformed label used as a title with enough words",
+    )
+    wrappers = ("{}", "({})")
+
+    for continuation, wrapper in product(continuations, wrappers):
+        candidate = wrapper.format(continuation)
+        source_body = f"{candidate}\nR2: complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == ""
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(candidate),
+            BOTS,
+        )
+
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
+
+
+def test_punctuation_wrapped_complete_colon_label_cannot_become_a_title():
+    c = load_check()
+    candidate = "(R4: malformed label used as a title with enough words)"
+    source_body = f"{candidate}\nR2: complete adjacent detail"
+
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(candidate),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
+def test_potential_rule_evidence_uses_a_complete_grammar_oracle_across_axes():
+    c = load_check()
+    tokens = tuple(f"R{number}" for number in (4, 10)) + (
+        "/".join(f"R{number}" for number in (4, 5)),
+    )
+    containers = tuple(
+        {
+            "leading": ("{}", True),
+            "embedded": ("Context before {}", False),
+            "embedded-punctuation": ("Punctuation boundary ({})", False),
+        }.items()
+    )
+    families = tuple(
+        {
+            "bare-reference": (" verification contract", False),
+            "complete-colon": (": complete adjacent detail", False),
+            "complete-dash": (" — complete adjacent detail", False),
+            "immediate-suffix": ("é: malformed adjacent detail", True),
+            "unicode-decimal": ("٤: malformed adjacent detail", True),
+            "spaced-colon": (" : malformed adjacent detail", True),
+            "incomplete-chain": (" /R5: malformed adjacent detail", True),
+        }.items()
+    )
+
+    for token, (_container, (template, is_leading)), (
+        family,
+        (suffix, family_expected),
+    ) in product(
+        tokens, containers, families
+    ):
+        candidate = template.format(f"{token}{suffix}")
+        expected = family_expected or (is_leading and family == "bare-reference")
+
+        assert c._has_unvalidated_rule_evidence(candidate) is expected, family
+
+
+def test_potential_rule_evidence_covers_every_immediate_unicode_suffix():
+    c = load_check()
+
+    for codepoint in range(0x110000):
+        suffix = chr(codepoint)
+        if suffix.isspace() or suffix in "0123456789":
+            continue
+
+        candidate = f"R4{suffix}: malformed label used as a title with enough words"
+
+        assert c._has_unvalidated_rule_evidence(candidate)
+
+
+def test_complete_rule_evidence_rejects_every_non_ascii_unicode_numeric_identity():
+    c = load_check()
+    unicode_numerics = tuple(
+        chr(codepoint)
+        for codepoint in range(0x110000)
+        if chr(codepoint).isnumeric() and not chr(codepoint).isascii()
+    )
+
+    for numeric in unicode_numerics:
+        for reference in (f"R{numeric}", f"R4{numeric}", f"R4/R{numeric}"):
+            candidate = f"{reference}: complete adjacent detail"
+
+            assert c._has_unvalidated_rule_evidence(candidate)
+
+    for numeric in ("٤", "²", "①", "½", "Ⅳ"):
+        source_body = f"R{numeric}: malformed label used as a title with enough words\nR2: detail"
+        assert c._evidenced_root_decision(source_body) == ""
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(source_body.splitlines()[0]),
+            BOTS,
+        )
+
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
+
+        embedded_title = f"Preserve embedded wordR{numeric} content inside this bounded title"
+        assert (
+            c._evidenced_root_decision(f"{embedded_title}\nR2: complete adjacent detail")
+            == embedded_title
+        )
+
+    assert unicode_numerics
+
+
+def test_defined_review_rule_ids_match_reviewer_rule_pack():
+    c = load_check()
+    documented_ids = tuple(
+        token
+        for line in REVIEWER_RULES.read_text(encoding="utf-8").splitlines()
+        if line.startswith("### R")
+        for token in line.split()[1:2]
+        if token[1:].isdigit()
+    )
+
+    assert c._DEFINED_REVIEW_RULE_IDS == documented_ids
+
+
+def test_complete_rule_evidence_requires_a_defined_rule_id():
+    c = load_check()
+    title = "Preserve the bounded title for this decision"
+    valid_references = (*c._DEFINED_REVIEW_RULE_IDS, "R1/R14", "R14/R1", "R1/R2/R14")
+    evidence_suffixes = (
+        ": complete adjacent detail",
+        " — complete adjacent detail",
+        " (BLOCKER) complete adjacent detail",
+    )
+
+    for reference in valid_references:
+        for evidence_suffix in evidence_suffixes:
+            candidate = f"{reference}{evidence_suffix}"
+
+            assert not c._has_unvalidated_rule_evidence(candidate)
+            assert c._REVIEW_RULE_LABEL_RE.match(candidate)
+
+    undefined_references = tuple(
+        f"R{number}"
+        for number in range(1000)
+        if f"R{number}" not in c._DEFINED_REVIEW_RULE_IDS
+    ) + (
+        "R1/R0",
+        "R14/R15",
+        "R0/R1",
+        "R999999999999999999999999",
+    ) + tuple(
+        f"R{number:0{width}d}"
+        for width in (2, 3)
+        for number in range(15)
+        if f"{number:0{width}d}" != str(number)
+    )
+    for reference in undefined_references:
+        for evidence_suffix in evidence_suffixes:
+            candidate = f"{reference}{evidence_suffix}"
+
+            assert c._has_unvalidated_rule_evidence(candidate)
+
+    source_body = f"{title}\nR999: complete adjacent detail"
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
+def test_partial_initial_rule_id_evidence_fails_closed():
+    c = load_check()
+    operator_continuations = (
+        ": missing initial numeric identity",
+        " : missing initial numeric identity",
+        "/R4: missing initial numeric identity",
+        " /R4: missing initial numeric identity",
+        "/r4: missing initial numeric identity",
+        " (BLOCKER) missing initial numeric identity",
+        " — missing initial numeric identity",
+        " - missing initial numeric identity",
+    )
+    containers = ("{}", "({})", "Context before ({})")
+
+    for marker, continuation, container in product(
+        ("R", "r"), operator_continuations, containers
+    ):
+        candidate = container.format(f"{marker}{continuation}")
+        assert c._has_unvalidated_rule_evidence(candidate)
+
+    for marker, continuation in product(("R", "r"), ("", " BLOCKER", "\tR4")):
+        assert c._has_unvalidated_rule_evidence(f"{marker}{continuation}")
+
+    case_variant_references = tuple(
+        f"r{number}" for number in range(1, 15)
+    ) + ("r4/r14", "r4/R14", "R4/r14")
+    for reference, suffix in product(
+        case_variant_references,
+        (": lowercase marker", " — lowercase marker", " (BLOCKER) lowercase marker"),
+    ):
+        assert c._has_unvalidated_rule_evidence(f"{reference}{suffix}")
+
+    ordinary_title = "Review ordinary title words without rule evidence"
+    assert not c._has_unvalidated_rule_evidence(ordinary_title)
+    assert not c._has_unvalidated_rule_evidence("Use R for an ordinary variable name")
+    assert c._evidenced_root_decision(f"{ordinary_title}\nR2: complete detail") == ordinary_title
+
+    malformed_title = "R: malformed label used as a title with enough words"
+    source_body = f"{malformed_title}\nR2: detail"
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(malformed_title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
+def test_earlier_nonroot_rule_evidence_stops_later_adjacent_pairs():
+    c = load_check()
+    later_title = "This explanatory context has enough title words"
+    earlier_nonroot_lines = (
+        "R999: malformed rule evidence",
+        "R: malformed rule evidence",
+        "R/R4: malformed rule evidence",
+        "R2: complete but unrooted rule evidence",
+        "x R2 (BLOCKER) complete but short inline evidence",
+        "Ambiguous title contains R4: inline evidence without an adjacent label",
+    )
+
+    for earlier_line in earlier_nonroot_lines:
+        source_body = f"{earlier_line}\n{later_title}\nR2: complete adjacent detail"
+
+        assert c._evidenced_root_decision(source_body) == ""
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(later_title),
+            BOTS,
+        )
+
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
+
+    earlier_title = "Keep the first valid adjacent decision before later evidence"
+    later_malformed = f"{earlier_title}\nR2: complete adjacent detail\nR999: later malformed evidence"
+    assert c._evidenced_root_decision(later_malformed) == earlier_title
+
+
+def test_potential_rule_evidence_uses_unicode_lexical_boundaries():
+    c = load_check()
+
+    for codepoint in range(0x110000):
+        prefix = chr(codepoint)
+        candidate = f"{prefix}R4é: malformed label used as a title with enough words"
+        leading_candidate = (
+            f"{prefix}R4 BLOCKER: malformed label used as a title with enough words"
+        )
+        expected = not prefix.isalnum()
+
+        assert c._has_unvalidated_rule_evidence(candidate) is expected
+        assert c._has_unvalidated_rule_evidence(leading_candidate) is expected
+
+
+def test_leading_rule_continuations_are_complete_grammar_gated():
+    c = load_check()
+
+    for codepoint in range(0x110000):
+        continuation = chr(codepoint)
+        if continuation.isspace():
+            continue
+        candidate = f"R4 {continuation} continued evidence"
+        expected = continuation not in ("-", "—")
+
+        assert c._has_unvalidated_rule_evidence(candidate) is expected
+
+
+def test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs():
+    c = load_check()
+    title = "Keep legacy inline root extraction"
+    unrelated = "This explanatory context has enough title words"
+    inline_labels = (
+        "R2 (BLOCKER) details",
+        "R2 — complete inline detail",
+    )
+
+    for inline_label in inline_labels:
+        source_body = f"{title} {inline_label}\n{unrelated}\nR4: additional context"
+
+        assert c._evidenced_root_decision(source_body) == title
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+        wrong_code, wrong_messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(unrelated),
+            BOTS,
+        )
+
+        assert code == 0
+        assert any(
+            "no open scoped Codex review threads remain" in message
+            for message in messages
+        )
+        assert wrong_code == 1
+        assert any("missing dispositions" in message for message in wrong_messages)
+
+
+def test_inline_rule_evidence_precedes_an_immediately_adjacent_label():
+    c = load_check()
+    title = "Keep legacy inline root extraction"
+    wrong_disposition = "R2 BLOCKER details about the affected parser"
+    source_body = (
+        f"{title} R2 (BLOCKER) details about the affected parser\n"
+        "R4: additional context"
+    )
+
+    assert c._evidenced_root_decision(source_body) == title
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+    wrong_code, wrong_messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(wrong_disposition),
+        BOTS,
+    )
+
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message
+        for message in messages
+    )
+    assert wrong_code == 1
+    assert any("missing dispositions" in message for message in wrong_messages)
+
+
+def test_inline_rule_evidence_bounds_validation_of_following_detail():
+    c = load_check()
+    title = "Keep legacy inline root extraction"
+    detail_after_evidence = (
+        f"{title} R2 (BLOCKER) detail cites R999: as malformed evidence"
+    )
+    malformed_before_evidence = (
+        f"{title} cites R999: as malformed evidence R2 (BLOCKER) complete detail"
+    )
+
+    assert c._evidenced_root_decision(detail_after_evidence) == title
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=detail_after_evidence)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message for message in messages
+    )
+
+    assert c._evidenced_root_decision(malformed_before_evidence) == ""
+    malformed_code, malformed_messages = c.evaluate(
+        [thread(resolved=True, body=malformed_before_evidence)],
+        body_with_dispositions(title),
+        BOTS,
+    )
+
+    assert malformed_code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message
+        for message in malformed_messages
+    )
+
+
+def test_short_inline_rule_evidence_is_terminal_before_an_adjacent_label():
+    c = load_check()
+    promoted_line = "x R2 (BLOCKER) complete but short inline evidence"
+    source_body = f"{promoted_line}\nR4: complete adjacent detail"
+
+    assert c._bounded_title_root(promoted_line) == ""
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(promoted_line),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
+def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_evidence():
+    c = load_check()
+    title = "Require complete colon evidence for a review title"
+    malformed_bodies = (
+        f"{title}\nR4:",
+        f"{title}\nR4: ",
+        f"{title}\nR4 : detail",
+        f"{title}\nR4   : detail",
+        f"{title}\nR4foo: detail",
+        "x\nR4: detail",
+        "R4: label-only detail with enough words\nR2 — separate complete evidence",
+    )
+
+    for source_body in malformed_bodies:
+        code, messages = c.evaluate(
+            [thread(resolved=True, body=source_body)],
+            body_with_dispositions(title),
+            BOTS,
+        )
+
+        assert code == 1
+        assert any(
+            "unparseable trusted-bot review title" in message for message in messages
+        )
 
 
 def test_legacy_inline_rule_label_remains_a_resolved_thread_disposition_title():
