@@ -54,7 +54,7 @@ _COMPLETE_RULE_LABEL_RE = (
 _REVIEW_TITLE_STOP_RE = re.compile(rf"\s+{_COMPLETE_RULE_LABEL_RE}")
 _REVIEW_RULE_LABEL_RE = re.compile(rf"^{_COMPLETE_RULE_LABEL_RE}")
 _RULE_LABEL_FRAGMENT_RE = re.compile(
-    rf"(?:^|\s+)(?>{_RULE_REFERENCE_RE})(?!\d)(?:\s*(?:\(|:|[-—])|[/A-Za-z_])"
+    rf"(?:^|\s+)(?>{_RULE_REFERENCE_RE})(?!\d)(?:\s*(?:\(|:|/|[-—])|[A-Za-z_])"
 )
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 _UNPARSEABLE_THREAD_DECISION = "<unparseable trusted-bot review title>"

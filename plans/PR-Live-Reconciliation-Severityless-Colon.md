@@ -24,9 +24,9 @@ the parser rather than bypassed in #2506.
   whole current title before any inline-like text inside that title can truncate
   it; recognize malformed fragments at line start and mid-line without splitting
   bare multi-digit or complete chained rule mentions; recognize incomplete slash
-  continuations; preserve existing dash and severity-qualified forms; and prove
-  incomplete, malformed, short-title, label-only, and unrelated inputs still
-  fail closed.
+  continuations with immediate or whitespace-separated delimiters; preserve
+  existing dash and severity-qualified forms; and prove incomplete, malformed,
+  short-title, label-only, and unrelated inputs still fail closed.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -70,8 +70,9 @@ Max files: 3
     `test_adjacent_rule_evidence_preserves_bare_multi_digit_rule_mentions`.
   - Bare complete chains such as `R4/R5` and `R10/R14` remain title text, while
     incomplete chains such as `R4/R`, `R4//R5`, `R4/Rfoo`, and `R4/R5/R` remain
-    unparseable at line start and mid-line; settled by the complete-chain test
-    and expanded malformed-fragment matrix.
+    unparseable at line start and mid-line across immediate, space, tab, and
+    mixed-whitespace delimiters; settled by the complete-chain test and generated
+    malformed-fragment matrix.
   - Earlier complete inline evidence retains its decision even when later prose
     forms an otherwise valid adjacent title/evidence pair; settled by
     `test_earlier_inline_rule_evidence_precedes_later_adjacent_pairs`, including
@@ -105,8 +106,8 @@ Max files: 3
   references cannot backtrack into shorter malformed fragments; every unmatched
   form retains the empty-decision fail-closed result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
-  reference, atomic longest-reference matching, colon/slash delimiter, and
-  required nonempty detail token.
+  reference, atomic longest-reference matching, optional delimiter whitespace,
+  colon/slash delimiter, and required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
   colon form can match only its named structured disposition; untrusted author,
   empty detail, malformed rule reference, short title, mismatched disposition,
@@ -148,10 +149,10 @@ source order: when the next line supplies complete evidence, preserve the
 current whole bounded title unless it begins as a rule label or contains a
 malformed fragment; otherwise return the current bounded inline root. Prevent
 fragment matching from backtracking by atomically consuming the longest complete
-reference, then treat any leftover slash continuation as malformed. The
-established bounded-title floor and root matching remain downstream invariants,
-so recognizing the delimiter does not make arbitrary or short prose
-authoritative.
+reference, then treat any immediate or whitespace-separated leftover slash
+continuation as malformed. The established bounded-title floor and root matching
+remain downstream invariants, so recognizing the delimiter does not make
+arbitrary or short prose authoritative.
 
 ## Intentional
 
@@ -175,7 +176,7 @@ Parked hardening: none.
 ## Verification
 
 - `./ops test focused tests/test_check_ai_reconciliation_live.py -q` ->
-  `88 passed in 0.60s` after the current-head review repairs.
+  `88 passed in 0.63s` after the current-head review repairs.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -199,7 +200,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 205 |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 206 |
 | `scripts/check_ai_reconciliation_live.py` | 31 |
-| `tests/test_check_ai_reconciliation_live.py` | 225 |
-| **Total** | **461** |
+| `tests/test_check_ai_reconciliation_live.py` | 228 |
+| **Total** | **465** |

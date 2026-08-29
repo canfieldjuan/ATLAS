@@ -759,13 +759,16 @@ def test_adjacent_rule_evidence_preserves_bare_complete_chained_rule_mentions():
 
 def test_adjacent_rule_evidence_rejects_malformed_fragments_at_start_or_midline():
     c = load_check()
+    incomplete_chain_suffixes = ("/R", "//R5", "/Rfoo", "/R5/R")
+    chain_spacing = ("", " ", "\t", " \t ")
     malformed_fragments = (
         "R4   : malformed label used as a title",
         "R4foo: malformed label used as a title",
-        "R4/R: malformed label used as a title",
-        "R4//R5: malformed label used as a title",
-        "R4/Rfoo: malformed label used as a title",
-        "R4/R5/R: malformed label used as a title",
+        *(
+            f"R4{spacing}{suffix}: malformed label used as a title"
+            for spacing in chain_spacing
+            for suffix in incomplete_chain_suffixes
+        ),
     )
     candidate_templates = ("{}", "Context before {}")
 
