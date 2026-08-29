@@ -1172,6 +1172,25 @@ def test_inline_rule_evidence_precedes_an_immediately_adjacent_label():
     assert any("missing dispositions" in message for message in wrong_messages)
 
 
+def test_short_inline_rule_evidence_is_terminal_before_an_adjacent_label():
+    c = load_check()
+    promoted_line = "x R2 (BLOCKER) complete but short inline evidence"
+    source_body = f"{promoted_line}\nR4: complete adjacent detail"
+
+    assert c._bounded_title_root(promoted_line) == ""
+    assert c._evidenced_root_decision(source_body) == ""
+    code, messages = c.evaluate(
+        [thread(resolved=True, body=source_body)],
+        body_with_dispositions(promoted_line),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(
+        "unparseable trusted-bot review title" in message for message in messages
+    )
+
+
 def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_evidence():
     c = load_check()
     title = "Require complete colon evidence for a review title"

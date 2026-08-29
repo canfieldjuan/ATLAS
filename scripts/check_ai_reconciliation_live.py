@@ -316,6 +316,7 @@ def _evidenced_root_decision(body_text: str) -> str:
             index + 1 < len(lines)
             and _REVIEW_RULE_LABEL_RE.match(lines[index + 1])
             and not _REVIEW_RULE_LABEL_RE.match(line)
+            and not _REVIEW_TITLE_STOP_RE.search(line)
             and _has_bounded_decision_evidence(line)
         ):
             return line
