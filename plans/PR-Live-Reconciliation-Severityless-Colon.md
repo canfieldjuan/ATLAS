@@ -19,8 +19,10 @@ the parser rather than bypassed in #2506.
   normalizable decision and cannot be honestly reconciled.
 - Correct fix must touch/change: extend only the shared complete-label grammar
   to admit `R<n>(/R<n>)*: nonempty detail`; prove multiline and inline positive
-  correlation, preserve existing dash and severity-qualified forms, and prove
-  incomplete, malformed, short-title, and unrelated inputs still fail closed.
+  correlation; give a complete adjacent evidence line precedence over
+  rule-like colon text inside its title; preserve existing dash and
+  severity-qualified forms; and prove incomplete, malformed, short-title,
+  label-only, and unrelated inputs still fail closed.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
   blocking, current-head review freshness, PR-body disposition matching,
   docs-only handling, Terms capability code, Tracker code, or any customer,
@@ -47,6 +49,12 @@ Max files: 3
   - The same complete rule label works inline, while existing dash and
     severity-qualified colon forms retain their current roots; settled by
     parser boundary tests.
+  - A following complete evidence line preserves the entire bounded title even
+    when that title contains generated `R<n>(/R<n>)*: text` combinations, while
+    a line that itself begins as a rule label or contains an incomplete
+    rule-label fragment cannot become a title; settled by
+    `test_adjacent_rule_evidence_property_preserves_rule_like_colon_text_inside_titles`,
+    the label-only negative case, and the existing incomplete-fragment matrix.
   - `R2/R14:` with empty detail, `R2/R14   : detail` with pre-colon
     whitespace, `R2/R14foo: detail`, a short title, and text with no adjacent
     complete rule label yield no decision; settled by negative unit assertions.
@@ -70,7 +78,9 @@ Max files: 3
   `missing_thread_dispositions()` -> required gate result.
 - Replaced-path behaviors: a bounded title adjacent to or sharing a line with
   `R<n>(/R<n>)*: nonempty detail` changes from unparseable to correlatable;
-  every unmatched form retains the empty-decision fail-closed result.
+  a complete following evidence line wins before inline scanning so rule-like
+  colon text inside its title remains ordinary title text; every unmatched form
+  retains the empty-decision fail-closed result.
 - Guard-relevant fields: bounded title length/token floor, exact chained rule
   reference, colon delimiter, and required nonempty detail token.
 - Caller x input shape: resolved trusted-bot history with the observed complete
@@ -108,8 +118,11 @@ Max files: 3
 
 ## Mechanism
 
-Add the colon-with-detail alternative at the same complete-label grammar
-choke point used by inline and adjacent-line parsing. The established bounded
+Add the colon-with-detail alternative at the same complete-label grammar choke
+point used by inline and adjacent-line parsing. Resolve complete adjacent-line
+evidence first, preserving its whole bounded title unless that line itself
+begins as a rule label or contains a fragment that cannot satisfy the complete
+label grammar; then fall back to inline extraction. The established bounded
 title floor and root matching remain downstream invariants, so recognizing the
 delimiter does not make arbitrary or short prose authoritative.
 
@@ -134,7 +147,7 @@ Parked hardening: none.
 ## Verification
 
 - `./ops test focused tests/test_check_ai_reconciliation_live.py -q` ->
-  `82 passed in 0.45s`.
+  `83 passed in 0.51s`.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -158,7 +171,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 164 |
-| `scripts/check_ai_reconciliation_live.py` | 3 |
-| `tests/test_check_ai_reconciliation_live.py` | 60 |
-| **Total** | **227** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 177 |
+| `scripts/check_ai_reconciliation_live.py` | 29 |
+| `tests/test_check_ai_reconciliation_live.py` | 96 |
+| **Total** | **302** |

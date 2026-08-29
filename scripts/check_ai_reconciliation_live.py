@@ -256,17 +256,35 @@ def _bounded_title_root(line: str) -> str:
     return root
 
 
+def _has_incomplete_rule_label_fragment(line: str) -> bool:
+    """Return whether a potential title contains incomplete rule evidence."""
+
+    for match in _RULE_LABEL_FRAGMENT_RE.finditer(line):
+        candidate = line[match.start() :].lstrip()
+        if not _REVIEW_RULE_LABEL_RE.match(candidate):
+            return True
+    return False
+
+
 def _evidenced_root_decision(body_text: str) -> str:
-    """Return a full title only when its existing rule evidence is adjacent."""
+    """Return a bounded title with complete adjacent or inline rule evidence."""
 
     lines = [line.strip() for line in body_text.splitlines() if line.strip()]
-    for index, line in enumerate(lines):
+    for index, line in enumerate(lines[:-1]):
+        if not _REVIEW_RULE_LABEL_RE.match(lines[index + 1]):
+            continue
+        if _REVIEW_RULE_LABEL_RE.match(line):
+            continue
+        if _has_incomplete_rule_label_fragment(line):
+            continue
+        if _has_bounded_decision_evidence(line):
+            return line
+
+    for line in lines:
         root = _bounded_title_root(line)
         if not root:
             continue
         if _REVIEW_TITLE_STOP_RE.search(line):
-            return root
-        if index + 1 < len(lines) and _REVIEW_RULE_LABEL_RE.match(lines[index + 1]):
             return root
     return ""
 

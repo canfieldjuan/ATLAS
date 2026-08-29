@@ -655,6 +655,42 @@ def test_severity_less_colon_rule_labels_correlate_multiline_and_inline_titles()
         )
 
 
+def test_adjacent_rule_evidence_property_preserves_rule_like_colon_text_inside_titles():
+    c = load_check()
+    embedded_references = tuple(
+        "/".join(f"R{value}" for value in range(1, member_count + 1))
+        for member_count in range(1, 5)
+    )
+    title_details = (
+        "validation semantics for export",
+        "routing guarantees across service boundaries",
+    )
+    evidence_labels = (
+        "R2 (BLOCKER) complete adjacent detail",
+        "R1/R4 — complete adjacent detail",
+        "R4: complete adjacent detail",
+    )
+
+    for reference in embedded_references:
+        for title_detail in title_details:
+            title = f"Preserve {reference}: {title_detail}"
+            for evidence_label in evidence_labels:
+                source_body = f"{title}\n{evidence_label}"
+
+                assert c._evidenced_root_decision(source_body) == title
+                code, messages = c.evaluate(
+                    [thread(resolved=True, body=source_body)],
+                    body_with_dispositions(title),
+                    BOTS,
+                )
+
+                assert code == 0
+                assert any(
+                    "no open scoped Codex review threads remain" in message
+                    for message in messages
+                )
+
+
 def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_evidence():
     c = load_check()
     title = "Require complete colon evidence for a review title"
@@ -665,7 +701,7 @@ def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_ev
         f"{title}\nR4   : detail",
         f"{title}\nR4foo: detail",
         "x\nR4: detail",
-        f"{title} R4:\nR2 — separate complete evidence",
+        "R4: label-only detail with enough words\nR2 — separate complete evidence",
     )
 
     for source_body in malformed_bodies:
