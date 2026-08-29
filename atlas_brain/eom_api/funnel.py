@@ -1184,6 +1184,21 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "POST",
         "/eom-funnel/leads/{contact_id}/missed-call-recovery/cancel",
     ),
+    "terms.invitation.issue": ("POST", "/eom-funnel/terms/invitations"),
+    "terms.invitation.revoke": (
+        "POST",
+        "/eom-funnel/terms/invitations/{invitation_id}/revoke",
+    ),
+    "terms.readiness.read": (
+        "GET",
+        "/eom-funnel/terms/readiness/{contact_id}",
+    ),
+    "terms.delivery.confirm_sent": (
+        "POST",
+        "/eom-funnel/terms/deliveries/{delivery_id}/confirm-sent",
+    ),
+    "terms.public.session": ("POST", "/eom-funnel/terms/public/session"),
+    "terms.public.accept": ("POST", "/eom-funnel/terms/public/accept"),
     "onboarding.draft.list": ("GET", "/eom-funnel/onboarding-drafts"),
     "onboarding.draft.edit": ("PATCH", "/eom-funnel/onboarding-drafts/{draft_id}"),
     "onboarding.draft.approve_send": (
