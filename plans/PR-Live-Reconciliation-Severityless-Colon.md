@@ -75,7 +75,10 @@ behavioral surface.
   reference followed directly by `:` and nonempty detail, while adjacent-title
   admission also inferred validity from an enumerated malformed-suffix
   denylist. The producer form was therefore unparseable, and later repairs
-  could still admit an unenumerated incomplete suffix.
+  could still admit an unenumerated incomplete suffix. Once the parser returns
+  distinct full adjacent titles, downstream disposition correlation still
+  evaluates symmetric substring containment independently for each thread, so
+  one disposition can clear multiple distinct nested titles.
 - Correct fix must touch/change: extend the line-start complete-label grammar
   to admit `R<n>(/R<n>)*: nonempty detail`; prove adjacent positive correlation
   while keeping the severity-less inline form fail closed; scan candidates in
@@ -97,11 +100,16 @@ behavioral surface.
   unknown-leading-continuation, short-title, label-only, and unrelated inputs
   still fail closed. Stop source-order selection when any evidence-shaped line
   fails to produce a root before a later candidate, without changing
-  earlier-valid inline or adjacent precedence.
+  earlier-valid inline or adjacent precedence. Correlate dispositions across
+  the set of distinct normalized thread decisions: an exact root covers only
+  that exact decision, bounded containment remains available only when it has
+  one unambiguous candidate, and no single disposition can clear two distinct
+  titles.
 - Must not change: trusted bot identities, GitHub workflow triggers, open-thread
-  blocking, current-head review freshness, PR-body disposition matching,
-  docs-only handling, Terms capability code, Tracker code, or any customer,
-  persistence, financial, authentication, or product behavior.
+  blocking, current-head review freshness, structured disposition extraction,
+  title normalization, pairwise bounded-containment compatibility outside the
+  new ambiguity rule, docs-only handling, Terms capability code, Tracker code,
+  or any customer, persistence, financial, authentication, or product behavior.
 
 ## Scope (this PR)
 
@@ -113,6 +121,8 @@ Max files: 3
    rule-label evidence grammar without accepting an empty or malformed label.
 2. Pin both sides of the boundary in the focused live-reconciliation tests and
    rerun #2506's required trusted-base check after this provider merges.
+3. Make disposition correlation cardinality-aware so one ledger item cannot
+   satisfy two distinct nested thread decisions.
 
 ### Review Contract
 
@@ -170,6 +180,12 @@ Max files: 3
     adjacent titles into one decision; settled by
     `test_adjacent_rule_evidence_keeps_bounded_prefix_titles_distinct`, including
     a negative one-disposition/two-title assertion.
+  - Distinct normalized titles that are strict substrings of one another require
+    distinct disposition roots. An exact root covers only its exact title;
+    bounded containment remains accepted for a single unambiguous title, and
+    repeated threads with the same normalized decision remain one logical
+    finding. Settled by nested-title, ordering, unique-variant, and duplicate
+    decision tests.
   - Bare `R10` through `R14` mentions in adjacent titles remain ordinary title
     text rather than backtracking into malformed fragments; settled by
     `test_adjacent_rule_evidence_preserves_bare_multi_digit_rule_mentions`.
@@ -223,11 +239,14 @@ Max files: 3
   boundary, partial initial `R`/`r`, leading punctuation, the open immediate
   non-whitespace suffix category, optional
   delimiter whitespace, first-lexical-token continuation state, colon/slash
-  delimiter, and required nonempty detail token.
+  delimiter, required nonempty detail token, distinct normalized decision set,
+  and per-disposition candidate cardinality.
 - Caller x input shape: resolved trusted-bot history with the observed complete
-  colon form can match only its named structured disposition; untrusted author,
-  empty detail, malformed rule reference, short title, mismatched disposition,
-  and unresolved thread remain rejected by their existing checks.
+  colon form can match only its named structured disposition; nested distinct
+  titles cannot share one disposition, while one non-exact bounded variant can
+  still cover a single unambiguous decision. Untrusted author, empty detail,
+  malformed rule reference, short title, mismatched disposition, and unresolved
+  thread remain rejected by their existing checks.
 
 ### Capability-set closure declaration
 
@@ -297,9 +316,12 @@ first lexical position before nonblank continuation. Each source-order candidate
 is checked for unvalidated evidence before root selection; after the two valid
 root paths, any remaining evidence-shaped line returns no decision immediately.
 Valid inline and adjacent roots still return before any later line is considered.
-The established bounded-title floor and root matching remain downstream
-invariants, so recognizing the delimiter does not make arbitrary or short prose
-authoritative.
+The established bounded-title floor remains a downstream invariant. Correlation
+then builds the distinct normalized decision set and, for each disposition root,
+allows an exact match to cover only itself or a bounded containment match to
+cover only a sole candidate. Ambiguous containment covers nothing, so one body
+item cannot discharge multiple distinct findings while legacy unambiguous title
+variants remain compatible.
 
 ## Intentional
 
@@ -325,7 +347,7 @@ Parked hardening: none.
 ## Verification
 
 - `python -m pytest tests/test_check_ai_reconciliation_live.py -q` ->
-  `102 passed in 4.47s` after the short-inline adjacent-promotion repair.
+  `104 passed in 4.63s` after the cardinality-aware disposition repair.
 - `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
   -> `All checks passed!`.
 - `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
@@ -349,7 +371,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 355 |
-| `scripts/check_ai_reconciliation_live.py` | 82 |
-| `tests/test_check_ai_reconciliation_live.py` | 590 |
-| **Total** | **1027** |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 377 |
+| `scripts/check_ai_reconciliation_live.py` | 112 |
+| `tests/test_check_ai_reconciliation_live.py` | 643 |
+| **Total** | **1132** |

@@ -385,6 +385,24 @@ def root_decision_matches_thread(root: str, decision: str) -> bool:
     return root in decision or decision in root
 
 
+def _covered_thread_decisions(roots: Sequence[str], decisions: Sequence[str]) -> set[str]:
+    """Return distinct decisions covered without ambiguous root reuse."""
+
+    distinct_decisions = tuple(dict.fromkeys(decisions))
+    covered: set[str] = set()
+    for root in roots:
+        candidates = tuple(
+            decision
+            for decision in distinct_decisions
+            if root_decision_matches_thread(root, decision)
+        )
+        if root in candidates:
+            covered.add(root)
+        elif len(candidates) == 1:
+            covered.add(candidates[0])
+    return covered
+
+
 def missing_thread_dispositions(
     thread_summaries: Sequence[dict],
     body: str,
@@ -392,16 +410,22 @@ def missing_thread_dispositions(
     """Return bot-thread summaries not named by any structured disposition."""
 
     roots = reconciliation_disposition_roots(body)
+    prepared = [
+        (summary, _thread_root_decision(summary)) for summary in thread_summaries
+    ]
+    normalized_decisions = [
+        _normalized_decision(decision) for _, decision in prepared if decision
+    ]
+    covered = _covered_thread_decisions(roots, normalized_decisions)
     missing: list[dict] = []
-    for summary in thread_summaries:
-        decision = _thread_root_decision(summary)
+    for summary, decision in prepared:
         normalized = _normalized_decision(decision)
         if not normalized:
             copy = dict(summary)
             copy["decision"] = _UNPARSEABLE_THREAD_DECISION
             missing.append(copy)
             continue
-        if not any(root_decision_matches_thread(root, normalized) for root in roots):
+        if normalized not in covered:
             copy = dict(summary)
             copy["decision"] = decision
             missing.append(copy)

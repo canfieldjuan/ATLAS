@@ -436,6 +436,59 @@ def test_clear_body_passes_when_each_resolved_codex_thread_is_named():
     assert any("no open scoped Codex review threads remain" in msg for msg in msgs)
 
 
+def test_nested_thread_decisions_require_distinct_disposition_roots():
+    c = load_check()
+    short_title = "Ensure the report title preserves validation semantics"
+    long_title = f"{short_title} for export"
+    nodes = [
+        thread(resolved=True, body=f"{title}\nR2: complete adjacent detail")
+        for title in (short_title, long_title)
+    ]
+
+    code, messages = c.evaluate(
+        nodes,
+        body_with_dispositions(short_title),
+        BOTS,
+    )
+    ambiguous_code, ambiguous_messages = c.evaluate(
+        nodes,
+        body_with_dispositions(f"Review {long_title}"),
+        BOTS,
+    )
+    complete_code, complete_messages = c.evaluate(
+        list(reversed(nodes)),
+        body_with_dispositions(long_title, short_title),
+        BOTS,
+    )
+
+    assert code == 1
+    assert any(long_title in message for message in messages)
+    assert ambiguous_code == 1
+    assert all(any(title in message for message in ambiguous_messages) for title in (short_title, long_title))
+    assert complete_code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message
+        for message in complete_messages
+    )
+
+
+def test_unambiguous_disposition_variants_and_duplicate_decisions_remain_compatible():
+    c = load_check()
+    title = "Require a disposition for every resolved thread"
+    variant = f"{title} in the current history"
+    nodes = [
+        thread(resolved=True, path=path, body=f"{title}\nR2: complete adjacent detail")
+        for path in ("scripts/x.py", "scripts/y.py")
+    ]
+
+    code, messages = c.evaluate(nodes, body_with_dispositions(variant), BOTS)
+
+    assert code == 0
+    assert any(
+        "no open scoped Codex review threads remain" in message for message in messages
+    )
+
+
 def test_multiline_bodytext_uses_title_paired_with_rule_evidence_for_resolved_thread_dispositions():
     c = load_check()
     cases = (
