@@ -661,6 +661,8 @@ def test_severity_less_colon_rule_labels_still_reject_incomplete_or_malformed_ev
     malformed_bodies = (
         f"{title}\nR4:",
         f"{title}\nR4: ",
+        f"{title}\nR4 : detail",
+        f"{title}\nR4   : detail",
         f"{title}\nR4foo: detail",
         "x\nR4: detail",
         f"{title} R4:\nR2 — separate complete evidence",

@@ -47,9 +47,9 @@ Max files: 3
   - The same complete rule label works inline, while existing dash and
     severity-qualified colon forms retain their current roots; settled by
     parser boundary tests.
-  - `R2/R14:` with empty detail, `R2/R14foo: detail`, a short title, and text
-    with no adjacent complete rule label yield no decision; settled by negative
-    unit assertions.
+  - `R2/R14:` with empty detail, `R2/R14   : detail` with pre-colon
+    whitespace, `R2/R14foo: detail`, a short title, and text with no adjacent
+    complete rule label yield no decision; settled by negative unit assertions.
   - The grammar remains the sole evidence choke point; no title allowlist,
     thread-state exception, or PR-number special case is added; settled by the
     cold diff.
@@ -80,8 +80,9 @@ Max files: 3
 
 ### Capability-set closure declaration
 
-- Producer prose is OPEN. The accepted evidence grammar is CLOSED and DERIVED
-  at every parser use from `_COMPLETE_RULE_LABEL_RE`.
+- Producer prose is OPEN. The accepted evidence grammar is CLOSED and
+  ENUMERATED in `_COMPLETE_RULE_LABEL_RE`; the inline and adjacent-line
+  matchers derive their accepted forms from that one enumerated grammar.
 - This slice adds one finite delimiter member: exact rule reference + colon +
   nonempty detail. It does not classify title vocabulary or accept generic
   prose as evidence.
@@ -124,13 +125,32 @@ delimiter does not make arbitrary or short prose authoritative.
 
 None.
 
+Parking predicate: producer delimiters not present in observed trusted review
+`bodyText`, broader title grammar, bot-identity changes, and workflow-policy
+changes remain outside this slice unless live evidence makes them a blocker.
+
 Parked hardening: none.
 
 ## Verification
 
-- Focused live-reconciliation tests, syntax compilation, Ruff, whitespace,
-  strict guard-class closure, plan sync, and the repository's guarded local PR
-  review. The broad Unit Gate remains GitHub-owned.
+- `./ops test focused tests/test_check_ai_reconciliation_live.py -q` ->
+  `82 passed in 0.45s`.
+- `/home/juan-canfield/miniconda3/bin/ruff check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
+  -> `All checks passed!`.
+- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python -m py_compile scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
+  -> pass with no output.
+- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python scripts/check_guard_class_closure.py --base origin/main --strict`
+  -> `OK: no guard-shaped change without a property test.`
+- `/home/juan-canfield/Desktop/Atlas/.venv/bin/python scripts/sync_pr_plan.py --check plans/PR-Live-Reconciliation-Severityless-Colon.md origin/main`
+  -> `plan already in sync` after the review repair.
+- `git diff --check` -> pass with no output.
+- `/home/juan-canfield/miniconda3/bin/ruff format --check scripts/check_ai_reconciliation_live.py tests/test_check_ai_reconciliation_live.py`
+  reports existing whole-file formatter drift. Its diff was inspected and only
+  branch-added assertion lines were aligned; unrelated baseline churn remains
+  excluded.
+- The repository's guarded local PR review passed on the first head. Rerun it
+  through `scripts/push_pr.sh` after the review repair. The broad Unit Gate
+  remains GitHub-owned.
 - After provider merge, rerun and inspect #2506's trusted-base
   `live-reconciliation` check before resuming the Terms product slice.
 
@@ -138,7 +158,7 @@ Parked hardening: none.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 144 |
+| `plans/PR-Live-Reconciliation-Severityless-Colon.md` | 164 |
 | `scripts/check_ai_reconciliation_live.py` | 3 |
-| `tests/test_check_ai_reconciliation_live.py` | 58 |
-| **Total** | **205** |
+| `tests/test_check_ai_reconciliation_live.py` | 60 |
+| **Total** | **227** |

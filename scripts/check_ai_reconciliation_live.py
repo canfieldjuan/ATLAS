@@ -47,7 +47,7 @@ _RULE_SEVERITY_RE = r"\([A-Z][A-Z0-9 _-]*\)"
 _COMPLETE_RULE_LABEL_RE = (
     rf"{_RULE_REFERENCE_RE}(?:"
     rf"\s+{_RULE_SEVERITY_RE}(?:\s+[—-]\s+\S|\s*:\s+\S|\s+(?![:—-])\S)"
-    rf"|\s*:\s+\S"
+    rf"|:\s+\S"
     rf"|\s+[—-]\s+\S"
     rf")"
 )
