@@ -201,6 +201,17 @@ database:
       current_session_capable: false-until-the-protected-DBA-configuration-is-exported
       mutation: preflight is read-only; apply creates guard-owned card-vault enrollment, session, and provider-event evidence and records migration 398
       rollback: stop card-vault callers, retain provider identifiers, event history, and the migration record, and follow .agent/runbooks/database.md
+    eom_card_service_commitment:
+      status: guarded-preflight-and-apply
+      migration: 399_eom_card_service_commitments
+      predecessor: 398_eom_card_vault
+      preflight: ./ops db controlled eom-card-service-commitment preflight
+      apply: ./ops db controlled eom-card-service-commitment apply
+      implementation: scripts/apply_eom_card_service_commitment_schema.py
+      authentication: protected direct PostgreSQL-superuser DSN plus canonical EOM funnel runtime configuration
+      current_session_capable: false-until-the-protected-DBA-configuration-is-exported
+      mutation: preflight is read-only; apply creates immutable guard-owned residential service-commitment evidence, adds the card-enrollment guard, and records migration 399
+      rollback: stop decision and card-vault callers, retain all decision and card-vault evidence plus both migration records, and follow .agent/runbooks/database.md
   mutation: fixed inspections are read-only; app startup and integration tests can mutate
   likely_failures:
     - assuming root Docker Compose provides PostgreSQL

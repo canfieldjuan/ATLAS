@@ -45,12 +45,14 @@ MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
 TERMS_AUTHORITY_MIGRATION_NAME = "396_eom_terms_authority"
 TERMS_ACCEPTANCE_MIGRATION_NAME = "397_eom_terms_acceptance"
 CARD_VAULT_MIGRATION_NAME = "398_eom_card_vault"
+CARD_SERVICE_COMMITMENT_MIGRATION_NAME = "399_eom_card_service_commitments"
 CONTROLLED_MIGRATION_NAMES = frozenset(
     {
         MIGRATION_NAME,
         TERMS_AUTHORITY_MIGRATION_NAME,
         TERMS_ACCEPTANCE_MIGRATION_NAME,
         CARD_VAULT_MIGRATION_NAME,
+        CARD_SERVICE_COMMITMENT_MIGRATION_NAME,
     }
 )
 CONTROLLED_MIGRATION_PREDECESSORS = {
@@ -59,6 +61,7 @@ CONTROLLED_MIGRATION_PREDECESSORS = {
         "395_eom_post_clean_onboarding_candidates",
         TERMS_ACCEPTANCE_MIGRATION_NAME,
     ),
+    CARD_SERVICE_COMMITMENT_MIGRATION_NAME: (CARD_VAULT_MIGRATION_NAME,),
 }
 
 
@@ -396,6 +399,16 @@ async def _card_vault_schema_ready(pool: Any) -> bool:
     return await eom_card_vault_schema_ready(pool)
 
 
+async def _card_service_commitment_schema_ready(pool: Any) -> bool:
+    """Load the service-commitment attestation only for migration 399."""
+
+    from atlas_brain.services.eom_card_service_commitment import (
+        eom_card_service_commitment_schema_ready,
+    )
+
+    return await eom_card_service_commitment_schema_ready(pool)
+
+
 async def _run(
     args: argparse.Namespace,
     *,
@@ -408,6 +421,9 @@ async def _run(
     card_vault_schema_ready_fn: Callable[[Any], Awaitable[bool]] = (
         _card_vault_schema_ready
     ),
+    card_service_commitment_schema_ready_fn: Callable[
+        [Any], Awaitable[bool]
+    ] = _card_service_commitment_schema_ready,
 ) -> dict[str, object]:
     migration_name = str(args.migration)
     if migration_name not in CONTROLLED_MIGRATION_NAMES:
@@ -470,6 +486,17 @@ async def _run(
                     "Configured DBA connection is not a PostgreSQL superuser; "
                     "refusing to run the controlled EOM schema migration"
                 )
+            card_vault_predecessor_ready: bool | None = None
+            if migration_name == CARD_SERVICE_COMMITMENT_MIGRATION_NAME:
+                card_vault_predecessor_ready = bool(
+                    await card_vault_schema_ready_fn(runtime_pool)
+                )
+                result["predecessor_schema_ready"] = card_vault_predecessor_ready
+                if not card_vault_predecessor_ready:
+                    raise RuntimeError(
+                        "Card-vault predecessor schema is unavailable; refusing "
+                        "service-commitment migration 399"
+                    )
             if args.apply and not migration_recorded:
                 await _run_pinned_controlled_migration(
                     pool,
@@ -496,6 +523,26 @@ async def _run(
                     raise RuntimeError(
                         "Card-vault migration bookkeeping does not match the "
                         "runtime-role schema attestation"
+                    )
+            elif migration_name == CARD_SERVICE_COMMITMENT_MIGRATION_NAME:
+                if result["applied"]:
+                    card_vault_predecessor_ready = bool(
+                        await card_vault_schema_ready_fn(runtime_pool)
+                    )
+                    result["predecessor_schema_ready"] = card_vault_predecessor_ready
+                if not card_vault_predecessor_ready:
+                    raise RuntimeError(
+                        "Card-vault predecessor schema drifted while applying "
+                        "service-commitment migration 399"
+                    )
+                schema_ready = bool(
+                    await card_service_commitment_schema_ready_fn(runtime_pool)
+                )
+                result["schema_ready"] = schema_ready
+                if migration_recorded != schema_ready:
+                    raise RuntimeError(
+                        "Card service-commitment migration bookkeeping does not "
+                        "match the runtime-role schema attestation"
                     )
             return result
         finally:

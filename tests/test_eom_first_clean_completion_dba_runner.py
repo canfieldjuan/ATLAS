@@ -18,6 +18,9 @@ SCRIPT = ROOT / "scripts" / "apply_eom_first_clean_completion_schema.py"
 TERMS_SCRIPT = ROOT / "scripts" / "apply_eom_terms_authority_schema.py"
 TERMS_ACCEPTANCE_SCRIPT = ROOT / "scripts" / "apply_eom_terms_acceptance_schema.py"
 CARD_VAULT_SCRIPT = ROOT / "scripts" / "apply_eom_card_vault_schema.py"
+CARD_SERVICE_COMMITMENT_SCRIPT = (
+    ROOT / "scripts" / "apply_eom_card_service_commitment_schema.py"
+)
 
 
 def _load_runner_module() -> ModuleType:
@@ -62,6 +65,21 @@ def _load_card_vault_runner_module() -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(CARD_VAULT_SCRIPT.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+def _load_card_service_commitment_runner_module() -> ModuleType:
+    module_name = "test_eom_card_service_commitment_dba_runner_script"
+    spec = importlib.util.spec_from_file_location(
+        module_name, CARD_SERVICE_COMMITMENT_SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(CARD_SERVICE_COMMITMENT_SCRIPT.parent))
     try:
         spec.loader.exec_module(module)
     finally:
@@ -327,6 +345,7 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
         "396_eom_terms_authority",
         "397_eom_terms_acceptance",
         "398_eom_card_vault",
+        "399_eom_card_service_commitments",
     ],
 )
 def test_runner_applies_only_its_named_migration_in_pinned_transaction(
@@ -345,18 +364,25 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
         schema_name=schema_name,
         migration_lock_results=[False, True],
     )
-    if migration_name in {"397_eom_terms_acceptance", "398_eom_card_vault"}:
+    if migration_name in {
+        "397_eom_terms_acceptance",
+        "398_eom_card_vault",
+        "399_eom_card_service_commitments",
+    }:
         state.migration_records = {
             "395_eom_post_clean_onboarding_candidates": True,
             "396_eom_terms_authority": True,
-            "397_eom_terms_acceptance": migration_name == "398_eom_card_vault",
-            "398_eom_card_vault": False,
+            "397_eom_terms_acceptance": migration_name
+            in {"398_eom_card_vault", "399_eom_card_service_commitments"},
+            "398_eom_card_vault": migration_name == "399_eom_card_service_commitments",
+            "399_eom_card_service_commitments": False,
         }
     runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
     dba_pool = _Pool(state)
     calls: list[tuple[object, tuple[str, ...]]] = []
     sleep_delays: list[float] = []
     schema_attestation_calls: list[object] = []
+    commitment_attestation_calls: list[object] = []
 
     async def create_pool(
         database_url: str, *, schema_name: str | None = None
@@ -389,6 +415,15 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
             )
         )
 
+    async def card_service_commitment_schema_ready(pool: object) -> bool:
+        commitment_attestation_calls.append(pool)
+        return bool(
+            getattr(state, "migration_records", {}).get(
+                runner.CARD_SERVICE_COMMITMENT_MIGRATION_NAME,
+                False,
+            )
+        )
+
     monkeypatch.setattr(runner.asyncio, "sleep", sleep)
 
     args = runner._parse_args(["--apply", "--migration", migration_name])
@@ -404,6 +439,9 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
                 db_connection_string=runtime_database_url
             ),
             card_vault_schema_ready_fn=card_vault_schema_ready,
+            card_service_commitment_schema_ready_fn=(
+                card_service_commitment_schema_ready
+            ),
         )
     )
 
@@ -421,9 +459,16 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
     if migration_name == runner.CARD_VAULT_MIGRATION_NAME:
         assert result["schema_ready"] is True
         assert schema_attestation_calls == [runtime_pool]
+        assert commitment_attestation_calls == []
+    elif migration_name == runner.CARD_SERVICE_COMMITMENT_MIGRATION_NAME:
+        assert result["schema_ready"] is True
+        assert result["predecessor_schema_ready"] is True
+        assert commitment_attestation_calls == [runtime_pool]
+        assert schema_attestation_calls == [runtime_pool, runtime_pool]
     else:
         assert "schema_ready" not in result
         assert schema_attestation_calls == []
+        assert commitment_attestation_calls == []
 
 
 def test_terms_entrypoint_pins_migration_396() -> None:
@@ -471,14 +516,37 @@ def test_card_vault_entrypoint_pins_migration_398() -> None:
         card_vault_runner._card_vault_argv(["--migration=397_eom_terms_acceptance"])
 
 
+def test_card_service_commitment_entrypoint_pins_migration_399() -> None:
+    commitment_runner = _load_card_service_commitment_runner_module()
+
+    argv = commitment_runner._service_commitment_argv(["--apply", "--json"])
+    assert argv == [
+        "--migration",
+        "399_eom_card_service_commitments",
+        "--apply",
+        "--json",
+    ]
+    shared_runner = sys.modules[commitment_runner._main.__module__]
+    assert (
+        shared_runner._parse_args(argv).migration == "399_eom_card_service_commitments"
+    )
+    with pytest.raises(SystemExit):
+        commitment_runner._service_commitment_argv(["--migration=398_eom_card_vault"])
+
+
 @pytest.mark.parametrize(
     ("migration_recorded", "schema_ready"),
     [(False, False), (False, True), (True, False), (True, True)],
 )
-def test_card_vault_migration_bookkeeping_matches_runtime_schema_attestation(
+@pytest.mark.parametrize(
+    "migration_name",
+    ["398_eom_card_vault", "399_eom_card_service_commitments"],
+)
+def test_guarded_migration_bookkeeping_matches_runtime_schema_attestation(
     monkeypatch,
     migration_recorded: bool,
     schema_ready: bool,
+    migration_name: str,
 ) -> None:
     runner = _load_runner_module()
     runtime_database_url = "postgresql://runtime@example.test/atlas"
@@ -494,12 +562,22 @@ def test_card_vault_migration_bookkeeping_matches_runtime_schema_attestation(
             migration_records={
                 "395_eom_post_clean_onboarding_candidates": True,
                 "397_eom_terms_acceptance": True,
-                "398_eom_card_vault": migration_recorded,
+                "398_eom_card_vault": (
+                    True
+                    if migration_name == "399_eom_card_service_commitments"
+                    else migration_recorded
+                ),
+                "399_eom_card_service_commitments": (
+                    migration_recorded
+                    if migration_name == "399_eom_card_service_commitments"
+                    else False
+                ),
             },
             schema_name=schema_name,
         )
     )
     attested_pools: list[object] = []
+    predecessor_attested_pools: list[object] = []
 
     async def create_pool(
         database_url: str, *, schema_name: str | None = None
@@ -512,7 +590,19 @@ def test_card_vault_migration_bookkeeping_matches_runtime_schema_attestation(
         attested_pools.append(pool)
         return schema_ready
 
-    args = runner._parse_args(["--migration", runner.CARD_VAULT_MIGRATION_NAME])
+    async def attest_predecessor(pool: object) -> bool:
+        predecessor_attested_pools.append(pool)
+        return True
+
+    args = runner._parse_args(["--migration", migration_name])
+    attestation_kwargs = (
+        {"card_vault_schema_ready_fn": attest_schema}
+        if migration_name == runner.CARD_VAULT_MIGRATION_NAME
+        else {
+            "card_vault_schema_ready_fn": attest_predecessor,
+            "card_service_commitment_schema_ready_fn": attest_schema,
+        }
+    )
     if migration_recorded != schema_ready:
         with pytest.raises(
             RuntimeError,
@@ -528,7 +618,7 @@ def test_card_vault_migration_bookkeeping_matches_runtime_schema_attestation(
                     funnel_config_factory=lambda: SimpleNamespace(
                         db_connection_string=runtime_database_url
                     ),
-                    card_vault_schema_ready_fn=attest_schema,
+                    **attestation_kwargs,
                 )
             )
     else:
@@ -542,13 +632,18 @@ def test_card_vault_migration_bookkeeping_matches_runtime_schema_attestation(
                 funnel_config_factory=lambda: SimpleNamespace(
                     db_connection_string=runtime_database_url
                 ),
-                card_vault_schema_ready_fn=attest_schema,
+                **attestation_kwargs,
             )
         )
         assert result["migration_recorded"] is migration_recorded
         assert result["schema_ready"] is schema_ready
 
     assert attested_pools == [runtime_pool]
+    assert predecessor_attested_pools == (
+        [runtime_pool]
+        if migration_name == runner.CARD_SERVICE_COMMITMENT_MIGRATION_NAME
+        else []
+    )
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
 
@@ -608,6 +703,129 @@ def test_card_vault_refuses_any_unrecorded_predecessor(
                 ),
             )
         )
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
+def test_card_service_commitment_refuses_unrecorded_card_vault_predecessor(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        migration_recorded=False,
+        migration_records={
+            "395_eom_post_clean_onboarding_candidates": True,
+            "397_eom_terms_acceptance": True,
+            "398_eom_card_vault": False,
+            "399_eom_card_service_commitments": False,
+        },
+        schema_name=schema_name,
+    )
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            return runtime_pool
+        return dba_pool
+
+    args = runner._parse_args(["--migration", "399_eom_card_service_commitments"])
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "Controlled predecessor 398_eom_card_vault must be recorded before "
+            "399_eom_card_service_commitments"
+        ),
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
+def test_card_service_commitment_refuses_drifted_card_vault_predecessor(
+    monkeypatch,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        migration_recorded=False,
+        migration_records={
+            "398_eom_card_vault": True,
+            "399_eom_card_service_commitments": False,
+        },
+        schema_name=schema_name,
+    )
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
+    migration_calls: list[object] = []
+    commitment_attestation_calls: list[object] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            return runtime_pool
+        return dba_pool
+
+    async def run_migrations(*args: object, **kwargs: object) -> None:
+        migration_calls.append((args, kwargs))
+
+    async def drifted_card_vault(_pool: object) -> bool:
+        return False
+
+    async def attest_commitment(pool: object) -> bool:
+        commitment_attestation_calls.append(pool)
+        return False
+
+    args = runner._parse_args(
+        ["--apply", "--migration", "399_eom_card_service_commitments"]
+    )
+    with pytest.raises(
+        RuntimeError,
+        match="Card-vault predecessor schema is unavailable",
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+                card_vault_schema_ready_fn=drifted_card_vault,
+                card_service_commitment_schema_ready_fn=attest_commitment,
+            )
+        )
+
+    assert migration_calls == []
+    assert commitment_attestation_calls == []
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
 

@@ -24,6 +24,9 @@ asyncpg = pytest.importorskip("asyncpg")
 
 from atlas_brain.eom_api import funnel as funnel_mod  # noqa: E402
 from atlas_brain.eom_api import funnel_auth as funnel_auth_mod  # noqa: E402
+from atlas_brain.services.eom_card_service_commitment import (  # noqa: E402
+    EOMCardServiceCommitmentService,
+)
 from atlas_brain.services.eom_first_clean_completion import (  # noqa: E402
     EOMFirstCleanCompletionConflictError,
     EOMFirstCleanCompletionService,
@@ -279,6 +282,36 @@ async def _test_store(
         finally:
             await dba_connection.close()
             await runtime_connection.close()
+
+
+async def _apply_card_service_commitment_schema(pool: _ConnectionPool) -> None:
+    dba = pool._connection
+    await dba.execute(
+        """
+        CREATE TABLE schema_migrations (
+            version INTEGER PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            content_sha256 VARCHAR(64),
+            applied_at TIMESTAMPTZ DEFAULT NOW()
+        )
+        """
+    )
+    await dba.execute(
+        "INSERT INTO schema_migrations (version, name) "
+        "VALUES (395, '395_eom_post_clean_onboarding_candidates')"
+    )
+    for version, migration in (
+        (396, "396_eom_terms_authority"),
+        (397, "397_eom_terms_acceptance"),
+        (398, "398_eom_card_vault"),
+        (399, "399_eom_card_service_commitments"),
+    ):
+        await dba.execute((MIGRATIONS / f"{migration}.sql").read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) VALUES ($1, $2)",
+            version,
+            migration,
+        )
 
 
 async def _schema_connection(database_url: str, schema: str) -> _ConnectionPool:
@@ -3001,6 +3034,92 @@ async def test_private_route_forwards_only_the_closed_completion_contract() -> N
 
 
 @pytest.mark.asyncio
+async def test_candidate_route_projects_attested_service_commitment() -> None:
+    async with _test_store() as (pool, _schema):
+        contact_id, customer_id, site_id = await _insert_customer(pool)
+        assert customer_id is not None and site_id is not None
+        app = _app(_service(pool))
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            completion = await client.post(
+                f"/api/v1/eom-funnel/customer-handoffs/{contact_id}/"
+                "first-clean-completions",
+                headers={"Idempotency-Key": _operation_key("projection-completion")},
+                json=_payload(customer_id, site_id),
+            )
+        assert completion.status_code == 201
+
+        await _apply_card_service_commitment_schema(pool)
+        app.dependency_overrides[funnel_mod._card_service_commitment_dependency] = (
+            lambda: EOMCardServiceCommitmentService(pool=pool)
+        )
+        candidate_id = completion.json()["postCleanOnboardingCandidateId"]
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            decision = await client.post(
+                "/api/v1/eom-funnel/post-clean-onboarding-candidates/"
+                f"{candidate_id}/service-commitment",
+                headers={"Idempotency-Key": _operation_key("projection-commitment")},
+                json={"serviceCommitment": "recurring"},
+            )
+            response = await client.get(
+                "/api/v1/eom-funnel/post-clean-onboarding-candidates",
+                params={"limit": 1},
+            )
+
+        persisted = await pool._connection.fetchrow(
+            """
+            SELECT candidate_id, contact_id, service_commitment,
+                   decided_by_name, decided_at
+              FROM eom_post_clean_service_commitments
+             WHERE candidate_id = $1::uuid
+            """,
+            candidate_id,
+        )
+        assert decision.status_code == 201
+        assert response.status_code == 200
+        assert persisted is not None
+        assert str(persisted["candidate_id"]) == candidate_id
+        assert persisted["contact_id"] == contact_id
+        assert persisted["service_commitment"] == "recurring"
+        assert persisted["decided_by_name"] == "Juan"
+        candidate = response.json()["candidates"][0]
+        assert candidate["candidateId"] == candidate_id
+        assert candidate["contactId"] == str(contact_id)
+        assert candidate["serviceCommitment"] == persisted["service_commitment"]
+        assert candidate["serviceCommitmentDecidedBy"] == persisted["decided_by_name"]
+        assert (
+            datetime.fromisoformat(
+                candidate["serviceCommitmentDecidedAt"].replace("Z", "+00:00")
+            )
+            == persisted["decided_at"]
+        )
+
+
+@pytest.mark.asyncio
+async def test_candidate_list_rejects_present_but_drifted_commitment_schema() -> None:
+    class _DriftedProjectionPool:
+        is_initialized = True
+
+        async def fetchval(self, query: str) -> bool:
+            if "eom_card_service_commitment_schema_ready" in query:
+                return False
+            return True
+
+        async def fetch(self, _query: str, *_args: object) -> list[dict[str, Any]]:
+            raise AssertionError("candidate rows must not be read after schema drift")
+
+    service = EOMFirstCleanCompletionService(pool=_DriftedProjectionPool())
+    with pytest.raises(
+        EOMFirstCleanCompletionUnavailableError,
+        match="Service-commitment projection schema is unavailable",
+    ):
+        await service.list_candidates(limit=1)
+
+
+@pytest.mark.asyncio
 async def test_private_route_reaches_persisted_completion_without_email_or_stripe() -> (
     None
 ):
@@ -3055,6 +3174,9 @@ async def test_private_route_reaches_persisted_completion_without_email_or_strip
                 "trackerServiceId": 6001,
                 "completedAt": "2026-08-24T19:00:00Z",
                 "createdAt": created.json()["recordedAt"],
+                "serviceCommitment": None,
+                "serviceCommitmentDecidedBy": None,
+                "serviceCommitmentDecidedAt": None,
             }
         ]
         await pool._connection.execute(

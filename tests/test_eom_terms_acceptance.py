@@ -23,6 +23,10 @@ from atlas_brain.services.eom_card_vault import (
     EOMCardVaultService,
     eom_card_vault_schema_ready,
 )
+from atlas_brain.services.eom_card_service_commitment import (
+    EOMCardServiceCommitmentService,
+    eom_card_service_commitment_schema_ready,
+)
 from atlas_brain.services.eom_public_onboarding_tokens import (
     format_eom_public_onboarding_token,
 )
@@ -72,6 +76,10 @@ _CANDIDATE_MIGRATION = (
 _CARD_VAULT_MIGRATION = (
     Path(__file__).resolve().parent.parent
     / "atlas_brain/storage/migrations/398_eom_card_vault.sql"
+)
+_CARD_SERVICE_COMMITMENT_MIGRATION = (
+    Path(__file__).resolve().parent.parent
+    / "atlas_brain/storage/migrations/399_eom_card_service_commitments.sql"
 )
 
 
@@ -446,6 +454,53 @@ async def _publish(
         actor_id=7,
         actor_name="Juan",
     )
+
+
+async def _seed_accepted_candidate(
+    *,
+    dba: Any,
+    terms: EOMTermsAcceptanceService,
+) -> tuple[UUID, UUID, UUID]:
+    contact_id = uuid4()
+    await _seed_customer(dba, contact_id=contact_id)
+    invitation = await terms.issue_and_send(
+        request_key=f"service-commitment:{contact_id.hex}",
+        contact_id=contact_id,
+        locale="en",
+        actor_id=7,
+        actor_name="Juan",
+        public_base_url="https://example.test/onboarding",
+        hmac_secret=_SECRET,
+        sender=_RecordingSender(),
+    )
+    authenticated = authenticate_eom_terms_token(
+        token=format_eom_terms_token(
+            invitation_id=UUID(invitation["invitationId"]),
+            secret=_SECRET,
+        ),
+        secret=_SECRET,
+    )
+    accepted = await terms.accept_and_send(
+        token=authenticated,
+        signer_name="Card Policy Signer",
+        terms_accepted=True,
+        additional_work_accepted=True,
+        client_ip="192.0.2.44",
+        sender=_RecordingSender(),
+    )
+    candidate_id = uuid4()
+    await dba.execute(
+        """
+        INSERT INTO eom_post_clean_onboarding_candidates (
+            id, completion_receipt_id, contact_id, handoff_id
+        ) VALUES ($1, $2, $3, $4)
+        """,
+        candidate_id,
+        uuid4(),
+        contact_id,
+        uuid4(),
+    )
+    return contact_id, candidate_id, UUID(accepted["acceptanceId"])
 
 
 def test_terms_bearer_is_domain_separated_fragment_only_and_rotatable() -> None:
@@ -2214,8 +2269,121 @@ async def test_card_vault_migration_applies_with_guarded_runtime_acl() -> None:
             VALUES (398, '398_eom_card_vault')
             """
         )
+        await dba.execute(_CARD_SERVICE_COMMITMENT_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES (399, '399_eom_card_service_commitments')
+            """
+        )
 
         assert await eom_card_vault_schema_ready(pool) is True
+        assert await eom_card_service_commitment_schema_ready(pool) is True
+        await dba.execute(
+            """
+            CREATE TRIGGER trg_require_eom_recurring_card_commitment
+            BEFORE INSERT ON eom_card_vault_sessions
+            FOR EACH ROW EXECUTE FUNCTION protect_eom_card_vault_session()
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            DROP TRIGGER trg_require_eom_recurring_card_commitment
+            ON eom_card_vault_sessions
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_post_clean_service_commitments
+            ALTER COLUMN decided_at DROP DEFAULT
+            """
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_post_clean_service_commitments
+            ALTER COLUMN decided_at SET DEFAULT CURRENT_TIMESTAMP
+            """
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_post_clean_service_commitments
+            RENAME CONSTRAINT uq_eom_post_clean_service_commitment_operation
+            TO drifted_eom_post_clean_service_commitment_operation;
+            ALTER TABLE eom_post_clean_service_commitments
+            ADD CONSTRAINT uq_eom_post_clean_service_commitment_operation
+            UNIQUE (contact_id)
+            """
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_post_clean_service_commitments
+            DROP CONSTRAINT uq_eom_post_clean_service_commitment_operation;
+            ALTER TABLE eom_post_clean_service_commitments
+            RENAME CONSTRAINT drifted_eom_post_clean_service_commitment_operation
+            TO uq_eom_post_clean_service_commitment_operation
+            """
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_post_clean_service_commitments
+            DISABLE TRIGGER trg_protect_eom_card_service_commitment
+            """
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_post_clean_service_commitments
+            ENABLE TRIGGER trg_protect_eom_card_service_commitment
+            """
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is True
+        original_commitment_guard = await dba.fetchval(
+            """
+            SELECT pg_get_functiondef(
+                to_regprocedure('require_eom_recurring_card_commitment()')
+            )
+            """
+        )
+        assert isinstance(original_commitment_guard, str)
+        await dba.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION require_eom_recurring_card_commitment()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            SET search_path TO pg_catalog, "{schema}", pg_temp
+            AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is False
+        await dba.execute(original_commitment_guard)
+        assert await eom_card_service_commitment_schema_ready(pool) is True
+        await dba.execute(
+            "GRANT UPDATE (contact_id) ON eom_post_clean_service_commitments TO atlas"
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is False
+        await dba.execute(
+            "REVOKE UPDATE (contact_id) "
+            "ON eom_post_clean_service_commitments FROM atlas"
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is True
+        await dba.execute(
+            "GRANT SELECT ON eom_post_clean_service_commitments TO PUBLIC"
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is False
+        await dba.execute(
+            "REVOKE SELECT ON eom_post_clean_service_commitments FROM PUBLIC"
+        )
+        assert await eom_card_service_commitment_schema_ready(pool) is True
         original_enrollment_guard = await dba.fetchval(
             """
             SELECT pg_get_functiondef(
@@ -2407,12 +2575,17 @@ async def test_card_vault_reservation_serializes_contact_eligibility() -> None:
         )
         await dba.execute(_CARD_VAULT_MIGRATION.read_text())
         await dba.execute(
-            "GRANT SELECT ON TABLE "
+            "GRANT SELECT, UPDATE ON TABLE "
             f'"{schema}".eom_post_clean_onboarding_candidates TO atlas'
         )
         await dba.execute(
             "INSERT INTO schema_migrations (version, name) "
             "VALUES (398, '398_eom_card_vault')"
+        )
+        await dba.execute(_CARD_SERVICE_COMMITMENT_MIGRATION.read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (399, '399_eom_card_service_commitments')"
         )
         await _publish(
             EOMTermsAuthority(pool=pool),
@@ -2421,6 +2594,7 @@ async def test_card_vault_reservation_serializes_contact_eligibility() -> None:
             marker="card-vault-lock",
         )
         terms = EOMTermsAcceptanceService(pool=pool)
+        commitments = EOMCardServiceCommitmentService(pool=pool)
 
         async def seed_eligible_subject(
             *, contact_id: UUID, email: str, request_key: str
@@ -2462,6 +2636,13 @@ async def test_card_vault_reservation_serializes_contact_eligibility() -> None:
                 uuid4(),
                 contact_id,
                 uuid4(),
+            )
+            await commitments.decide(
+                candidate_id=candidate_id,
+                service_commitment="recurring",
+                operation_key=f"card-vault-lock:{candidate_id.hex}",
+                actor_id=7,
+                actor_name="Juan",
             )
             return authenticated, candidate_id
 
@@ -2700,6 +2881,230 @@ async def test_card_vault_reservation_serializes_contact_eligibility() -> None:
             await asyncio.wait_for(rejected_materialization_task, timeout=2)
         assert materialization_waited_for_archive is True
         assert post_reservation_provider.calls == []
+
+
+@pytest.mark.asyncio
+async def test_service_commitment_migration_serializes_legacy_enrollment_insert() -> (
+    None
+):
+    async with _real_terms_store() as (pool, dba, _schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (398, '398_eom_card_vault')"
+        )
+        await dba.execute(
+            "GRANT SELECT ON TABLE eom_post_clean_onboarding_candidates TO atlas"
+        )
+        await _publish(
+            EOMTermsAuthority(pool=pool),
+            label="service-commitment-race.1",
+            material=True,
+            marker="service-commitment-race",
+        )
+        subject = await _seed_accepted_candidate(
+            dba=dba,
+            terms=EOMTermsAcceptanceService(pool=pool),
+        )
+
+        migration_task: asyncio.Task[str]
+        lock_observed = False
+        async with pool.raw_pool.acquire() as writer:
+            async with writer.transaction():
+                await writer.execute(
+                    """
+                    INSERT INTO eom_card_vault_enrollments (
+                        id, contact_id, candidate_id, initial_acceptance_id
+                    ) VALUES ($1, $2, $3, $4)
+                    """,
+                    uuid4(),
+                    *subject,
+                )
+                migration_task = asyncio.create_task(
+                    dba.execute(_CARD_SERVICE_COMMITMENT_MIGRATION.read_text())
+                )
+                async with pool.raw_pool.acquire() as observer:
+                    for _attempt in range(100):
+                        lock_observed = bool(
+                            await observer.fetchval(
+                                """
+                                SELECT EXISTS (
+                                    SELECT 1
+                                      FROM pg_locks
+                                     WHERE relation = to_regclass(
+                                               'eom_card_vault_enrollments'
+                                           )
+                                       AND mode = 'ShareRowExclusiveLock'
+                                       AND NOT granted
+                                )
+                                """
+                            )
+                        )
+                        if lock_observed:
+                            break
+                        await asyncio.sleep(0.01)
+
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="existing EOM card enrollments require explicit reconciliation",
+        ):
+            await asyncio.wait_for(migration_task, timeout=2)
+        assert lock_observed is True
+        assert (
+            await dba.fetchval(
+                "SELECT to_regclass('eom_post_clean_service_commitments')"
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
+async def test_service_commitment_database_guard_controls_card_enrollment() -> None:
+    async with _real_terms_store() as (pool, dba, schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (398, '398_eom_card_vault')"
+        )
+        await dba.execute(_CARD_SERVICE_COMMITMENT_MIGRATION.read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (399, '399_eom_card_service_commitments')"
+        )
+        await dba.execute(
+            "GRANT SELECT, UPDATE ON TABLE "
+            f'"{schema}".eom_post_clean_onboarding_candidates TO atlas'
+        )
+        await _publish(
+            EOMTermsAuthority(pool=pool),
+            label="service-commitment-guard.1",
+            material=True,
+            marker="service-commitment-guard",
+        )
+        terms = EOMTermsAcceptanceService(pool=pool)
+        commitments = EOMCardServiceCommitmentService(pool=pool)
+
+        recurring = await _seed_accepted_candidate(dba=dba, terms=terms)
+        one_time = await _seed_accepted_candidate(dba=dba, terms=terms)
+        unclassified = await _seed_accepted_candidate(dba=dba, terms=terms)
+        app = _route_app(terms)
+        app.dependency_overrides[funnel_mod._card_service_commitment_dependency] = (
+            lambda: commitments
+        )
+        decision_responses: dict[str, httpx.Response] = {}
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+        ) as client:
+            for decision, subject in (
+                ("recurring", recurring),
+                ("one_time", one_time),
+            ):
+                candidate_id = subject[1]
+                decision_responses[decision] = await client.post(
+                    "/api/v1/eom-funnel/post-clean-onboarding-candidates/"
+                    f"{candidate_id}/service-commitment",
+                    headers={
+                        **_headers(actor=True),
+                        "Idempotency-Key": f"service-commitment:{candidate_id.hex}",
+                    },
+                    json={"serviceCommitment": decision},
+                )
+            recurring_replay = await client.post(
+                "/api/v1/eom-funnel/post-clean-onboarding-candidates/"
+                f"{recurring[1]}/service-commitment",
+                headers={
+                    **_headers(actor=True),
+                    "Idempotency-Key": f"service-commitment:{recurring[1].hex}",
+                },
+                json={"serviceCommitment": "recurring"},
+            )
+
+        for decision, response in decision_responses.items():
+            assert response.status_code == 201
+            assert response.json().keys() == {
+                "candidateId",
+                "contactId",
+                "serviceCommitment",
+                "decidedByName",
+                "decidedAt",
+                "idempotent",
+            }
+            assert response.json()["serviceCommitment"] == decision
+            assert response.json()["decidedByName"] == "Juan"
+            assert response.json()["idempotent"] is False
+        assert recurring_replay.status_code == 200
+        assert recurring_replay.json() == {
+            **decision_responses["recurring"].json(),
+            "idempotent": True,
+        }
+        async with pool.raw_pool.acquire() as runtime:
+            await runtime.execute(
+                """
+                INSERT INTO eom_card_vault_enrollments (
+                    id, contact_id, candidate_id, initial_acceptance_id
+                ) VALUES ($1, $2, $3, $4)
+                """,
+                uuid4(),
+                *recurring,
+            )
+            for contact_id, candidate_id, acceptance_id in (
+                one_time,
+                unclassified,
+            ):
+                with pytest.raises(
+                    asyncpg.RaiseError,
+                    match="requires a recurring service commitment",
+                ):
+                    await runtime.execute(
+                        """
+                        INSERT INTO eom_card_vault_enrollments (
+                            id, contact_id, candidate_id, initial_acceptance_id
+                        ) VALUES ($1, $2, $3, $4)
+                        """,
+                        uuid4(),
+                        contact_id,
+                        candidate_id,
+                        acceptance_id,
+                    )
+
+        assert (
+            await dba.fetchval("SELECT count(*) FROM eom_card_vault_enrollments") == 1
+        )
+        recurring_candidate_id = recurring[1]
+        with pytest.raises(asyncpg.RaiseError, match="append-only"):
+            await dba.execute(
+                "UPDATE eom_post_clean_service_commitments "
+                "SET decided_by_name = 'Changed' WHERE candidate_id = $1",
+                recurring_candidate_id,
+            )
+        with pytest.raises(asyncpg.RaiseError, match="append-only"):
+            await dba.execute(
+                "DELETE FROM eom_post_clean_service_commitments "
+                "WHERE candidate_id = $1",
+                recurring_candidate_id,
+            )
+        with pytest.raises(asyncpg.RaiseError, match="append-only"):
+            await dba.execute("TRUNCATE eom_post_clean_service_commitments")
 
 
 def test_migration_is_guard_owned_append_only_and_seeds_no_content() -> None:

@@ -204,6 +204,41 @@ rolling application code behind the webhook contract. Retain migration 398 and
 every provider identifier/event row throughout; disabling issuance is not
 authorization to strand provider-confirmed customer state.
 
+## EOM card service-commitment migration
+
+Migration `399_eom_card_service_commitments` is excluded from automatic
+startup. It adds immutable operator evidence distinguishing one-time from
+recurring residential service and refuses new card enrollment unless the
+matching decision is `recurring`. It depends on recorded migration 398 and
+creates no Stripe customer, Checkout Session, payment method, charge, or
+customer communication.
+
+Run every read-only preflight against the exact deployment target first:
+
+```bash
+git rev-parse HEAD
+./ops deploy status
+./ops db controlled eom-card-vault preflight
+./ops db controlled eom-card-service-commitment preflight
+```
+
+Migration 399 intentionally refuses to infer decisions when any card-vault
+enrollment already exists. If preflight reports existing enrollment evidence,
+stop and reconcile each candidate explicitly; do not delete the enrollment or
+derive one-time/recurring from its existence. With an empty enrollment table,
+apply once and repeat the preflight before enabling new card-vault issuance:
+
+```bash
+./ops db controlled eom-card-service-commitment apply
+./ops db controlled eom-card-service-commitment preflight
+```
+
+Rollback is retention-only. Disable decision and new-session callers while
+keeping the webhook and provider credentials available for already-open
+sessions. Retain migrations 398 and 399, all commitment rows, and all card-vault
+provider evidence. Never update, delete, truncate, or invent a commitment as an
+application rollback mechanism.
+
 ## Role-topology evidence preflight
 
 This is a read-only prerequisite for a later least-privilege role cutover. It
