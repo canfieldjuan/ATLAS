@@ -89,8 +89,9 @@ Max files: 27
   - Readiness reports card required only for residential contacts and ready only
     from provider-confirmed state; settled by projection tests.
   - The slim EOM and full Atlas production ASGI entrypoints mount the expected
-    session/readiness and root webhook routes; settled by entrypoint reachability
-    tests that drive provider-confirmed state through each composition.
+    session/readiness and root webhook routes and explicitly bind their canonical
+    pool factories; settled by entrypoint reachability tests that drive
+    provider-confirmed state through each composition.
   - The controlled migration has apply/verify tooling and is admitted to the EOM
     CI contract; settled by focused migration-runner tests.
 - Reachability proof: `atlas_brain.main_eom:app` routes an authenticated Tracker
@@ -167,10 +168,11 @@ Max files: 27
 - Parked hardening: none
 
 - Root decision: Exercise the full Atlas webhook entrypoint
-- Source trace: `atlas_brain/main.py:1223` mounts the root webhook ->
-  `tests/test_eom_card_vault.py:925` previously exercised only `main_eom.app` ->
-  a signed request must traverse `main.app` and its canonical pool fallback.
-- Upstream files: `tests/test_eom_card_vault.py`.
+- Source trace: `atlas_brain/main.py:1224` mounts the root webhook ->
+  `tests/test_eom_card_vault.py:1053` previously exercised only `main_eom.app` ->
+  `atlas_brain/main.py:1188` now binds the canonical pool factory and a signed
+  request traverses `main.app` through that explicit composition seam.
+- Upstream files: `atlas_brain/main.py`, `tests/test_eom_card_vault.py`.
 - Fix strategy: upstream-root
 - Blocking predicate: claimed-mechanism
 - Disposition: fixed-in
@@ -316,6 +318,9 @@ Parked hardening: none.
   migration-preflight, capability-manifest, and three affected legacy route
   tests: 99 passed under the dependency profile that exposed the CI failure.
 - `python -m ruff check` over all eight changed Python files: passed.
+- The full-Atlas signed-webhook entrypoint test passes through the explicit
+  production pool-factory composition seam; the exact storage maturity-sweep
+  ratchet command passes without changing its baseline.
 - Ruff import/undefined-name checks passed for the new files; fatal Python
   checks passed across every touched Python file; all four new Python files are
   formatter-clean; `py_compile` passed across every touched Python file.
@@ -336,19 +341,19 @@ Parked hardening: none.
 | `atlas_brain/eom_api/config.py` | 71 |
 | `atlas_brain/eom_api/funnel.py` | 54 |
 | `atlas_brain/eom_api/funnel_auth.py` | 35 |
-| `atlas_brain/main.py` | 4 |
+| `atlas_brain/main.py` | 5 |
 | `atlas_brain/main_eom.py` | 3 |
 | `atlas_brain/services/eom_card_vault.py` | 1211 |
 | `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 439 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Vault-Authority.md` | 359 |
+| `plans/PR-EOM-Card-Vault-Authority.md` | 364 |
 | `render.eom.yaml` | 21 |
 | `requirements.eom.txt` | 1 |
 | `scripts/apply_eom_card_vault_schema.py` | 37 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 31 |
 | `tests/test_agent_operations_contract.py` | 27 |
-| `tests/test_eom_card_vault.py` | 1211 |
+| `tests/test_eom_card_vault.py` | 1214 |
 | `tests/test_eom_first_clean_completion.py` | 4 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 190 |
 | `tests/test_eom_funnel_capability_manifest.py` | 44 |
@@ -356,4 +361,4 @@ Parked hardening: none.
 | `tests/test_eom_render_profile.py` | 27 |
 | `tests/test_eom_terms_acceptance.py` | 90 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **4169** |
+| **Total** | **4178** |

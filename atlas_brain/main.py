@@ -1185,6 +1185,7 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+app.state.eom_funnel_card_vault_pool = get_db_pool
 
 
 async def _request_validation_error_handler(

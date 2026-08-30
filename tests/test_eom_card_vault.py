@@ -1092,13 +1092,13 @@ async def test_real_eom_entrypoint_reaches_api_and_root_webhook() -> None:
 @pytest.mark.asyncio
 async def test_full_atlas_entrypoint_reaches_signed_root_webhook(monkeypatch) -> None:
     from atlas_brain import main
-    from atlas_brain.storage import database as database_mod
 
     config = _config()
     state = _State()
     provider = _Provider()
     service = EOMCardVaultService(pool=_Pool(state), provider=provider)
     await service.start_session(token=_token(), public_base_url="https://eom.test")
+    original_pool_factory = main.app.state.eom_funnel_card_vault_pool
 
     def completed_event(payload: bytes, signature: str) -> dict[str, Any]:
         assert payload == b"{}"
@@ -1106,7 +1106,7 @@ async def test_full_atlas_entrypoint_reaches_signed_root_webhook(monkeypatch) ->
         return _completed_event()
 
     provider.construct_event = completed_event  # type: ignore[method-assign]
-    monkeypatch.setattr(database_mod, "get_db_pool", lambda: _Pool(state))
+    main.app.state.eom_funnel_card_vault_pool = lambda: _Pool(state)
     monkeypatch.setitem(
         main.app.dependency_overrides,
         auth_mod.get_eom_funnel_api_config,
@@ -1118,15 +1118,18 @@ async def test_full_atlas_entrypoint_reaches_signed_root_webhook(monkeypatch) ->
         lambda: provider,
     )
 
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=main.app),
-        base_url="http://test",
-    ) as client:
-        response = await client.post(
-            "/webhooks/eom-card-vault",
-            headers={"Stripe-Signature": "valid-signature"},
-            content=b"{}",
-        )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main.app),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/webhooks/eom-card-vault",
+                headers={"Stripe-Signature": "valid-signature"},
+                content=b"{}",
+            )
+    finally:
+        main.app.state.eom_funnel_card_vault_pool = original_pool_factory
 
     assert response.status_code == 200
     assert response.json() == {
