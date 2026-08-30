@@ -36,6 +36,7 @@ from atlas_brain.services.eom_card_vault import (
     EOMCardVaultSignatureError,
     EOMCardVaultUnavailableError,
     StripeEOMCardVaultProvider,
+    eom_card_vault_schema_ready,
     _provider_id,
 )
 from atlas_brain.services.eom_terms_acceptance import (
@@ -404,6 +405,23 @@ def _completed_event() -> dict[str, Any]:
             }
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_schema_attestation_pins_trigger_and_constraint_definitions() -> None:
+    class SchemaPool:
+        async def fetchval(self, query: str) -> bool:
+            assert "trigger.tgtype = expected.trigger_type" in query
+            assert "trigger.tgattr = ''::int2vector" in query
+            assert "trigger.tgqual IS NULL" in query
+            assert "pg_get_constraintdef(actual.oid, true)" in query
+            assert "uq_eom_card_vault_enrollment_candidate" in query
+            assert "UNIQUE (candidate_id)" in query
+            assert "ck_eom_card_vault_session_retry_window" in query
+            assert "ck_eom_card_vault_enrollment_state" in query
+            return True
+
+    assert await eom_card_vault_schema_ready(SchemaPool()) is True
 
 
 def test_card_vault_defaults_disabled_and_requires_a_complete_authority() -> None:

@@ -277,26 +277,156 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                            ('eom_card_vault_sessions'),
                            ('eom_card_vault_events')
                 ),
-                expected_triggers(relation_name, function_name, trigger_name) AS (
+                expected_triggers(
+                    relation_name, function_name, trigger_name, trigger_type
+                ) AS (
                     VALUES
                         ('eom_card_vault_enrollments',
                          'protect_eom_card_vault_enrollment',
-                         'trg_protect_eom_card_vault_enrollment'),
+                         'trg_protect_eom_card_vault_enrollment', 31),
                         ('eom_card_vault_enrollments',
                          'protect_eom_card_vault_enrollment',
-                         'trg_protect_eom_card_vault_enrollment_truncate'),
+                         'trg_protect_eom_card_vault_enrollment_truncate', 34),
                         ('eom_card_vault_sessions',
                          'protect_eom_card_vault_session',
-                         'trg_protect_eom_card_vault_session'),
+                         'trg_protect_eom_card_vault_session', 31),
                         ('eom_card_vault_sessions',
                          'protect_eom_card_vault_session',
-                         'trg_protect_eom_card_vault_session_truncate'),
+                         'trg_protect_eom_card_vault_session_truncate', 34),
                         ('eom_card_vault_events',
                          'protect_eom_card_vault_event',
-                         'trg_protect_eom_card_vault_event'),
+                         'trg_protect_eom_card_vault_event', 31),
                         ('eom_card_vault_events',
                          'protect_eom_card_vault_event',
-                         'trg_protect_eom_card_vault_event_truncate')
+                         'trg_protect_eom_card_vault_event_truncate', 34)
+                ),
+                expected_constraints(
+                    relation_name, constraint_name, constraint_type,
+                    constraint_definition
+                ) AS (
+                    VALUES
+                        ('eom_card_vault_enrollments',
+                         'pk_eom_card_vault_enrollments', 'p',
+                         'PRIMARY KEY (id)'),
+                        ('eom_card_vault_enrollments',
+                         'uq_eom_card_vault_enrollment_candidate', 'u',
+                         'UNIQUE (candidate_id)'),
+                        ('eom_card_vault_enrollments',
+                         'uq_eom_card_vault_enrollment_contact', 'u',
+                         'UNIQUE (contact_id)'),
+                        ('eom_card_vault_enrollments',
+                         'uq_eom_card_vault_stripe_customer', 'u',
+                         'UNIQUE (stripe_customer_id)'),
+                        ('eom_card_vault_enrollments',
+                         'uq_eom_card_vault_setup_intent', 'u',
+                         'UNIQUE (stripe_setup_intent_id)'),
+                        ('eom_card_vault_enrollments',
+                         'uq_eom_card_vault_payment_method', 'u',
+                         'UNIQUE (stripe_payment_method_id)'),
+                        ('eom_card_vault_enrollments',
+                         'fk_eom_card_vault_enrollment_candidate', 'f',
+                         'FOREIGN KEY (candidate_id) REFERENCES '
+                         'eom_post_clean_onboarding_candidates(id) '
+                         'ON DELETE RESTRICT'),
+                        ('eom_card_vault_enrollments',
+                         'fk_eom_card_vault_enrollment_contact', 'f',
+                         'FOREIGN KEY (contact_id) REFERENCES contacts(id) '
+                         'ON DELETE RESTRICT'),
+                        ('eom_card_vault_enrollments',
+                         'fk_eom_card_vault_enrollment_initial_acceptance', 'f',
+                         'FOREIGN KEY (initial_acceptance_id) REFERENCES '
+                         'eom_terms_acceptances(id) ON DELETE RESTRICT'),
+                        ('eom_card_vault_enrollments',
+                         'ck_eom_card_vault_enrollment_context', 'c',
+                         'CHECK (business_context_id::text = '
+                         '''effingham_maids''::text)'),
+                        ('eom_card_vault_enrollments',
+                         'ck_eom_card_vault_enrollment_customer', 'c',
+                         'CHECK (stripe_customer_id IS NULL OR '
+                         'stripe_customer_id::text ~ '
+                         '''^cus_[A-Za-z0-9_]+$''::text)'),
+                        ('eom_card_vault_enrollments',
+                         'ck_eom_card_vault_enrollment_state', 'c',
+                         'CHECK (status::text = ''pending''::text AND '
+                         'stripe_setup_intent_id IS NULL AND '
+                         'stripe_payment_method_id IS NULL AND ready_at IS NULL '
+                         'OR status::text = ''ready''::text AND '
+                         'stripe_customer_id IS NOT NULL AND '
+                         'stripe_customer_id::text ~ '
+                         '''^cus_[A-Za-z0-9_]+$''::text AND '
+                         'stripe_setup_intent_id IS NOT NULL AND '
+                         'stripe_setup_intent_id::text ~ '
+                         '''^seti_[A-Za-z0-9_]+$''::text AND '
+                         'stripe_payment_method_id IS NOT NULL AND '
+                         'stripe_payment_method_id::text ~ '
+                         '''^pm_[A-Za-z0-9_]+$''::text AND ready_at IS NOT NULL)'),
+                        ('eom_card_vault_sessions',
+                         'pk_eom_card_vault_sessions', 'p',
+                         'PRIMARY KEY (id)'),
+                        ('eom_card_vault_sessions',
+                         'uq_eom_card_vault_checkout_session', 'u',
+                         'UNIQUE (stripe_checkout_session_id)'),
+                        ('eom_card_vault_sessions',
+                         'fk_eom_card_vault_session_enrollment', 'f',
+                         'FOREIGN KEY (enrollment_id) REFERENCES '
+                         'eom_card_vault_enrollments(id) ON DELETE RESTRICT'),
+                        ('eom_card_vault_sessions',
+                         'fk_eom_card_vault_session_acceptance', 'f',
+                         'FOREIGN KEY (acceptance_id) REFERENCES '
+                         'eom_terms_acceptances(id) ON DELETE RESTRICT'),
+                        ('eom_card_vault_sessions',
+                         'ck_eom_card_vault_session_return_urls', 'c',
+                         'CHECK (octet_length(checkout_success_url) >= 1 AND '
+                         'octet_length(checkout_success_url) <= 2048 AND '
+                         'octet_length(checkout_cancel_url) >= 1 AND '
+                         'octet_length(checkout_cancel_url) <= 2048 AND '
+                         'checkout_success_url ~~ '
+                         '''https://%?cardVault=success''::text AND '
+                         'checkout_cancel_url ~~ '
+                         '''https://%?cardVault=cancelled''::text AND '
+                         'checkout_success_url <> checkout_cancel_url)'),
+                        ('eom_card_vault_sessions',
+                         'ck_eom_card_vault_session_retry_window', 'c',
+                         'CHECK (provider_retry_until > created_at AND '
+                         'provider_retry_until <= '
+                         '(created_at + ''02:00:00''::interval))'),
+                        ('eom_card_vault_sessions',
+                         'ck_eom_card_vault_session_state', 'c',
+                         'CHECK (state::text = ''creating''::text AND '
+                         'stripe_checkout_session_id IS NULL AND '
+                         'checkout_expires_at IS NULL OR '
+                         'state::text = ''open''::text AND '
+                         'stripe_checkout_session_id IS NOT NULL AND '
+                         'stripe_checkout_session_id::text ~ '
+                         '''^cs_[A-Za-z0-9_]+$''::text AND '
+                         'checkout_expires_at IS NOT NULL AND '
+                         'checkout_expires_at > created_at)'),
+                        ('eom_card_vault_events',
+                         'pk_eom_card_vault_events', 'p',
+                         'PRIMARY KEY (stripe_event_id)'),
+                        ('eom_card_vault_events',
+                         'uq_eom_card_vault_event_session', 'u',
+                         'UNIQUE (session_id)'),
+                        ('eom_card_vault_events',
+                         'fk_eom_card_vault_event_enrollment', 'f',
+                         'FOREIGN KEY (enrollment_id) REFERENCES '
+                         'eom_card_vault_enrollments(id) ON DELETE RESTRICT'),
+                        ('eom_card_vault_events',
+                         'fk_eom_card_vault_event_session', 'f',
+                         'FOREIGN KEY (session_id) REFERENCES '
+                         'eom_card_vault_sessions(id) ON DELETE RESTRICT'),
+                        ('eom_card_vault_events',
+                         'ck_eom_card_vault_event_id', 'c',
+                         'CHECK (stripe_event_id::text ~ '
+                         '''^evt_[A-Za-z0-9_]+$''::text)'),
+                        ('eom_card_vault_events',
+                         'ck_eom_card_vault_event_setup_intent', 'c',
+                         'CHECK (stripe_setup_intent_id::text ~ '
+                         '''^seti_[A-Za-z0-9_]+$''::text)'),
+                        ('eom_card_vault_events',
+                         'ck_eom_card_vault_event_payment_method', 'c',
+                         'CHECK (stripe_payment_method_id::text ~ '
+                         '''^pm_[A-Za-z0-9_]+$''::text)')
                 ),
                 expected_runtime_columns(relation_name, column_name, privilege) AS (
                     VALUES
@@ -456,9 +586,73 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                           AND trigger.tgname = expected.trigger_name
                           AND NOT trigger.tgisinternal
                           AND trigger.tgenabled = 'O'
+                          AND trigger.tgtype = expected.trigger_type
+                          AND trigger.tgattr = ''::int2vector
+                          AND trigger.tgnargs = 0
+                          AND trigger.tgqual IS NULL
                           AND NOT function.prosecdef
+                          AND function.pronargs = 0
+                          AND function.prorettype = 'trigger'::regtype
+                          AND function.proconfig = ARRAY[
+                              format(
+                                  'search_path=pg_catalog, %I, pg_temp',
+                                  current_schema()
+                              )
+                          ]
                           AND owner.rolname = 'atlas_eom_handoff_owner'
                     )
+                )
+                AND (
+                    SELECT count(*)
+                    FROM pg_trigger AS trigger
+                    JOIN pg_class AS relation ON relation.oid = trigger.tgrelid
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = current_schema()
+                      AND relation.relname IN (
+                          SELECT name FROM expected_relations
+                      )
+                      AND NOT trigger.tgisinternal
+                ) = (SELECT count(*) FROM expected_triggers)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM expected_constraints AS expected
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint AS actual
+                        JOIN pg_class AS relation
+                          ON relation.oid = actual.conrelid
+                        JOIN pg_namespace AS namespace
+                          ON namespace.oid = relation.relnamespace
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname = expected.relation_name
+                          AND actual.conname = expected.constraint_name
+                          AND actual.contype = expected.constraint_type
+                          AND actual.convalidated
+                          AND pg_get_constraintdef(actual.oid, true)
+                              = expected.constraint_definition
+                    )
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_constraint AS actual
+                    JOIN pg_class AS relation ON relation.oid = actual.conrelid
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = current_schema()
+                      AND relation.relname IN (
+                          SELECT name FROM expected_relations
+                      )
+                      AND actual.contype IN ('p', 'u', 'f', 'c')
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM expected_constraints AS expected
+                          WHERE expected.relation_name = relation.relname
+                            AND expected.constraint_name = actual.conname
+                            AND expected.constraint_type = actual.contype
+                            AND expected.constraint_definition
+                                = pg_get_constraintdef(actual.oid, true)
+                      )
                 )
                 """
             )

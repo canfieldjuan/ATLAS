@@ -2137,6 +2137,51 @@ async def test_card_vault_migration_applies_with_guarded_runtime_acl() -> None:
         )
         assert await eom_card_vault_schema_ready(pool) is True
         await dba.execute(
+            """
+            CREATE OR REPLACE TRIGGER trg_protect_eom_card_vault_enrollment
+            BEFORE INSERT ON eom_card_vault_enrollments
+            FOR EACH ROW EXECUTE FUNCTION protect_eom_card_vault_enrollment()
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            CREATE OR REPLACE TRIGGER trg_protect_eom_card_vault_enrollment
+            BEFORE INSERT OR UPDATE OR DELETE ON eom_card_vault_enrollments
+            FOR EACH ROW EXECUTE FUNCTION protect_eom_card_vault_enrollment()
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            RENAME CONSTRAINT uq_eom_card_vault_enrollment_candidate
+            TO drifted_eom_card_vault_enrollment_candidate
+            """
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            ADD CONSTRAINT uq_eom_card_vault_enrollment_candidate
+            UNIQUE (contact_id)
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            DROP CONSTRAINT uq_eom_card_vault_enrollment_candidate
+            """
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            RENAME CONSTRAINT drifted_eom_card_vault_enrollment_candidate
+            TO uq_eom_card_vault_enrollment_candidate
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
             "REVOKE UPDATE (ready_at) ON eom_card_vault_enrollments FROM atlas"
         )
         assert await eom_card_vault_schema_ready(pool) is False
