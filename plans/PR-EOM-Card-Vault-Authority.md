@@ -256,6 +256,24 @@ Max files: 27
 - Max files: 27
 - Parked hardening: none
 
+- Root decision: Fence every Stripe write behind final contact admission
+- Source trace: `start_session` created the Stripe Customer after the reservation
+  transaction released its contact lock and before the materializer checked its
+  retry deadline -> an archive or expired retry could reach that provider write
+  -> the materializer now locks and revalidates the contact first, then locks the
+  enrollment/session, checks the deadline, and creates and stores both provider
+  resources inside the same fenced transaction.
+- Upstream files: `atlas_brain/services/eom_card_vault.py`,
+  `tests/test_eom_card_vault.py`, `tests/test_eom_terms_acceptance.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: data
+- Disposition: fixed-in
+- Allowed files: `atlas_brain/services/eom_card_vault.py`,
+  `tests/test_eom_card_vault.py`, `tests/test_eom_terms_acceptance.py`,
+  `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
 ### Guard class-closure declaration
 
 - Stripe credential and provider-object inputs are OPEN because environment
@@ -363,14 +381,17 @@ identifiers, exact redirect parameters, and bounded retry deadline before making
 network calls. Those identifiers become Stripe
 idempotency keys for a hosted Checkout Session in setup mode. Session
 materialization and webhook confirmation share a per-enrollment advisory lock;
-the materializer re-reads the row under lock and either returns an already-ready
-projection or holds the fence through Checkout creation and storage. The browser
-receives only the hosted URL; the return URL never marks readiness. A dedicated
-EOM webhook verifies Stripe's signature over the raw body, validates the
-completed Checkout Session and retrieved SetupIntent against the enrollment,
-records the event, and advances the row monotonically even when new issuance is
-paused. A private read model derives whether a card is required and
-provider-confirmed independently of later Terms reacceptance.
+the materializer locks and revalidates the current contact before locking and
+re-reading the enrollment/session, preserving the reservation path's row-lock
+order, and checks the durable retry deadline before any provider write. It then
+holds that contact and enrollment fence through Stripe Customer and Checkout
+creation plus storage. The browser receives only the hosted URL;
+the return URL never marks readiness. A dedicated EOM webhook verifies Stripe's
+signature over the raw body, validates the completed Checkout Session and
+retrieved SetupIntent against the enrollment, records the event, and advances
+the row monotonically even when new issuance is paused. A private read model
+derives whether a card is required and provider-confirmed independently of later
+Terms reacceptance.
 
 ## Intentional
 
@@ -422,6 +443,13 @@ Parked hardening: none.
 - The disposable PostgreSQL contact-admission probe passes both lock orderings:
   reservation-first makes a concurrent archive wait, while archive-first makes
   session admission re-read the archived row and reject before provider I/O.
+- The expanded PostgreSQL provider-admission probe passes both materialization
+  orderings: materialization-first keeps archive blocked through Customer and
+  Checkout creation, while archive-first after reservation rejects with zero
+  provider effects. The focused expired-retry test also proves a failed Customer
+  store cannot cause a second provider write after the durable deadline; the
+  mutable-contact boundary table rejects every final-admission field before a
+  provider effect.
 - Cold diff audit: every production, schema, deployment, operations, and test
   change traces to the Problem-derived contract; no required item is absent and
   no declared non-scope surface changed.
@@ -441,22 +469,22 @@ Parked hardening: none.
 | `atlas_brain/eom_api/funnel_auth.py` | 60 |
 | `atlas_brain/main.py` | 5 |
 | `atlas_brain/main_eom.py` | 3 |
-| `atlas_brain/services/eom_card_vault.py` | 1800 |
+| `atlas_brain/services/eom_card_vault.py` | 1830 |
 | `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 462 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Vault-Authority.md` | 465 |
+| `plans/PR-EOM-Card-Vault-Authority.md` | 485 |
 | `render.eom.yaml` | 21 |
 | `requirements.eom.txt` | 1 |
 | `scripts/apply_eom_card_vault_schema.py` | 37 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 31 |
 | `tests/test_agent_operations_contract.py` | 27 |
-| `tests/test_eom_card_vault.py` | 1660 |
+| `tests/test_eom_card_vault.py` | 1700 |
 | `tests/test_eom_first_clean_completion.py` | 4 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 190 |
 | `tests/test_eom_funnel_capability_manifest.py` | 44 |
 | `tests/test_eom_missed_call_recovery.py` | 2 |
 | `tests/test_eom_render_profile.py` | 27 |
-| `tests/test_eom_terms_acceptance.py` | 366 |
+| `tests/test_eom_terms_acceptance.py` | 650 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **5689** |
+| **Total** | **6063** |

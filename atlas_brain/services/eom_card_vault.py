@@ -1036,40 +1036,38 @@ class EOMCardVaultService:
     async def _store_customer(
         self,
         *,
+        connection: Any,
         enrollment_id: UUID,
         customer_id: str,
     ) -> dict[str, Any]:
         try:
-            async with self.pool.transaction() as connection:
+            enrollment = await connection.fetchrow(
+                """
+                /* eom_card_vault_store_customer */
+                UPDATE eom_card_vault_enrollments
+                SET stripe_customer_id = $2
+                WHERE id = $1 AND stripe_customer_id IS NULL
+                RETURNING *
+                """,
+                enrollment_id,
+                customer_id,
+            )
+            if enrollment is None:
                 enrollment = await connection.fetchrow(
                     """
-                    /* eom_card_vault_store_customer */
-                    UPDATE eom_card_vault_enrollments
-                    SET stripe_customer_id = $2
-                    WHERE id = $1 AND stripe_customer_id IS NULL
-                    RETURNING *
+                    /* eom_card_vault_existing_customer */
+                    SELECT * FROM eom_card_vault_enrollments
+                    WHERE id = $1
+                    FOR UPDATE
                     """,
                     enrollment_id,
-                    customer_id,
                 )
-                if enrollment is None:
-                    enrollment = await connection.fetchrow(
-                        """
-                        /* eom_card_vault_existing_customer */
-                        SELECT * FROM eom_card_vault_enrollments
-                        WHERE id = $1
-                        FOR UPDATE
-                        """,
-                        enrollment_id,
-                    )
-                if (
-                    enrollment is None
-                    or str(enrollment["stripe_customer_id"]) != customer_id
-                ):
-                    raise EOMCardVaultConflictError(
-                        "Stored Stripe customer does not match"
-                    )
-                return dict(enrollment)
+            if (
+                enrollment is None
+                or str(enrollment["stripe_customer_id"]) != customer_id
+            ):
+                raise EOMCardVaultConflictError("Stored Stripe customer does not match")
+            return dict(enrollment)
         except EOMCardVaultError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
@@ -1153,6 +1151,48 @@ class EOMCardVaultService:
                 "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
                 f"eom-card-vault:{enrollment_id}",
             )
+            contact = await connection.fetchrow(
+                """
+                /* eom_card_vault_fenced_contact */
+                SELECT contact.business_context_id AS contact_business_context_id,
+                       contact.contact_type AS materialization_contact_type,
+                       contact.status AS materialization_contact_status,
+                       contact.customer_type AS materialization_customer_type,
+                       contact.full_name AS materialization_full_name,
+                       contact.email AS materialization_email,
+                       invitation.customer_name AS invitation_customer_name,
+                       invitation.recipient_email AS invitation_recipient_email
+                FROM eom_card_vault_enrollments AS enrollment
+                JOIN eom_card_vault_sessions AS session
+                  ON session.enrollment_id = enrollment.id
+                JOIN contacts AS contact ON contact.id = enrollment.contact_id
+                JOIN eom_terms_acceptances AS acceptance
+                  ON acceptance.id = session.acceptance_id
+                 AND acceptance.contact_id = contact.id
+                JOIN eom_terms_invitations AS invitation
+                  ON invitation.id = acceptance.invitation_id
+                 AND invitation.contact_id = contact.id
+                WHERE enrollment.id = $1
+                  AND session.id = $2
+                FOR UPDATE OF contact
+                """,
+                enrollment_id,
+                session_row_id,
+            )
+            if contact is None:
+                raise EOMCardVaultNotFoundError("Card-vault session was not found")
+            if (
+                str(contact["contact_business_context_id"]) != "effingham_maids"
+                or str(contact["materialization_contact_type"]) != "customer"
+                or str(contact["materialization_contact_status"]) != "active"
+                or str(contact["materialization_customer_type"]) != "residential"
+                or str(contact["materialization_full_name"]).strip()
+                != str(contact["invitation_customer_name"])
+                or str(contact["materialization_email"] or "").strip().lower()
+                != str(contact["invitation_recipient_email"])
+                or not str(contact["materialization_email"] or "").strip()
+            ):
+                raise EOMCardVaultNotFoundError("Card setup is unavailable")
             subject = await connection.fetchrow(
                 """
                 /* eom_card_vault_fenced_session */
@@ -1189,11 +1229,6 @@ class EOMCardVaultService:
                 raise EOMCardVaultConflictError(
                     "Stored card-vault enrollment state is invalid"
                 )
-            customer_id = _provider_id(
-                enrollment["stripe_customer_id"],
-                prefix="cus_",
-                label="customer",
-            )
             checkout_success_url = _reserved_return_url(
                 subject["checkout_success_url"], "success"
             )
@@ -1202,6 +1237,11 @@ class EOMCardVaultService:
             )
             session_state = str(subject["session_state"])
             if session_state == "open":
+                customer_id = _provider_id(
+                    enrollment["stripe_customer_id"],
+                    prefix="cus_",
+                    label="customer",
+                )
                 checkout_session_id = _provider_id(
                     subject["stripe_checkout_session_id"],
                     prefix="cs_",
@@ -1255,6 +1295,38 @@ class EOMCardVaultService:
                 raise EOMCardVaultUnavailableError(
                     "Card setup requires provider reconciliation before retry"
                 )
+            customer_id = enrollment["stripe_customer_id"]
+            if customer_id is None:
+                customer_metadata = {
+                    "source": EOM_CARD_VAULT_SOURCE,
+                    "enrollment_id": str(enrollment["id"]),
+                    "contact_id": str(enrollment["contact_id"]),
+                    "candidate_id": str(enrollment["candidate_id"]),
+                }
+                customer = await provider.create_customer(
+                    name=str(contact["invitation_customer_name"]),
+                    email=str(contact["invitation_recipient_email"]),
+                    metadata=customer_metadata,
+                    idempotency_key=f"eom-card-vault-customer:{enrollment['id']}",
+                )
+                customer_id = _provider_id(
+                    _value(customer, "id"), prefix="cus_", label="customer"
+                )
+                returned_customer_metadata = _value(customer, "metadata")
+                if not isinstance(returned_customer_metadata, Mapping) or any(
+                    returned_customer_metadata.get(key) != value
+                    for key, value in customer_metadata.items()
+                ):
+                    raise EOMCardVaultConflictError(
+                        "Stripe customer subject does not match"
+                    )
+                enrollment = await self._store_customer(
+                    connection=connection,
+                    enrollment_id=UUID(str(enrollment["id"])),
+                    customer_id=customer_id,
+                )
+            else:
+                customer_id = _provider_id(customer_id, prefix="cus_", label="customer")
             created = await provider.create_checkout_session(
                 mode="setup",
                 locale="en",
@@ -1334,7 +1406,7 @@ class EOMCardVaultService:
             raise EOMCardVaultValidationError(
                 "Card setup return URL is invalid"
             ) from exc
-        eligibility, enrollment, session_row, reused = await self._reserve_session(
+        _eligibility, enrollment, session_row, reused = await self._reserve_session(
             authenticated,
             checkout_success_url=checkout_success_url,
             checkout_cancel_url=checkout_cancel_url,
@@ -1348,37 +1420,6 @@ class EOMCardVaultService:
             )
         assert session_row is not None
         try:
-            customer_id = enrollment["stripe_customer_id"]
-            if customer_id is None:
-                customer_metadata = {
-                    "source": EOM_CARD_VAULT_SOURCE,
-                    "enrollment_id": str(enrollment["id"]),
-                    "contact_id": str(enrollment["contact_id"]),
-                    "candidate_id": str(enrollment["candidate_id"]),
-                }
-                customer = await provider.create_customer(
-                    name=str(eligibility["invitation_customer_name"]),
-                    email=str(eligibility["invitation_recipient_email"]),
-                    metadata=customer_metadata,
-                    idempotency_key=f"eom-card-vault-customer:{enrollment['id']}",
-                )
-                customer_id = _provider_id(
-                    _value(customer, "id"), prefix="cus_", label="customer"
-                )
-                returned_customer_metadata = _value(customer, "metadata")
-                if not isinstance(returned_customer_metadata, Mapping) or any(
-                    returned_customer_metadata.get(key) != value
-                    for key, value in customer_metadata.items()
-                ):
-                    raise EOMCardVaultConflictError(
-                        "Stripe customer subject does not match"
-                    )
-                enrollment = await self._store_customer(
-                    enrollment_id=UUID(str(enrollment["id"])),
-                    customer_id=customer_id,
-                )
-            else:
-                customer_id = _provider_id(customer_id, prefix="cus_", label="customer")
             return await self._materialize_session(
                 provider=provider,
                 enrollment_id=UUID(str(enrollment["id"])),

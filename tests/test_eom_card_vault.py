@@ -40,8 +40,8 @@ from atlas_brain.services.eom_card_vault import (
     EOMCardVaultUnavailableError,
     EOMCardVaultValidationError,
     StripeEOMCardVaultProvider,
-    eom_card_vault_schema_ready,
     _provider_id,
+    eom_card_vault_schema_ready,
 )
 from atlas_brain.services.eom_terms_acceptance import (
     AuthenticatedEOMTermsToken,
@@ -196,6 +196,33 @@ class _Connection:
             }
             state.sessions.append(row)
             return dict(row)
+        if "eom_card_vault_fenced_contact" in query:
+            if state.enrollment is None:
+                return None
+            eligibility = state.eligibility or {}
+            session = next(
+                (
+                    item
+                    for item in state.sessions
+                    if item["id"] == args[1]
+                    and item["enrollment_id"] == state.enrollment["id"]
+                ),
+                None,
+            )
+            if session is None:
+                return None
+            return {
+                "contact_business_context_id": eligibility.get("business_context_id"),
+                "materialization_contact_type": eligibility.get("contact_type"),
+                "materialization_contact_status": eligibility.get("contact_status"),
+                "materialization_customer_type": eligibility.get("customer_type"),
+                "materialization_full_name": eligibility.get("full_name"),
+                "materialization_email": eligibility.get("email"),
+                "invitation_customer_name": eligibility.get("invitation_customer_name"),
+                "invitation_recipient_email": eligibility.get(
+                    "invitation_recipient_email"
+                ),
+            }
         if "eom_card_vault_fenced_session" in query:
             if state.enrollment is None:
                 return None
@@ -679,7 +706,7 @@ async def test_session_creation_is_setup_only_and_concurrency_idempotent() -> No
     assert readiness["cardRequired"] is True
     assert readiness["cardReady"] is False
     assert readiness["reason"] == "pending"
-    assert len(provider.customer_calls) == 2
+    assert len(provider.customer_calls) == 1
     assert {call["idempotency_key"] for call in provider.customer_calls} == {
         f"eom-card-vault-customer:{_ENROLLMENT_ID}"
     }
@@ -950,6 +977,69 @@ async def test_creating_session_retry_stops_at_reserved_deadline() -> None:
         await service.start_session(token=_token(), public_base_url="https://eom.test")
 
     assert len(provider.session_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("business_context_id", "other"),
+        ("contact_type", "lead"),
+        ("contact_status", "archived"),
+        ("customer_type", "commercial"),
+        ("full_name", "Another Customer"),
+        ("email", "other@example.test"),
+        ("email", None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_final_materialization_revalidates_mutable_contact_before_provider(
+    field: str,
+    value: Any,
+) -> None:
+    state = _State()
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+    _, enrollment, session, reused = await service._reserve_session(
+        _token(),
+        checkout_success_url="https://eom.test?cardVault=success",
+        checkout_cancel_url="https://eom.test?cardVault=cancelled",
+    )
+    assert session is not None
+    assert state.eligibility is not None
+    state.eligibility[field] = value
+
+    with pytest.raises(EOMCardVaultNotFoundError):
+        await service._materialize_session(
+            provider=provider,
+            enrollment_id=UUID(str(enrollment["id"])),
+            session_row_id=UUID(str(session["id"])),
+            reused=reused,
+        )
+
+    assert provider.customer_calls == []
+    assert provider.session_calls == []
+
+
+@pytest.mark.asyncio
+async def test_expired_customer_retry_stops_before_any_second_provider_write() -> None:
+    state = _State()
+    state.fail_customer_store_once = True
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+
+    with pytest.raises(EOMCardVaultUnavailableError):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+    assert state.eligibility is not None
+    state.eligibility["database_now"] = _NOW + timedelta(hours=1)
+
+    with pytest.raises(
+        EOMCardVaultUnavailableError,
+        match="requires provider reconciliation",
+    ):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+
+    assert len(provider.customer_calls) == 1
+    assert provider.session_calls == []
 
 
 @pytest.mark.asyncio
