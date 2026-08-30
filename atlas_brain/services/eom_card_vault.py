@@ -927,7 +927,7 @@ class EOMCardVaultService:
                     LEFT JOIN eom_post_clean_onboarding_candidates AS candidate
                       ON candidate.contact_id = contact.id
                     WHERE invitation.id = $1
-                    FOR UPDATE OF invitation
+                    FOR UPDATE OF invitation, contact
                     """,
                     authenticated.invitation_id,
                 )

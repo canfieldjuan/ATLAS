@@ -64,10 +64,11 @@ Max files: 27
     settled by idempotency keys, row locking, and replay/concurrency tests.
     The admitted execution model is any number of requests for the same current
     candidate/acceptance, including cancellation or process loss at every await.
-    PostgreSQL serializes reservation with the invitation row lock, unique
-    candidate/contact enrollment constraints, and a locked latest-session read;
-    it commits stable enrollment/session UUIDs, exact success/cancel URLs, and a
-    bounded provider-retry deadline before releasing those reservation locks.
+    PostgreSQL serializes eligibility admission with invitation and mutable
+    contact row locks, unique candidate/contact enrollment constraints, and a
+    locked latest-session read; it commits stable enrollment/session UUIDs,
+    exact success/cancel URLs, and a bounded provider-retry deadline before
+    releasing those reservation locks.
     Checkout materialization then reacquires the same per-enrollment advisory
     fence used by webhook confirmation, re-reads the enrollment/session under
     row locks, and holds that fence through provider retrieval/creation and the
@@ -239,6 +240,22 @@ Max files: 27
 - Max files: 27
 - Parked hardening: none
 
+- Root decision: Lock mutable contact state during eligibility admission
+- Source trace: the eligibility join read active/type/identity fields from
+  `contacts` but locked only the invitation -> a concurrent contact mutation
+  could commit against the same stale admission snapshot -> the query now locks
+  both invitation and contact before existing validation and reservation.
+- Upstream files: `atlas_brain/services/eom_card_vault.py`,
+  `tests/test_eom_terms_acceptance.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: data
+- Disposition: fixed-in
+- Allowed files: `atlas_brain/services/eom_card_vault.py`,
+  `tests/test_eom_terms_acceptance.py`,
+  `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
 ### Guard class-closure declaration
 
 - Stripe credential and provider-object inputs are OPEN because environment
@@ -297,8 +314,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Default-session/default-context probe: default/unset configuration leaves all
   existing applications bootable while the card-vault routes fail closed and
   produce no provider or database side effect.
-- Side-effect ordering: eligibility and current Terms are locked and validated,
-  and stable operation identifiers are committed before provider creation;
+- Side-effect ordering: the invitation, mutable contact eligibility, and current
+  Terms are locked and validated, and stable operation identifiers are committed
+  before provider creation;
   Checkout materialization re-reads pending state under the same per-enrollment
   fence as the monotonic ready update; provider confirmation is validated before
   taking that fence; unrelated/invalid events write nothing.
@@ -338,10 +356,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 Atlas persists one enrollment keyed to the post-clean candidate and contact; its
 initial acceptance is immutable audit evidence rather than the lifetime of the
 saved card. Each hosted-session attempt records the then-current Terms
-acceptance. The public route authenticates the existing Terms token, revalidates
-all persisted relationships under a transaction, and commits the enrollment and
-stable provider-operation identifiers, exact redirect parameters, and bounded
-retry deadline before making network calls. Those identifiers become Stripe
+acceptance. The public route authenticates the existing Terms token, locks the
+invitation and mutable contact row, revalidates all persisted relationships in
+that transaction, and commits the enrollment and stable provider-operation
+identifiers, exact redirect parameters, and bounded retry deadline before making
+network calls. Those identifiers become Stripe
 idempotency keys for a hosted Checkout Session in setup mode. Session
 materialization and webhook confirmation share a per-enrollment advisory lock;
 the materializer re-reads the row under lock and either returns an already-ready
@@ -400,6 +419,9 @@ Parked hardening: none.
 - The full card-vault module passes 62 tests; its delayed-webhook fence and
   2,048-byte derived-return-URL boundary probes also pass in the slim EOM
   dependency profile.
+- The disposable PostgreSQL contact-admission probe passes both lock orderings:
+  reservation-first makes a concurrent archive wait, while archive-first makes
+  session admission re-read the archived row and reject before provider I/O.
 - Cold diff audit: every production, schema, deployment, operations, and test
   change traces to the Problem-derived contract; no required item is absent and
   no declared non-scope surface changed.
@@ -423,7 +445,7 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 462 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Vault-Authority.md` | 450 |
+| `plans/PR-EOM-Card-Vault-Authority.md` | 465 |
 | `render.eom.yaml` | 21 |
 | `requirements.eom.txt` | 1 |
 | `scripts/apply_eom_card_vault_schema.py` | 37 |
@@ -435,6 +457,6 @@ Parked hardening: none.
 | `tests/test_eom_funnel_capability_manifest.py` | 44 |
 | `tests/test_eom_missed_call_recovery.py` | 2 |
 | `tests/test_eom_render_profile.py` | 27 |
-| `tests/test_eom_terms_acceptance.py` | 90 |
+| `tests/test_eom_terms_acceptance.py` | 366 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **5398** |
+| **Total** | **5689** |

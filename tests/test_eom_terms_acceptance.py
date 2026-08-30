@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import os
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,6 +18,11 @@ from fastapi import FastAPI
 from atlas_brain.eom_api import funnel as funnel_mod
 from atlas_brain.eom_api import funnel_auth as funnel_auth_mod
 from atlas_brain.eom_api.config import EOMFunnelConfig
+from atlas_brain.services.eom_card_vault import (
+    EOMCardVaultNotFoundError,
+    EOMCardVaultService,
+    eom_card_vault_schema_ready,
+)
 from atlas_brain.services.eom_public_onboarding_tokens import (
     format_eom_public_onboarding_token,
 )
@@ -36,12 +41,10 @@ from atlas_brain.services.eom_terms_acceptance import (
     render_eom_terms_executed_copy,
     render_eom_terms_invitation,
 )
-from atlas_brain.services.eom_card_vault import eom_card_vault_schema_ready
 from atlas_brain.services.eom_terms_authority import (
     EOMTermsAuthority,
     eom_terms_authority_schema_ready,
 )
-
 
 _NOW = datetime(2026, 8, 28, 14, 30, tzinfo=timezone.utc)
 _CONTACT_ID = UUID("11111111-1111-4111-8111-111111111111")
@@ -155,6 +158,88 @@ class _NoDeliveryService(EOMTermsAcceptanceService):
             row = await self._delivery_by_id(connection, delivery_id)
         assert row is not None
         return dict(row), False
+
+
+class _EligibilityFenceConnection:
+    def __init__(
+        self,
+        connection: Any,
+        *,
+        started: asyncio.Event,
+        locked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self._connection = connection
+        self._started = started
+        self._locked = locked
+        self._release = release
+
+    async def execute(self, query: str, *args: Any) -> Any:
+        return await self._connection.execute(query, *args)
+
+    async def fetchrow(self, query: str, *args: Any) -> Any:
+        if "eom_card_vault_eligibility" not in query:
+            return await self._connection.fetchrow(query, *args)
+        self._started.set()
+        row = await self._connection.fetchrow(query, *args)
+        self._locked.set()
+        await self._release.wait()
+        return row
+
+
+class _EligibilityFencePool:
+    is_initialized = True
+
+    def __init__(
+        self,
+        pool: _AsyncpgServicePool,
+        *,
+        started: asyncio.Event,
+        locked: asyncio.Event,
+        release: asyncio.Event,
+    ) -> None:
+        self._pool = pool
+        self._started = started
+        self._locked = locked
+        self._release = release
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._pool.transaction() as connection:
+            yield _EligibilityFenceConnection(
+                connection,
+                started=self._started,
+                locked=self._locked,
+                release=self._release,
+            )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pool, name)
+
+
+class _NoCardVaultProviderEffects:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def create_customer(self, **_kwargs: Any) -> Any:
+        self.calls.append("create_customer")
+        raise AssertionError("provider effect must not run")
+
+    async def retrieve_customer(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.calls.append("retrieve_customer")
+        raise AssertionError("provider effect must not run")
+
+    async def create_checkout_session(self, **_kwargs: Any) -> Any:
+        self.calls.append("create_checkout_session")
+        raise AssertionError("provider effect must not run")
+
+    async def retrieve_checkout_session(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.calls.append("retrieve_checkout_session")
+        raise AssertionError("provider effect must not run")
+
+    async def retrieve_setup_intent(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.calls.append("retrieve_setup_intent")
+        raise AssertionError("provider effect must not run")
 
 
 def _database_url_or_skip(name: str) -> str:
@@ -2271,6 +2356,194 @@ async def test_card_vault_migration_applies_with_guarded_runtime_acl() -> None:
         assert await eom_card_vault_schema_ready(pool) is True
         with pytest.raises(asyncpg.RaiseError, match="event evidence is append-only"):
             await dba.execute("TRUNCATE eom_card_vault_events")
+
+
+@pytest.mark.asyncio
+async def test_card_vault_reservation_serializes_contact_eligibility() -> None:
+    async with _real_terms_store() as (pool, dba, schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            "GRANT SELECT ON TABLE "
+            f'"{schema}".eom_post_clean_onboarding_candidates TO atlas'
+        )
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (398, '398_eom_card_vault')"
+        )
+        await _publish(
+            EOMTermsAuthority(pool=pool),
+            label="card-vault-lock.1",
+            material=True,
+            marker="card-vault-lock",
+        )
+        terms = EOMTermsAcceptanceService(pool=pool)
+
+        async def seed_eligible_subject(
+            *, contact_id: UUID, email: str, request_key: str
+        ) -> tuple[AuthenticatedEOMTermsToken, UUID]:
+            await _seed_customer(dba, contact_id=contact_id, email=email)
+            invitation = await terms.issue_and_send(
+                request_key=request_key,
+                contact_id=contact_id,
+                locale="en",
+                actor_id=7,
+                actor_name="Juan",
+                public_base_url="https://example.test/onboarding",
+                hmac_secret=_SECRET,
+                sender=_RecordingSender(),
+            )
+            authenticated = authenticate_eom_terms_token(
+                token=format_eom_terms_token(
+                    invitation_id=UUID(invitation["invitationId"]),
+                    secret=_SECRET,
+                ),
+                secret=_SECRET,
+            )
+            await terms.accept_and_send(
+                token=authenticated,
+                signer_name="Card Vault Signer",
+                terms_accepted=True,
+                additional_work_accepted=True,
+                client_ip="192.0.2.40",
+                sender=_RecordingSender(),
+            )
+            candidate_id = uuid4()
+            await dba.execute(
+                """
+                INSERT INTO eom_post_clean_onboarding_candidates (
+                    id, completion_receipt_id, contact_id, handoff_id
+                ) VALUES ($1, $2, $3, $4)
+                """,
+                candidate_id,
+                uuid4(),
+                contact_id,
+                uuid4(),
+            )
+            return authenticated, candidate_id
+
+        reservation_first_contact = uuid4()
+        (
+            reservation_first_token,
+            reservation_first_candidate,
+        ) = await seed_eligible_subject(
+            contact_id=reservation_first_contact,
+            email="reservation-first@example.com",
+            request_key="card-vault-lock-reservation-first",
+        )
+        eligibility_started = asyncio.Event()
+        contact_locked = asyncio.Event()
+        release_reservation = asyncio.Event()
+        reservation_service = EOMCardVaultService(
+            pool=_EligibilityFencePool(
+                pool,
+                started=eligibility_started,
+                locked=contact_locked,
+                release=release_reservation,
+            )
+        )
+        reservation_task = asyncio.create_task(
+            reservation_service._reserve_session(
+                reservation_first_token,
+                checkout_success_url=(
+                    "https://example.test/onboarding?cardVault=success"
+                ),
+                checkout_cancel_url=(
+                    "https://example.test/onboarding?cardVault=cancelled"
+                ),
+            )
+        )
+        await asyncio.wait_for(contact_locked.wait(), timeout=2)
+        archive_started = asyncio.Event()
+
+        async def archive_after_reservation_lock() -> None:
+            async with pool.raw_pool.acquire() as connection:
+                archive_started.set()
+                await connection.execute(
+                    "UPDATE contacts SET status = 'archived' WHERE id = $1",
+                    reservation_first_contact,
+                )
+
+        archive_task = asyncio.create_task(archive_after_reservation_lock())
+        await asyncio.wait_for(archive_started.wait(), timeout=2)
+        await asyncio.sleep(0.05)
+        archive_waited_for_reservation = not archive_task.done()
+        release_reservation.set()
+        eligibility, enrollment, session, reused = await asyncio.wait_for(
+            reservation_task, timeout=2
+        )
+        await asyncio.wait_for(archive_task, timeout=2)
+        assert archive_waited_for_reservation is True
+        assert eligibility["candidate_id"] == reservation_first_candidate
+        assert enrollment["contact_id"] == reservation_first_contact
+        assert session is not None
+        assert reused is False
+        assert (
+            await dba.fetchval(
+                "SELECT status FROM contacts WHERE id = $1",
+                reservation_first_contact,
+            )
+            == "archived"
+        )
+
+        archive_first_contact = uuid4()
+        archive_first_token, archive_first_candidate = await seed_eligible_subject(
+            contact_id=archive_first_contact,
+            email="archive-first@example.com",
+            request_key="card-vault-lock-archive-first",
+        )
+        eligibility_started = asyncio.Event()
+        contact_locked = asyncio.Event()
+        release_after_lock = asyncio.Event()
+        release_after_lock.set()
+        provider = _NoCardVaultProviderEffects()
+        archive_first_service = EOMCardVaultService(
+            pool=_EligibilityFencePool(
+                pool,
+                started=eligibility_started,
+                locked=contact_locked,
+                release=release_after_lock,
+            ),
+            provider=provider,
+        )
+        async with pool.raw_pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "UPDATE contacts SET status = 'archived' WHERE id = $1",
+                    archive_first_contact,
+                )
+                rejected_task = asyncio.create_task(
+                    archive_first_service.start_session(
+                        token=archive_first_token,
+                        public_base_url="https://example.test/onboarding",
+                    )
+                )
+                await asyncio.wait_for(eligibility_started.wait(), timeout=2)
+                await asyncio.sleep(0.05)
+                contact_lock_waited_for_archive = not contact_locked.is_set()
+                reservation_waited_for_archive = not rejected_task.done()
+        with pytest.raises(EOMCardVaultNotFoundError):
+            await asyncio.wait_for(rejected_task, timeout=2)
+        assert contact_lock_waited_for_archive is True
+        assert reservation_waited_for_archive is True
+        assert provider.calls == []
+        assert (
+            await dba.fetchval(
+                "SELECT count(*) FROM eom_card_vault_enrollments "
+                "WHERE candidate_id = $1",
+                archive_first_candidate,
+            )
+            == 0
+        )
 
 
 def test_migration_is_guard_owned_append_only_and_seeds_no_content() -> None:
