@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
@@ -18,6 +18,39 @@ RAW_RECEIVABLES_SERVICE_TOKEN_ENV = "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"
 _RAW_RECEIVABLES_SERVICE_TOKEN_ENV_KEY = RAW_RECEIVABLES_SERVICE_TOKEN_ENV.casefold()
 RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV = "ATLAS_EOM_FUNNEL_SERVICE_TOKEN"
 _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV_KEY = RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV.casefold()
+EOM_CARD_VAULT_RETURN_URL_MAX_BYTES = 2048
+
+
+def build_eom_card_vault_return_urls(base_url: str) -> tuple[str, str]:
+    """Build the two stored redirects and enforce their database byte boundary."""
+
+    parsed = urlsplit(base_url)
+    urls = (
+        urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode({"cardVault": "success"}),
+                "",
+            )
+        ),
+        urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode({"cardVault": "cancelled"}),
+                "",
+            )
+        ),
+    )
+    if any(
+        not url or len(url.encode("utf-8")) > EOM_CARD_VAULT_RETURN_URL_MAX_BYTES
+        for url in urls
+    ):
+        raise ValueError("card-vault return URLs must not exceed 2048 bytes")
+    return urls
 
 
 def _has_raw_service_token(value: object) -> bool:
@@ -215,6 +248,33 @@ class EOMFunnelConfig(BaseSettings):
             "rotation are still active"
         ),
     )
+    card_vault_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable issuance of new Stripe-hosted card-on-file setup sessions "
+            "for eligible residential post-clean onboarding; signed webhook "
+            "confirmation remains available while dedicated credentials remain set"
+        ),
+    )
+    card_vault_stripe_secret_key: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description=(
+            "Dedicated server-side Stripe key for EOM card-vault setup; never "
+            "expose it to the tracker or browser"
+        ),
+    )
+    card_vault_stripe_webhook_secret: SecretStr = Field(
+        default_factory=lambda: SecretStr(""),
+        description=(
+            "Dedicated Stripe signing secret for the EOM card-vault webhook"
+        ),
+    )
+    card_vault_request_timeout_seconds: int = Field(
+        default=10,
+        ge=1,
+        le=30,
+        description="Bounded Stripe request timeout for EOM card-vault operations",
+    )
     missed_call_recovery_enabled: bool = Field(
         default=False,
         description=(
@@ -402,6 +462,53 @@ class EOMFunnelConfig(BaseSettings):
             raise ValueError(
                 "public onboarding previous HMAC secret must be at least 32 bytes"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_card_vault_configuration(self) -> "EOMFunnelConfig":
+        """Admit one complete, dedicated Stripe authority or keep it disabled."""
+
+        secret_key = self.card_vault_stripe_secret_key.get_secret_value().strip()
+        webhook_secret = (
+            self.card_vault_stripe_webhook_secret.get_secret_value().strip()
+        )
+        has_secret_key = bool(secret_key)
+        has_webhook_secret = bool(webhook_secret)
+        if has_secret_key != has_webhook_secret:
+            raise ValueError(
+                "ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_SECRET_KEY and "
+                "ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_WEBHOOK_SECRET must be set together"
+            )
+        if self.card_vault_enabled and not has_secret_key:
+            raise ValueError(
+                "card vault requires dedicated Stripe secret and webhook keys"
+            )
+        if self.card_vault_enabled and not self.public_onboarding_enabled:
+            raise ValueError(
+                "card vault requires ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED=true"
+            )
+        if self.card_vault_enabled:
+            build_eom_card_vault_return_urls(self.public_onboarding_url.strip())
+        if not has_secret_key:
+            return self
+        stripe_key_prefixes = ("sk_test_", "sk_live_", "rk_test_", "rk_live_")
+        if (
+            not secret_key.startswith(stripe_key_prefixes)
+            or len(secret_key) < 16
+            or not secret_key.isascii()
+            or not all(character.isalnum() or character == "_" for character in secret_key)
+        ):
+            raise ValueError("card-vault Stripe secret key is invalid")
+        if (
+            not webhook_secret.startswith("whsec_")
+            or len(webhook_secret) < 16
+            or not webhook_secret.isascii()
+            or not all(
+                character.isalnum() or character == "_"
+                for character in webhook_secret
+            )
+        ):
+            raise ValueError("card-vault Stripe webhook secret is invalid")
         return self
 
     @model_validator(mode="after")

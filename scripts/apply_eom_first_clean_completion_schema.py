@@ -44,15 +44,21 @@ FUNNEL_DSN_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
 MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
 TERMS_AUTHORITY_MIGRATION_NAME = "396_eom_terms_authority"
 TERMS_ACCEPTANCE_MIGRATION_NAME = "397_eom_terms_acceptance"
+CARD_VAULT_MIGRATION_NAME = "398_eom_card_vault"
 CONTROLLED_MIGRATION_NAMES = frozenset(
     {
         MIGRATION_NAME,
         TERMS_AUTHORITY_MIGRATION_NAME,
         TERMS_ACCEPTANCE_MIGRATION_NAME,
+        CARD_VAULT_MIGRATION_NAME,
     }
 )
 CONTROLLED_MIGRATION_PREDECESSORS = {
-    TERMS_ACCEPTANCE_MIGRATION_NAME: TERMS_AUTHORITY_MIGRATION_NAME,
+    TERMS_ACCEPTANCE_MIGRATION_NAME: (TERMS_AUTHORITY_MIGRATION_NAME,),
+    CARD_VAULT_MIGRATION_NAME: (
+        "395_eom_post_clean_onboarding_candidates",
+        TERMS_ACCEPTANCE_MIGRATION_NAME,
+    ),
 }
 
 
@@ -382,6 +388,14 @@ async def _run_pinned_controlled_migration(
             await asyncio.sleep(0.2)
 
 
+async def _card_vault_schema_ready(pool: Any) -> bool:
+    """Load the card-vault attestation only for migration 398 operations."""
+
+    from atlas_brain.services.eom_card_vault import eom_card_vault_schema_ready
+
+    return await eom_card_vault_schema_ready(pool)
+
+
 async def _run(
     args: argparse.Namespace,
     *,
@@ -391,6 +405,9 @@ async def _run(
         EOMFirstCleanCompletionDBAConfig
     ),
     funnel_config_factory: Callable[[], EOMFunnelConfig] = EOMFunnelConfig,
+    card_vault_schema_ready_fn: Callable[[Any], Awaitable[bool]] = (
+        _card_vault_schema_ready
+    ),
 ) -> dict[str, object]:
     migration_name = str(args.migration)
     if migration_name not in CONTROLLED_MIGRATION_NAMES:
@@ -429,8 +446,8 @@ async def _run(
                 expected_target=runtime_target,
                 migration_name=migration_name,
             )
-            predecessor = CONTROLLED_MIGRATION_PREDECESSORS.get(migration_name)
-            if predecessor is not None:
+            predecessors = CONTROLLED_MIGRATION_PREDECESSORS.get(migration_name, ())
+            for predecessor in predecessors:
                 _executor_is_superuser, predecessor_recorded = await _migration_state(
                     pool,
                     expected_target=runtime_target,
@@ -472,6 +489,14 @@ async def _run(
                     )
                 result["migration_recorded"] = True
                 result["applied"] = True
+            if migration_name == CARD_VAULT_MIGRATION_NAME:
+                schema_ready = bool(await card_vault_schema_ready_fn(runtime_pool))
+                result["schema_ready"] = schema_ready
+                if migration_recorded != schema_ready:
+                    raise RuntimeError(
+                        "Card-vault migration bookkeeping does not match the "
+                        "runtime-role schema attestation"
+                    )
             return result
         finally:
             await pool.close()

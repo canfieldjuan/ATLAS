@@ -65,12 +65,13 @@ def test_database_surface_contains_only_fixed_inspections() -> None:
         assert DATABASE_INSPECTIONS[name] not in command
 
 
-def test_terms_migrations_are_the_only_guarded_database_operations(
+def test_eom_guarded_database_operations_are_closed_and_routed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     assert CONTROLLED_DATABASE_OPERATIONS == {
         "eom-terms-authority": "apply_eom_terms_authority_schema.py",
         "eom-terms-acceptance": "apply_eom_terms_acceptance_schema.py",
+        "eom-card-vault": "apply_eom_card_vault_schema.py",
     }
     root = Path("/workspace/atlas-terms-release")
     calls: list[tuple[list[str], Path | None]] = []
@@ -92,6 +93,8 @@ def test_terms_migrations_are_the_only_guarded_database_operations(
     assert run_controlled_database_operation("eom-terms-authority", "apply") == 0
     assert run_controlled_database_operation("eom-terms-acceptance", "preflight") == 0
     assert run_controlled_database_operation("eom-terms-acceptance", "apply") == 0
+    assert run_controlled_database_operation("eom-card-vault", "preflight") == 0
+    assert run_controlled_database_operation("eom-card-vault", "apply") == 0
     authority_prefix = [
         "/venv/python",
         str(root / "scripts/apply_eom_terms_authority_schema.py"),
@@ -102,11 +105,18 @@ def test_terms_migrations_are_the_only_guarded_database_operations(
         str(root / "scripts/apply_eom_terms_acceptance_schema.py"),
         "--json",
     ]
+    card_vault_prefix = [
+        "/venv/python",
+        str(root / "scripts/apply_eom_card_vault_schema.py"),
+        "--json",
+    ]
     assert calls == [
         (authority_prefix, root),
         ([*authority_prefix, "--apply"], root),
         (acceptance_prefix, root),
         ([*acceptance_prefix, "--apply"], root),
+        (card_vault_prefix, root),
+        ([*card_vault_prefix, "--apply"], root),
     ]
     with pytest.raises(OpsError, match="unknown controlled database operation"):
         run_controlled_database_operation("other", "preflight")
@@ -127,11 +137,15 @@ def test_terms_migrations_are_the_only_guarded_database_operations(
     assert db_command(["controlled", "eom-terms-authority", "apply"]) == 0
     assert db_command(["controlled", "eom-terms-acceptance", "preflight"]) == 0
     assert db_command(["controlled", "eom-terms-acceptance", "apply"]) == 0
+    assert db_command(["controlled", "eom-card-vault", "preflight"]) == 0
+    assert db_command(["controlled", "eom-card-vault", "apply"]) == 0
     assert dispatched == [
         ("eom-terms-authority", "preflight"),
         ("eom-terms-authority", "apply"),
         ("eom-terms-acceptance", "preflight"),
         ("eom-terms-acceptance", "apply"),
+        ("eom-card-vault", "preflight"),
+        ("eom-card-vault", "apply"),
     ]
 
 
@@ -1652,6 +1666,15 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
     assert acceptance_migration["apply"] == (
         "./ops db controlled eom-terms-acceptance apply"
     )
+    card_vault_migration = capabilities["database"]["controlled_migrations"][
+        "eom_card_vault"
+    ]
+    assert card_vault_migration["preflight"] == (
+        "./ops db controlled eom-card-vault preflight"
+    )
+    assert card_vault_migration["apply"] == (
+        "./ops db controlled eom-card-vault apply"
+    )
     database_runbook = (ROOT / ".agent/runbooks/database.md").read_text(
         encoding="utf-8"
     )
@@ -1659,6 +1682,8 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
     assert terms_migration["apply"] in database_runbook
     assert acceptance_migration["preflight"] in database_runbook
     assert acceptance_migration["apply"] in database_runbook
+    assert card_vault_migration["preflight"] in database_runbook
+    assert card_vault_migration["apply"] in database_runbook
     assert "Post-deployment application rollback is retention-only" in database_runbook
     assert capabilities["deployment"]["brain"]["provider"] == "local systemd user service"
     assert capabilities["deployment"]["frontend"]["provider"] == "Vercel"

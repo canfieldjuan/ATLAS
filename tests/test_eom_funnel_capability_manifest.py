@@ -13,6 +13,7 @@ failure the slice exists to prevent -- a visible control whose backend returns
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import httpx
@@ -43,6 +44,16 @@ _TERMS_CAPABILITY_ROUTES = {
     ),
     "terms.public.session": ("POST", "/eom-funnel/terms/public/session"),
     "terms.public.accept": ("POST", "/eom-funnel/terms/public/accept"),
+}
+_CARD_VAULT_CAPABILITY_ROUTES = {
+    "card_vault.public.session": (
+        "POST",
+        "/eom-funnel/card-vault/public/session",
+    ),
+    "card_vault.readiness.read": (
+        "GET",
+        "/eom-funnel/card-vault/readiness/{contact_id}",
+    ),
 }
 
 
@@ -95,10 +106,30 @@ def _reset_capability_cache():
 
 
 def _registered_routes() -> set[tuple[str, str]]:
+    app = FastAPI()
+    app.include_router(funnel_mod.router)
+    http_methods = {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"}
     return {
-        (method, route.path)
-        for route in funnel_mod.router.routes
-        for method in (getattr(route, "methods", None) or ())
+        (method.upper(), path)
+        for path, operations in app.openapi()["paths"].items()
+        for method in operations
+        if method.upper() in http_methods
+    }
+
+
+def test_route_signature_probe_handles_flat_and_lazy_included_routes() -> None:
+    flat_route = SimpleNamespace(path="/eom-funnel/leads", methods={"GET"})
+    child_route = SimpleNamespace(path="/card-vault/public/session", methods={"POST"})
+    lazy_include = SimpleNamespace(
+        original_router=SimpleNamespace(routes=[child_route]),
+        include_context=SimpleNamespace(prefix="/eom-funnel"),
+    )
+    opaque_route = SimpleNamespace(path=None, methods=None)
+    route_source = SimpleNamespace(routes=[flat_route, lazy_include, opaque_route])
+
+    assert funnel_mod._registered_http_route_signatures(route_source) == {
+        ("GET", "/eom-funnel/leads"),
+        ("POST", "/eom-funnel/card-vault/public/session"),
     }
 
 
@@ -137,6 +168,13 @@ def test_terms_capabilities_pin_the_existing_route_contract() -> None:
     """The Tracker contract names each existing Terms route exactly."""
     registered = _registered_routes()
     for name, signature in _TERMS_CAPABILITY_ROUTES.items():
+        assert funnel_mod._CAPABILITY_ROUTES[name] == signature
+        assert signature in registered
+
+
+def test_card_vault_capabilities_pin_the_provider_route_contract() -> None:
+    registered = _registered_routes()
+    for name, signature in _CARD_VAULT_CAPABILITY_ROUTES.items():
         assert funnel_mod._CAPABILITY_ROUTES[name] == signature
         assert signature in registered
 

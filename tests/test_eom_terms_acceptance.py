@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-import os
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -18,6 +18,11 @@ from fastapi import FastAPI
 from atlas_brain.eom_api import funnel as funnel_mod
 from atlas_brain.eom_api import funnel_auth as funnel_auth_mod
 from atlas_brain.eom_api.config import EOMFunnelConfig
+from atlas_brain.services.eom_card_vault import (
+    EOMCardVaultNotFoundError,
+    EOMCardVaultService,
+    eom_card_vault_schema_ready,
+)
 from atlas_brain.services.eom_public_onboarding_tokens import (
     format_eom_public_onboarding_token,
 )
@@ -41,7 +46,6 @@ from atlas_brain.services.eom_terms_authority import (
     eom_terms_authority_schema_ready,
 )
 
-
 _NOW = datetime(2026, 8, 28, 14, 30, tzinfo=timezone.utc)
 _CONTACT_ID = UUID("11111111-1111-4111-8111-111111111111")
 _INVITATION_ID = UUID("22222222-2222-4222-8222-222222222222")
@@ -60,6 +64,14 @@ _AUTHORITY_MIGRATION = (
 _ACCEPTANCE_MIGRATION = (
     Path(__file__).resolve().parent.parent
     / "atlas_brain/storage/migrations/397_eom_terms_acceptance.sql"
+)
+_CANDIDATE_MIGRATION = (
+    Path(__file__).resolve().parent.parent
+    / "atlas_brain/storage/migrations/395_eom_post_clean_onboarding_candidates.sql"
+)
+_CARD_VAULT_MIGRATION = (
+    Path(__file__).resolve().parent.parent
+    / "atlas_brain/storage/migrations/398_eom_card_vault.sql"
 )
 
 
@@ -146,6 +158,122 @@ class _NoDeliveryService(EOMTermsAcceptanceService):
             row = await self._delivery_by_id(connection, delivery_id)
         assert row is not None
         return dict(row), False
+
+
+class _EligibilityFenceConnection:
+    def __init__(
+        self,
+        connection: Any,
+        *,
+        started: asyncio.Event,
+        locked: asyncio.Event,
+        release: asyncio.Event,
+        query_marker: str = "eom_card_vault_eligibility",
+    ) -> None:
+        self._connection = connection
+        self._started = started
+        self._locked = locked
+        self._release = release
+        self._query_marker = query_marker
+
+    async def execute(self, query: str, *args: Any) -> Any:
+        return await self._connection.execute(query, *args)
+
+    async def fetchrow(self, query: str, *args: Any) -> Any:
+        if self._query_marker not in query:
+            return await self._connection.fetchrow(query, *args)
+        self._started.set()
+        row = await self._connection.fetchrow(query, *args)
+        self._locked.set()
+        await self._release.wait()
+        return row
+
+
+class _EligibilityFencePool:
+    is_initialized = True
+
+    def __init__(
+        self,
+        pool: _AsyncpgServicePool,
+        *,
+        started: asyncio.Event,
+        locked: asyncio.Event,
+        release: asyncio.Event,
+        query_marker: str = "eom_card_vault_eligibility",
+    ) -> None:
+        self._pool = pool
+        self._started = started
+        self._locked = locked
+        self._release = release
+        self._query_marker = query_marker
+
+    @asynccontextmanager
+    async def transaction(self):
+        async with self._pool.transaction() as connection:
+            yield _EligibilityFenceConnection(
+                connection,
+                started=self._started,
+                locked=self._locked,
+                release=self._release,
+                query_marker=self._query_marker,
+            )
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._pool, name)
+
+
+class _NoCardVaultProviderEffects:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def create_customer(self, **_kwargs: Any) -> Any:
+        self.calls.append("create_customer")
+        raise AssertionError("provider effect must not run")
+
+    async def retrieve_customer(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.calls.append("retrieve_customer")
+        raise AssertionError("provider effect must not run")
+
+    async def create_checkout_session(self, **_kwargs: Any) -> Any:
+        self.calls.append("create_checkout_session")
+        raise AssertionError("provider effect must not run")
+
+    async def retrieve_checkout_session(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.calls.append("retrieve_checkout_session")
+        raise AssertionError("provider effect must not run")
+
+    async def retrieve_setup_intent(self, *_args: Any, **_kwargs: Any) -> Any:
+        self.calls.append("retrieve_setup_intent")
+        raise AssertionError("provider effect must not run")
+
+
+class _BlockingCardVaultProvider:
+    def __init__(self) -> None:
+        self.customer_started = asyncio.Event()
+        self.release_customer = asyncio.Event()
+        self.calls: list[str] = []
+
+    async def create_customer(self, **kwargs: Any) -> Any:
+        self.calls.append("create_customer")
+        self.customer_started.set()
+        await self.release_customer.wait()
+        return {
+            "id": "cus_materializationfence123",
+            "metadata": kwargs["metadata"],
+        }
+
+    async def create_checkout_session(self, **kwargs: Any) -> Any:
+        self.calls.append("create_checkout_session")
+        return {
+            "id": "cs_materializationfence123",
+            "customer": kwargs["customer"],
+            "mode": "setup",
+            "status": "open",
+            "url": "https://checkout.stripe.test/materialization-fence",
+            "expires_at": int(datetime.now(timezone.utc).timestamp()) + 3600,
+            "client_reference_id": kwargs["client_reference_id"],
+            "metadata": kwargs["metadata"],
+        }
 
 
 def _database_url_or_skip(name: str) -> str:
@@ -2064,6 +2192,514 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
                 client_ip="192.0.2.23",
                 sender=_RecordingSender(),
             )
+
+
+@pytest.mark.asyncio
+async def test_card_vault_migration_applies_with_guarded_runtime_acl() -> None:
+    async with _real_terms_store() as (pool, dba, schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES (398, '398_eom_card_vault')
+            """
+        )
+
+        assert await eom_card_vault_schema_ready(pool) is True
+        original_enrollment_guard = await dba.fetchval(
+            """
+            SELECT pg_get_functiondef(
+                to_regprocedure('protect_eom_card_vault_enrollment()')
+            )
+            """
+        )
+        assert isinstance(original_enrollment_guard, str)
+        await dba.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION protect_eom_card_vault_enrollment()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            SET search_path TO pg_catalog, "{schema}", pg_temp
+            AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(original_enrollment_guard)
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_sessions
+            ALTER COLUMN created_at DROP DEFAULT
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_sessions
+            ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at DROP NOT NULL
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at SET NOT NULL
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at DROP DEFAULT;
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at TYPE TIMESTAMP WITHOUT TIME ZONE
+                USING received_at AT TIME ZONE 'UTC'
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at TYPE TIMESTAMPTZ
+                USING received_at AT TIME ZONE 'UTC';
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at SET DEFAULT CURRENT_TIMESTAMP
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        relations = await dba.fetch(
+            """
+            SELECT relation.relname,
+                   owner.rolname AS owner,
+                   has_table_privilege('atlas', relation.oid, 'SELECT') AS can_select,
+                   has_table_privilege('atlas', relation.oid, 'DELETE') AS can_delete
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            JOIN pg_roles AS owner ON owner.oid = relation.relowner
+            WHERE namespace.nspname = $1
+              AND relation.relname LIKE 'eom_card_vault_%'
+              AND relation.relkind = 'r'
+            ORDER BY relation.relname
+            """,
+            schema,
+        )
+        assert [row["relname"] for row in relations] == [
+            "eom_card_vault_enrollments",
+            "eom_card_vault_events",
+            "eom_card_vault_sessions",
+        ]
+        assert all(row["owner"] == "atlas_eom_handoff_owner" for row in relations)
+        assert all(row["can_select"] is True for row in relations)
+        assert all(row["can_delete"] is False for row in relations)
+
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            DISABLE TRIGGER trg_protect_eom_card_vault_event
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ENABLE TRIGGER trg_protect_eom_card_vault_event
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            CREATE OR REPLACE TRIGGER trg_protect_eom_card_vault_enrollment
+            BEFORE INSERT ON eom_card_vault_enrollments
+            FOR EACH ROW EXECUTE FUNCTION protect_eom_card_vault_enrollment()
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            CREATE OR REPLACE TRIGGER trg_protect_eom_card_vault_enrollment
+            BEFORE INSERT OR UPDATE OR DELETE ON eom_card_vault_enrollments
+            FOR EACH ROW EXECUTE FUNCTION protect_eom_card_vault_enrollment()
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            RENAME CONSTRAINT uq_eom_card_vault_enrollment_candidate
+            TO drifted_eom_card_vault_enrollment_candidate
+            """
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            ADD CONSTRAINT uq_eom_card_vault_enrollment_candidate
+            UNIQUE (contact_id)
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            DROP CONSTRAINT uq_eom_card_vault_enrollment_candidate
+            """
+        )
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_enrollments
+            RENAME CONSTRAINT drifted_eom_card_vault_enrollment_candidate
+            TO uq_eom_card_vault_enrollment_candidate
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            "REVOKE UPDATE (ready_at) ON eom_card_vault_enrollments FROM atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            "GRANT UPDATE (ready_at) ON eom_card_vault_enrollments TO atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            "GRANT UPDATE (contact_id) ON eom_card_vault_enrollments TO atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            "REVOKE UPDATE (contact_id) ON eom_card_vault_enrollments FROM atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        with pytest.raises(asyncpg.RaiseError, match="event evidence is append-only"):
+            await dba.execute("TRUNCATE eom_card_vault_events")
+
+
+@pytest.mark.asyncio
+async def test_card_vault_reservation_serializes_contact_eligibility() -> None:
+    async with _real_terms_store() as (pool, dba, schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            "GRANT SELECT ON TABLE "
+            f'"{schema}".eom_post_clean_onboarding_candidates TO atlas'
+        )
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (398, '398_eom_card_vault')"
+        )
+        await _publish(
+            EOMTermsAuthority(pool=pool),
+            label="card-vault-lock.1",
+            material=True,
+            marker="card-vault-lock",
+        )
+        terms = EOMTermsAcceptanceService(pool=pool)
+
+        async def seed_eligible_subject(
+            *, contact_id: UUID, email: str, request_key: str
+        ) -> tuple[AuthenticatedEOMTermsToken, UUID]:
+            await _seed_customer(dba, contact_id=contact_id, email=email)
+            invitation = await terms.issue_and_send(
+                request_key=request_key,
+                contact_id=contact_id,
+                locale="en",
+                actor_id=7,
+                actor_name="Juan",
+                public_base_url="https://example.test/onboarding",
+                hmac_secret=_SECRET,
+                sender=_RecordingSender(),
+            )
+            authenticated = authenticate_eom_terms_token(
+                token=format_eom_terms_token(
+                    invitation_id=UUID(invitation["invitationId"]),
+                    secret=_SECRET,
+                ),
+                secret=_SECRET,
+            )
+            await terms.accept_and_send(
+                token=authenticated,
+                signer_name="Card Vault Signer",
+                terms_accepted=True,
+                additional_work_accepted=True,
+                client_ip="192.0.2.40",
+                sender=_RecordingSender(),
+            )
+            candidate_id = uuid4()
+            await dba.execute(
+                """
+                INSERT INTO eom_post_clean_onboarding_candidates (
+                    id, completion_receipt_id, contact_id, handoff_id
+                ) VALUES ($1, $2, $3, $4)
+                """,
+                candidate_id,
+                uuid4(),
+                contact_id,
+                uuid4(),
+            )
+            return authenticated, candidate_id
+
+        reservation_first_contact = uuid4()
+        (
+            reservation_first_token,
+            reservation_first_candidate,
+        ) = await seed_eligible_subject(
+            contact_id=reservation_first_contact,
+            email="reservation-first@example.com",
+            request_key="card-vault-lock-reservation-first",
+        )
+        eligibility_started = asyncio.Event()
+        contact_locked = asyncio.Event()
+        release_reservation = asyncio.Event()
+        reservation_service = EOMCardVaultService(
+            pool=_EligibilityFencePool(
+                pool,
+                started=eligibility_started,
+                locked=contact_locked,
+                release=release_reservation,
+            )
+        )
+        reservation_task = asyncio.create_task(
+            reservation_service._reserve_session(
+                reservation_first_token,
+                checkout_success_url=(
+                    "https://example.test/onboarding?cardVault=success"
+                ),
+                checkout_cancel_url=(
+                    "https://example.test/onboarding?cardVault=cancelled"
+                ),
+            )
+        )
+        await asyncio.wait_for(contact_locked.wait(), timeout=2)
+        archive_started = asyncio.Event()
+
+        async def archive_after_reservation_lock() -> None:
+            async with pool.raw_pool.acquire() as connection:
+                archive_started.set()
+                await connection.execute(
+                    "UPDATE contacts SET status = 'archived' WHERE id = $1",
+                    reservation_first_contact,
+                )
+
+        archive_task = asyncio.create_task(archive_after_reservation_lock())
+        await asyncio.wait_for(archive_started.wait(), timeout=2)
+        await asyncio.sleep(0.05)
+        archive_waited_for_reservation = not archive_task.done()
+        release_reservation.set()
+        eligibility, enrollment, session, reused = await asyncio.wait_for(
+            reservation_task, timeout=2
+        )
+        await asyncio.wait_for(archive_task, timeout=2)
+        assert archive_waited_for_reservation is True
+        assert eligibility["candidate_id"] == reservation_first_candidate
+        assert enrollment["contact_id"] == reservation_first_contact
+        assert session is not None
+        assert reused is False
+        assert (
+            await dba.fetchval(
+                "SELECT status FROM contacts WHERE id = $1",
+                reservation_first_contact,
+            )
+            == "archived"
+        )
+
+        archive_first_contact = uuid4()
+        archive_first_token, archive_first_candidate = await seed_eligible_subject(
+            contact_id=archive_first_contact,
+            email="archive-first@example.com",
+            request_key="card-vault-lock-archive-first",
+        )
+        eligibility_started = asyncio.Event()
+        contact_locked = asyncio.Event()
+        release_after_lock = asyncio.Event()
+        release_after_lock.set()
+        provider = _NoCardVaultProviderEffects()
+        archive_first_service = EOMCardVaultService(
+            pool=_EligibilityFencePool(
+                pool,
+                started=eligibility_started,
+                locked=contact_locked,
+                release=release_after_lock,
+            ),
+            provider=provider,
+        )
+        async with pool.raw_pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "UPDATE contacts SET status = 'archived' WHERE id = $1",
+                    archive_first_contact,
+                )
+                rejected_task = asyncio.create_task(
+                    archive_first_service.start_session(
+                        token=archive_first_token,
+                        public_base_url="https://example.test/onboarding",
+                    )
+                )
+                await asyncio.wait_for(eligibility_started.wait(), timeout=2)
+                await asyncio.sleep(0.05)
+                contact_lock_waited_for_archive = not contact_locked.is_set()
+                reservation_waited_for_archive = not rejected_task.done()
+        with pytest.raises(EOMCardVaultNotFoundError):
+            await asyncio.wait_for(rejected_task, timeout=2)
+        assert contact_lock_waited_for_archive is True
+        assert reservation_waited_for_archive is True
+        assert provider.calls == []
+        assert (
+            await dba.fetchval(
+                "SELECT count(*) FROM eom_card_vault_enrollments "
+                "WHERE candidate_id = $1",
+                archive_first_candidate,
+            )
+            == 0
+        )
+
+        materialization_first_contact = uuid4()
+        materialization_first_token, _ = await seed_eligible_subject(
+            contact_id=materialization_first_contact,
+            email="materialization-first@example.com",
+            request_key="card-vault-lock-materialization-first",
+        )
+        blocking_provider = _BlockingCardVaultProvider()
+        materialization_service = EOMCardVaultService(
+            pool=pool,
+            provider=blocking_provider,
+        )
+        (
+            _,
+            materialization_enrollment,
+            materialization_session,
+            materialization_reused,
+        ) = await materialization_service._reserve_session(
+            materialization_first_token,
+            checkout_success_url=("https://example.test/onboarding?cardVault=success"),
+            checkout_cancel_url=("https://example.test/onboarding?cardVault=cancelled"),
+        )
+        assert materialization_session is not None
+        materialization_task = asyncio.create_task(
+            materialization_service._materialize_session(
+                provider=blocking_provider,
+                enrollment_id=UUID(str(materialization_enrollment["id"])),
+                session_row_id=UUID(str(materialization_session["id"])),
+                reused=materialization_reused,
+            )
+        )
+        await asyncio.wait_for(blocking_provider.customer_started.wait(), timeout=2)
+        materialization_archive_started = asyncio.Event()
+
+        async def archive_during_materialization() -> None:
+            async with pool.raw_pool.acquire() as connection:
+                materialization_archive_started.set()
+                await connection.execute(
+                    "UPDATE contacts SET status = 'archived' WHERE id = $1",
+                    materialization_first_contact,
+                )
+
+        materialization_archive_task = asyncio.create_task(
+            archive_during_materialization()
+        )
+        await asyncio.wait_for(materialization_archive_started.wait(), timeout=2)
+        await asyncio.sleep(0.05)
+        archive_waited_for_materialization = not materialization_archive_task.done()
+        blocking_provider.release_customer.set()
+        materialized = await asyncio.wait_for(materialization_task, timeout=2)
+        await asyncio.wait_for(materialization_archive_task, timeout=2)
+        assert archive_waited_for_materialization is True
+        assert materialized["status"] == "pending"
+        assert blocking_provider.calls == [
+            "create_customer",
+            "create_checkout_session",
+        ]
+        assert (
+            await dba.fetchval(
+                "SELECT status FROM contacts WHERE id = $1",
+                materialization_first_contact,
+            )
+            == "archived"
+        )
+
+        archived_after_reservation_contact = uuid4()
+        archived_after_reservation_token, _ = await seed_eligible_subject(
+            contact_id=archived_after_reservation_contact,
+            email="archived-after-reservation@example.com",
+            request_key="card-vault-lock-archived-after-reservation",
+        )
+        post_reservation_service = EOMCardVaultService(pool=pool)
+        (
+            _,
+            post_reservation_enrollment,
+            post_reservation_session,
+            post_reservation_reused,
+        ) = await post_reservation_service._reserve_session(
+            archived_after_reservation_token,
+            checkout_success_url=("https://example.test/onboarding?cardVault=success"),
+            checkout_cancel_url=("https://example.test/onboarding?cardVault=cancelled"),
+        )
+        assert post_reservation_session is not None
+        materialization_started = asyncio.Event()
+        materialization_contact_locked = asyncio.Event()
+        release_materialization = asyncio.Event()
+        release_materialization.set()
+        post_reservation_provider = _NoCardVaultProviderEffects()
+        post_reservation_service = EOMCardVaultService(
+            pool=_EligibilityFencePool(
+                pool,
+                started=materialization_started,
+                locked=materialization_contact_locked,
+                release=release_materialization,
+                query_marker="eom_card_vault_fenced_contact",
+            ),
+            provider=post_reservation_provider,
+        )
+        async with pool.raw_pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "UPDATE contacts SET status = 'archived' WHERE id = $1",
+                    archived_after_reservation_contact,
+                )
+                rejected_materialization_task = asyncio.create_task(
+                    post_reservation_service._materialize_session(
+                        provider=post_reservation_provider,
+                        enrollment_id=UUID(str(post_reservation_enrollment["id"])),
+                        session_row_id=UUID(str(post_reservation_session["id"])),
+                        reused=post_reservation_reused,
+                    )
+                )
+                await asyncio.wait_for(materialization_started.wait(), timeout=2)
+                await asyncio.sleep(0.05)
+                materialization_waited_for_archive = (
+                    not materialization_contact_locked.is_set()
+                    and not rejected_materialization_task.done()
+                )
+        with pytest.raises(EOMCardVaultNotFoundError):
+            await asyncio.wait_for(rejected_materialization_task, timeout=2)
+        assert materialization_waited_for_archive is True
+        assert post_reservation_provider.calls == []
 
 
 def test_migration_is_guard_owned_append_only_and_seeds_no_content() -> None:

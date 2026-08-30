@@ -1373,6 +1373,7 @@ async def test_generic_run_skips_controlled_dba_migration_until_explicitly_selec
         "394_eom_first_clean_completion_receipts",
         "396_eom_terms_authority",
         "397_eom_terms_acceptance",
+        "398_eom_card_vault",
     }
     controlled_sources = {
         controlled_name: f"SELECT '{controlled_name}'"
@@ -1392,7 +1393,7 @@ async def test_generic_run_skips_controlled_dba_migration_until_explicitly_selec
         name not in CONTROLLED_DBA_MIGRATION_NAMES
         for _version, name, _digest in pool.records
     )
-    assert "Skipping 4 controlled DBA migration(s)" in caplog.text
+    assert "Skipping 5 controlled DBA migration(s)" in caplog.text
 
     for controlled_name in sorted(CONTROLLED_DBA_MIGRATION_NAMES):
         await run_migrations(
