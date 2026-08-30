@@ -1253,6 +1253,39 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
 _served_capabilities_cache: tuple[str, ...] | None = None
 
 
+def _registered_http_route_signatures(route_source: Any) -> set[tuple[str, str]]:
+    """Return concrete method/path pairs across flat and lazy router includes.
+
+    FastAPI 0.139 keeps ``include_router`` children as lazy route containers,
+    while older releases eagerly copied each child route into the parent.  Use
+    the stable route attributes when present and duck-type the include metadata
+    so this service advertises the same capabilities under either shape.
+    """
+
+    registered: set[tuple[str, str]] = set()
+
+    def visit(routes: list[Any], prefix: str = "") -> None:
+        for route in routes:
+            route_path = getattr(route, "path", None)
+            if isinstance(route_path, str):
+                registered.update(
+                    (str(method), f"{prefix}{route_path}")
+                    for method in (getattr(route, "methods", None) or ())
+                )
+
+            included_router = getattr(route, "original_router", None)
+            include_context = getattr(route, "include_context", None)
+            included_routes = getattr(included_router, "routes", None)
+            include_prefix = getattr(include_context, "prefix", None)
+            if isinstance(included_routes, list) and isinstance(include_prefix, str):
+                visit(included_routes, f"{prefix}{include_prefix}")
+
+    routes = getattr(route_source, "routes", None)
+    if isinstance(routes, list):
+        visit(routes)
+    return registered
+
+
 def served_capabilities() -> tuple[str, ...]:
     """Capability names this build serves, derived from registered routes.
 
@@ -1262,11 +1295,7 @@ def served_capabilities() -> tuple[str, ...]:
     """
     global _served_capabilities_cache
     if _served_capabilities_cache is None:
-        registered = {
-            (method, route.path)
-            for route in router.routes
-            for method in (getattr(route, "methods", None) or ())
-        }
+        registered = _registered_http_route_signatures(router)
         _served_capabilities_cache = tuple(
             sorted(
                 name

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,23 @@ from .eom_terms_authority import EOM_TERMS_PUBLICATION_LOCK_KEY
 EOM_CARD_VAULT_SOURCE = "eom_card_vault"
 EOM_CARD_VAULT_STRIPE_API_VERSION = "2026-05-27.dahlia"
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9_]{4,255}$")
+_LOGGER = logging.getLogger(__name__)
+
+
+def _log_boundary_failure(operation: str, **identifiers: object) -> None:
+    """Preserve operational evidence without logging payment or token material."""
+
+    context = {
+        key: str(value) for key, value in identifiers.items() if value is not None
+    }
+    _LOGGER.exception(
+        "EOM card-vault boundary failed: %s",
+        operation,
+        extra={
+            "eom_card_vault_operation": operation,
+            "eom_card_vault_context": context,
+        },
+    )
 
 
 class EOMCardVaultError(Exception):
@@ -392,6 +410,7 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
             )
         )
     except (asyncpg.PostgresError, OSError, TimeoutError):
+        _log_boundary_failure("schema_attestation")
         return False
 
 
@@ -618,6 +637,10 @@ class EOMCardVaultService:
         except EOMCardVaultError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure(
+                "reserve_session",
+                invitation_id=authenticated.invitation_id,
+            )
             raise EOMCardVaultUnavailableError(
                 "EOM card setup could not be reserved"
             ) from exc
@@ -662,6 +685,7 @@ class EOMCardVaultService:
         except EOMCardVaultError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure("store_customer", enrollment_id=enrollment_id)
             raise EOMCardVaultUnavailableError(
                 "Stripe customer could not be stored"
             ) from exc
@@ -712,6 +736,7 @@ class EOMCardVaultService:
         except EOMCardVaultError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure("store_session", session_id=session_row_id)
             raise EOMCardVaultUnavailableError(
                 "Stripe Checkout session could not be stored"
             ) from exc
@@ -740,20 +765,29 @@ class EOMCardVaultService:
         try:
             customer_id = enrollment["stripe_customer_id"]
             if customer_id is None:
+                customer_metadata = {
+                    "source": EOM_CARD_VAULT_SOURCE,
+                    "enrollment_id": str(enrollment["id"]),
+                    "contact_id": str(enrollment["contact_id"]),
+                    "candidate_id": str(enrollment["candidate_id"]),
+                }
                 customer = await self._provider.create_customer(
                     name=str(eligibility["full_name"]),
                     email=str(eligibility["email"]),
-                    metadata={
-                        "source": EOM_CARD_VAULT_SOURCE,
-                        "enrollment_id": str(enrollment["id"]),
-                        "contact_id": str(enrollment["contact_id"]),
-                        "candidate_id": str(enrollment["candidate_id"]),
-                    },
+                    metadata=customer_metadata,
                     idempotency_key=f"eom-card-vault-customer:{enrollment['id']}",
                 )
                 customer_id = _provider_id(
                     _value(customer, "id"), prefix="cus_", label="customer"
                 )
+                returned_customer_metadata = _value(customer, "metadata")
+                if not isinstance(returned_customer_metadata, Mapping) or any(
+                    returned_customer_metadata.get(key) != value
+                    for key, value in customer_metadata.items()
+                ):
+                    raise EOMCardVaultConflictError(
+                        "Stripe customer subject does not match"
+                    )
                 enrollment = await self._store_customer(
                     enrollment_id=UUID(str(enrollment["id"])),
                     customer_id=customer_id,
@@ -860,6 +894,11 @@ class EOMCardVaultService:
         except EOMCardVaultError:
             raise
         except EOMCardVaultProviderError as exc:
+            _log_boundary_failure(
+                "create_or_reuse_session",
+                enrollment_id=enrollment["id"],
+                session_id=session_row["id"],
+            )
             raise EOMCardVaultUnavailableError(
                 "Stripe card setup is temporarily unavailable"
             ) from exc
@@ -907,6 +946,11 @@ class EOMCardVaultService:
         try:
             setup_intent = await self._provider.retrieve_setup_intent(setup_intent_id)
         except EOMCardVaultProviderError as exc:
+            _log_boundary_failure(
+                "retrieve_setup_intent",
+                event_id=event_id,
+                enrollment_id=enrollment_id,
+            )
             raise EOMCardVaultUnavailableError(
                 "Stripe SetupIntent confirmation is unavailable"
             ) from exc
@@ -1049,6 +1093,12 @@ class EOMCardVaultService:
         except EOMCardVaultError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure(
+                "confirm_checkout_session",
+                event_id=event_id,
+                enrollment_id=enrollment_id,
+                session_id=session_row_id,
+            )
             raise EOMCardVaultUnavailableError(
                 "EOM card-vault confirmation is unavailable"
             ) from exc
@@ -1104,6 +1154,7 @@ class EOMCardVaultService:
                 parsed_contact_id,
             )
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure("get_readiness", contact_id=parsed_contact_id)
             raise EOMCardVaultUnavailableError(
                 "EOM card readiness is unavailable"
             ) from exc

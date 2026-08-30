@@ -356,6 +356,7 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
     dba_pool = _Pool(state)
     calls: list[tuple[object, tuple[str, ...]]] = []
     sleep_delays: list[float] = []
+    schema_attestation_calls: list[object] = []
 
     async def create_pool(
         database_url: str, *, schema_name: str | None = None
@@ -379,6 +380,15 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
         sleep_delays.append(delay)
         assert state.transaction_depth == 0
 
+    async def card_vault_schema_ready(pool: object) -> bool:
+        schema_attestation_calls.append(pool)
+        return bool(
+            getattr(state, "migration_records", {}).get(
+                runner.CARD_VAULT_MIGRATION_NAME,
+                False,
+            )
+        )
+
     monkeypatch.setattr(runner.asyncio, "sleep", sleep)
 
     args = runner._parse_args(["--apply", "--migration", migration_name])
@@ -393,6 +403,7 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
             funnel_config_factory=lambda: SimpleNamespace(
                 db_connection_string=runtime_database_url
             ),
+            card_vault_schema_ready_fn=card_vault_schema_ready,
         )
     )
 
@@ -407,6 +418,12 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
     assert state.migration_lock_unlocks == 1
     assert state.migration_lock_depth == 0
     assert sleep_delays == [0.2]
+    if migration_name == runner.CARD_VAULT_MIGRATION_NAME:
+        assert result["schema_ready"] is True
+        assert schema_attestation_calls == [runtime_pool]
+    else:
+        assert "schema_ready" not in result
+        assert schema_attestation_calls == []
 
 
 def test_terms_entrypoint_pins_migration_396() -> None:
@@ -452,6 +469,88 @@ def test_card_vault_entrypoint_pins_migration_398() -> None:
     assert shared_runner._parse_args(argv).migration == "398_eom_card_vault"
     with pytest.raises(SystemExit):
         card_vault_runner._card_vault_argv(["--migration=397_eom_terms_acceptance"])
+
+
+@pytest.mark.parametrize(
+    ("migration_recorded", "schema_ready"),
+    [(False, False), (False, True), (True, False), (True, True)],
+)
+def test_card_vault_migration_bookkeeping_matches_runtime_schema_attestation(
+    monkeypatch,
+    migration_recorded: bool,
+    schema_ready: bool,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(
+        SimpleNamespace(
+            executor_is_superuser=True,
+            migrations_table_exists=True,
+            migration_recorded=migration_recorded,
+            migration_records={
+                "395_eom_post_clean_onboarding_candidates": True,
+                "397_eom_terms_acceptance": True,
+                "398_eom_card_vault": migration_recorded,
+            },
+            schema_name=schema_name,
+        )
+    )
+    attested_pools: list[object] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            return runtime_pool
+        return dba_pool
+
+    async def attest_schema(pool: object) -> bool:
+        attested_pools.append(pool)
+        return schema_ready
+
+    args = runner._parse_args(["--migration", runner.CARD_VAULT_MIGRATION_NAME])
+    if migration_recorded != schema_ready:
+        with pytest.raises(
+            RuntimeError,
+            match="bookkeeping does not match the runtime-role schema attestation",
+        ):
+            asyncio.run(
+                runner._run(
+                    args,
+                    create_pool=create_pool,
+                    config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                        _env_file=None
+                    ),
+                    funnel_config_factory=lambda: SimpleNamespace(
+                        db_connection_string=runtime_database_url
+                    ),
+                    card_vault_schema_ready_fn=attest_schema,
+                )
+            )
+    else:
+        result = asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+                card_vault_schema_ready_fn=attest_schema,
+            )
+        )
+        assert result["migration_recorded"] is migration_recorded
+        assert result["schema_ready"] is schema_ready
+
+    assert attested_pools == [runtime_pool]
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 @pytest.mark.parametrize(

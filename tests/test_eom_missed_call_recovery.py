@@ -3878,7 +3878,7 @@ def test_funnel_advertises_the_additive_missed_call_contract_only_when_routes_ex
     registered = {
         (method, route.path)
         for route in funnel_mod.router.routes
-        for method in (route.methods or ())
+        for method in (getattr(route, "methods", None) or ())
     }
     assert {
         ("POST", "/eom-funnel/leads/{contact_id}/missed-call-attempts"),

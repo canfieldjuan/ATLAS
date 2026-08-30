@@ -3474,7 +3474,7 @@ def test_funnel_advertises_completion_only_with_its_registered_route() -> None:
     registered = {
         (method, item.path)
         for item in funnel_mod.router.routes
-        for method in (item.methods or ())
+        for method in (getattr(item, "methods", None) or ())
     }
     assert funnel_mod._CAPABILITY_ROUTES[capability] == route
     assert route in registered
@@ -3492,7 +3492,7 @@ def test_funnel_advertises_post_clean_candidate_semantics_only_with_routes() -> 
     registered = {
         (method, item.path)
         for item in funnel_mod.router.routes
-        for method in (item.methods or ())
+        for method in (getattr(item, "methods", None) or ())
     }
     assert funnel_mod._CAPABILITY_ROUTES[create_capability] == create_route
     assert funnel_mod._CAPABILITY_ROUTES[list_capability] == list_route

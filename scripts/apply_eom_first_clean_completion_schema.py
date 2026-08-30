@@ -388,6 +388,14 @@ async def _run_pinned_controlled_migration(
             await asyncio.sleep(0.2)
 
 
+async def _card_vault_schema_ready(pool: Any) -> bool:
+    """Load the card-vault attestation only for migration 398 operations."""
+
+    from atlas_brain.services.eom_card_vault import eom_card_vault_schema_ready
+
+    return await eom_card_vault_schema_ready(pool)
+
+
 async def _run(
     args: argparse.Namespace,
     *,
@@ -397,6 +405,9 @@ async def _run(
         EOMFirstCleanCompletionDBAConfig
     ),
     funnel_config_factory: Callable[[], EOMFunnelConfig] = EOMFunnelConfig,
+    card_vault_schema_ready_fn: Callable[[Any], Awaitable[bool]] = (
+        _card_vault_schema_ready
+    ),
 ) -> dict[str, object]:
     migration_name = str(args.migration)
     if migration_name not in CONTROLLED_MIGRATION_NAMES:
@@ -478,6 +489,14 @@ async def _run(
                     )
                 result["migration_recorded"] = True
                 result["applied"] = True
+            if migration_name == CARD_VAULT_MIGRATION_NAME:
+                schema_ready = bool(await card_vault_schema_ready_fn(runtime_pool))
+                result["schema_ready"] = schema_ready
+                if migration_recorded != schema_ready:
+                    raise RuntimeError(
+                        "Card-vault migration bookkeeping does not match the "
+                        "runtime-role schema attestation"
+                    )
             return result
         finally:
             await pool.close()

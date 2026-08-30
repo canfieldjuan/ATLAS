@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -106,6 +107,7 @@ class _State:
         self.readiness: dict[str, Any] | None = None
         self.fail_customer_store_once = False
         self.fail_session_store_once = False
+        self.fail_event_store_once = False
 
 
 class _Connection:
@@ -116,6 +118,9 @@ class _Connection:
         if "pg_advisory_xact_lock" in query:
             return "SELECT 1"
         if "eom_card_vault_record_event" in query:
+            if self.state.fail_event_store_once:
+                self.state.fail_event_store_once = False
+                raise OSError("injected event-store failure")
             self.state.events.append(
                 {
                     "stripe_event_id": args[0],
@@ -289,7 +294,7 @@ class _Provider:
     async def create_customer(self, **kwargs: Any) -> dict[str, Any]:
         self.customer_calls.append(kwargs)
         await asyncio.sleep(0)
-        return {"id": "cus_cardvault123"}
+        return {"id": "cus_cardvault123", "metadata": kwargs["metadata"]}
 
     async def create_checkout_session(self, **kwargs: Any) -> dict[str, Any]:
         self.session_calls.append(kwargs)
@@ -573,13 +578,16 @@ async def test_session_creation_is_setup_only_and_concurrency_idempotent() -> No
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_keeps_stable_retry_identities() -> None:
+async def test_provider_failure_keeps_stable_retry_identities(caplog) -> None:
     state = _State()
     provider = _SessionFailsOnceProvider()
     service = EOMCardVaultService(pool=_Pool(state), provider=provider)
 
-    with pytest.raises(EOMCardVaultUnavailableError):
-        await service.start_session(token=_token(), public_base_url="https://eom.test")
+    with caplog.at_level(logging.ERROR, logger="atlas_brain.services.eom_card_vault"):
+        with pytest.raises(EOMCardVaultUnavailableError):
+            await service.start_session(
+                token=_token(), public_base_url="https://eom.test"
+            )
     result = await service.start_session(
         token=_token(), public_base_url="https://eom.test"
     )
@@ -593,6 +601,61 @@ async def test_provider_failure_keeps_stable_retry_identities() -> None:
     )
     assert len(state.sessions) == 1
     assert state.sessions[0]["state"] == "open"
+    record = next(
+        item
+        for item in caplog.records
+        if getattr(item, "eom_card_vault_operation", None) == "create_or_reuse_session"
+    )
+    assert record.eom_card_vault_context == {
+        "enrollment_id": str(_ENROLLMENT_ID),
+        "session_id": str(_SESSION_ROW_ID),
+    }
+    assert _SECRET not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("field", "wrong_value"),
+    [
+        ("source", "another_source"),
+        ("enrollment_id", "77777777-7777-4777-8777-777777777777"),
+        ("contact_id", "77777777-7777-4777-8777-777777777777"),
+        ("candidate_id", "77777777-7777-4777-8777-777777777777"),
+        (None, None),
+    ],
+)
+@pytest.mark.asyncio
+async def test_created_customer_requires_exact_provider_subject_metadata(
+    field: str | None,
+    wrong_value: str | None,
+) -> None:
+    state = _State()
+    provider = _Provider()
+    original_create_customer = provider.create_customer
+
+    async def create_mismatched_customer(**kwargs: Any) -> dict[str, Any]:
+        customer = await original_create_customer(**kwargs)
+        if field is None:
+            customer["metadata"] = []
+        else:
+            customer["metadata"] = {
+                **customer["metadata"],
+                field: wrong_value,
+            }
+        return customer
+
+    provider.create_customer = create_mismatched_customer  # type: ignore[method-assign]
+
+    with pytest.raises(
+        EOMCardVaultConflictError,
+        match="Stripe customer subject does not match",
+    ):
+        await EOMCardVaultService(pool=_Pool(state), provider=provider).start_session(
+            token=_token(), public_base_url="https://eom.test"
+        )
+
+    assert state.enrollment is not None
+    assert state.enrollment["stripe_customer_id"] is None
+    assert provider.session_calls == []
 
 
 @pytest.mark.asyncio
@@ -625,14 +688,18 @@ async def test_reused_session_requires_exact_provider_subject() -> None:
 @pytest.mark.asyncio
 async def test_database_failure_keeps_stable_provider_identities(
     failure_point: str,
+    caplog,
 ) -> None:
     state = _State()
     setattr(state, f"fail_{failure_point}_store_once", True)
     provider = _Provider()
     service = EOMCardVaultService(pool=_Pool(state), provider=provider)
 
-    with pytest.raises(EOMCardVaultUnavailableError):
-        await service.start_session(token=_token(), public_base_url="https://eom.test")
+    with caplog.at_level(logging.ERROR, logger="atlas_brain.services.eom_card_vault"):
+        with pytest.raises(EOMCardVaultUnavailableError):
+            await service.start_session(
+                token=_token(), public_base_url="https://eom.test"
+            )
     result = await service.start_session(
         token=_token(), public_base_url="https://eom.test"
     )
@@ -648,6 +715,24 @@ async def test_database_failure_keeps_stable_provider_identities(
     expected_session_calls = 1 if failure_point == "customer" else 2
     assert len(provider.customer_calls) == expected_customer_calls
     assert len(provider.session_calls) == expected_session_calls
+    expected_operation = (
+        "store_customer" if failure_point == "customer" else "store_session"
+    )
+    record = next(
+        item
+        for item in caplog.records
+        if getattr(item, "eom_card_vault_operation", None) == expected_operation
+    )
+    expected_context_key = (
+        "enrollment_id" if failure_point == "customer" else "session_id"
+    )
+    expected_context_value = (
+        str(_ENROLLMENT_ID) if failure_point == "customer" else str(_SESSION_ROW_ID)
+    )
+    assert record.eom_card_vault_context == {
+        expected_context_key: expected_context_value
+    }
+    assert _SECRET not in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -735,6 +820,36 @@ async def test_verified_completed_event_is_monotonic_and_replay_safe() -> None:
     assert state.enrollment["status"] == "ready"
     assert state.enrollment["stripe_payment_method_id"] == "pm_cardvault123"
     assert len(state.events) == 1
+
+
+@pytest.mark.asyncio
+async def test_confirmation_database_failure_logs_nonsecret_subject_context(
+    caplog,
+) -> None:
+    state = _State()
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+    await service.start_session(token=_token(), public_base_url="https://eom.test")
+    state.fail_event_store_once = True
+
+    with caplog.at_level(logging.ERROR, logger="atlas_brain.services.eom_card_vault"):
+        with pytest.raises(EOMCardVaultUnavailableError):
+            await service.confirm_checkout_session(event=_completed_event())
+
+    record = next(
+        item
+        for item in caplog.records
+        if getattr(item, "eom_card_vault_operation", None) == "confirm_checkout_session"
+    )
+    assert record.eom_card_vault_context == {
+        "event_id": "evt_cardvault123",
+        "enrollment_id": str(_ENROLLMENT_ID),
+        "session_id": str(_SESSION_ROW_ID),
+    }
+    assert _SECRET not in caplog.text
+    assert "cus_cardvault123" not in caplog.text
+    assert "pm_cardvault123" not in caplog.text
+    assert state.events == []
 
 
 @pytest.mark.asyncio
@@ -972,6 +1087,56 @@ async def test_real_eom_entrypoint_reaches_api_and_root_webhook() -> None:
     assert readiness.status_code == 200
     assert readiness.json()["cardReady"] is True
     assert readiness.json()["reason"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_full_atlas_entrypoint_reaches_signed_root_webhook(monkeypatch) -> None:
+    from atlas_brain import main
+    from atlas_brain.storage import database as database_mod
+
+    config = _config()
+    state = _State()
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+    await service.start_session(token=_token(), public_base_url="https://eom.test")
+
+    def completed_event(payload: bytes, signature: str) -> dict[str, Any]:
+        assert payload == b"{}"
+        assert signature == "valid-signature"
+        return _completed_event()
+
+    provider.construct_event = completed_event  # type: ignore[method-assign]
+    monkeypatch.setattr(database_mod, "get_db_pool", lambda: _Pool(state))
+    monkeypatch.setitem(
+        main.app.dependency_overrides,
+        auth_mod.get_eom_funnel_api_config,
+        lambda: config,
+    )
+    monkeypatch.setitem(
+        main.app.dependency_overrides,
+        api_mod._provider_dependency,
+        lambda: provider,
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=main.app),
+        base_url="http://test",
+    ) as client:
+        response = await client.post(
+            "/webhooks/eom-card-vault",
+            headers={"Stripe-Signature": "valid-signature"},
+            content=b"{}",
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "eventId": "evt_cardvault123",
+        "enrollmentId": str(_ENROLLMENT_ID),
+        "status": "ready",
+        "idempotent": False,
+    }
+    assert state.enrollment is not None
+    assert state.enrollment["status"] == "ready"
 
 
 @pytest.mark.asyncio

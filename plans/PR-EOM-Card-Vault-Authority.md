@@ -37,6 +37,7 @@ splitting them would merge either unreachable state or an unsafe partial path.
 
 Ownership lane: eom-onboarding-card-vault
 Slice phase: Vertical slice
+Max files: 27
 
 1. Add Atlas authority to create or reuse a hosted setup session only for an
    eligible residential post-clean candidate with current accepted Terms, and
@@ -44,6 +45,8 @@ Slice phase: Vertical slice
 2. Expose read-only card readiness and prove configuration, eligibility,
    provider-event, replay, concurrency, migration, and real-entrypoint
    boundaries with focused tests.
+3. Keep capability discovery compatible with both eagerly flattened and lazy
+   FastAPI router includes under the dependency version used by CI.
 
 ### Review Contract
 
@@ -59,6 +62,22 @@ Slice phase: Vertical slice
   - Repeated or concurrent creation returns one logical enrollment and does not
     intentionally create multiple Stripe customers or Checkout sessions;
     settled by idempotency keys, row locking, and replay/concurrency tests.
+    The admitted execution model is any number of requests for the same current
+    candidate/acceptance, including cancellation or process loss at every await.
+    PostgreSQL serializes reservation with the invitation row lock, unique
+    candidate/contact enrollment constraints, and a locked latest-session read;
+    it commits stable enrollment/session UUIDs before releasing those locks and
+    starting provider I/O. Multiple callers may consequently issue the same
+    Stripe request, but each uses identical parameters and an idempotency key
+    derived only from the committed UUID. Stripe must return the same Customer
+    or Checkout Session for that key (and reject parameter drift), while the
+    compare-and-store database writes accept only that same provider identity.
+    A provider success followed by cancellation or database failure therefore
+    leaves a reusable `creating` reservation; a retry repeats the same key and
+    converges on the same logical provider object. This is logical exactly-once
+    state, not a claim that only one outbound HTTP attempt occurs. The concurrent
+    request, provider-failure, and post-provider database-failure tests exercise
+    those interleavings and pin the stable keys and monotonic stored identity.
   - Checkout uses `mode=setup` and never creates a PaymentIntent or charge;
     settled by the Stripe-call contract assertion.
   - The webhook reads the raw request, rejects missing/invalid/oversized
@@ -69,8 +88,9 @@ Slice phase: Vertical slice
     settled by replay tests and monotonic SQL update conditions.
   - Readiness reports card required only for residential contacts and ready only
     from provider-confirmed state; settled by projection tests.
-  - The EOM production ASGI entrypoint mounts both the session/readiness API and
-    the root webhook route; settled by the entrypoint reachability test.
+  - The slim EOM and full Atlas production ASGI entrypoints mount the expected
+    session/readiness and root webhook routes; settled by entrypoint reachability
+    tests that drive provider-confirmed state through each composition.
   - The controlled migration has apply/verify tooling and is admitted to the EOM
     CI contract; settled by focused migration-runner tests.
 - Reachability proof: `atlas_brain.main_eom:app` routes an authenticated Tracker
@@ -89,6 +109,74 @@ Slice phase: Vertical slice
   verification, secret exposure, config defaults, webhook misrouting, and
   accidental coupling to the existing SaaS Stripe webhook.
 - Reviewer rules triggered: R1, R2, R3, R4, R5, R8, R10, R11, R12, R13, R14.
+
+### Fix-loop disposition preflight
+
+- Root decision: Specify the concurrency execution model
+- Source trace: `plans/PR-EOM-Card-Vault-Authority.md:60` claimed one logical
+  provider operation -> `atlas_brain/services/eom_card_vault.py:719` releases
+  database locks before provider I/O -> the plan must state the admitted
+  interleavings and Stripe/database convergence invariant.
+- Upstream files: `plans/PR-EOM-Card-Vault-Authority.md`.
+- Fix strategy: upstream-root
+- Blocking predicate: claimed-mechanism
+- Disposition: fixed-in
+- Allowed files: `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
+- Root decision: Log card-vault confirmation failures
+- Source trace: `atlas_brain/services/eom_card_vault.py:1051` translated database
+  exceptions without operational evidence -> the service boundary must emit
+  structured operation and non-secret subject identifiers before translation.
+- Upstream files: `atlas_brain/services/eom_card_vault.py`,
+  `tests/test_eom_card_vault.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: claimed-mechanism
+- Disposition: fixed-in
+- Allowed files: `atlas_brain/services/eom_card_vault.py`, `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
+- Root decision: Validate the created Stripe customer subject
+- Source trace: `atlas_brain/services/eom_card_vault.py:743` creates a subject-bound
+  Customer -> `atlas_brain/services/eom_card_vault.py:754` previously accepted
+  only its identifier -> returned source/enrollment/contact/candidate metadata
+  must match before persistence.
+- Upstream files: `atlas_brain/services/eom_card_vault.py`,
+  `tests/test_eom_card_vault.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: security
+- Disposition: fixed-in
+- Allowed files: `atlas_brain/services/eom_card_vault.py`, `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
+- Root decision: Make card-vault preflight attest the deployed schema
+- Source trace: `scripts/apply_eom_card_vault_schema.py:37` delegates to the shared
+  controlled runner -> `scripts/apply_eom_first_clean_completion_schema.py:433`
+  previously checked only migration bookkeeping -> migration 398 must also run
+  the runtime-role card-vault schema attestation and reject either drift direction.
+- Upstream files: `scripts/apply_eom_first_clean_completion_schema.py`,
+  `tests/test_eom_first_clean_completion_dba_runner.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: claimed-mechanism
+- Disposition: fixed-in
+- Allowed files: `.agent/capabilities.yaml`, `.agent/runbooks/database.md`, `atlas_brain/services/eom_card_vault.py`, `atlas_brain/storage/migrations/398_eom_card_vault.sql`, `atlas_brain/storage/migrations/__init__.py`, `ops`, `plans/PR-EOM-Card-Vault-Authority.md`, `scripts/apply_eom_card_vault_schema.py`, `scripts/apply_eom_first_clean_completion_schema.py`, `tests/test_agent_operations_contract.py`, `tests/test_eom_card_vault.py`, `tests/test_eom_first_clean_completion_dba_runner.py`, `tests/test_eom_terms_acceptance.py`, `tests/test_migrations_runner.py`.
+- Max files: 27
+- Parked hardening: none
+
+- Root decision: Exercise the full Atlas webhook entrypoint
+- Source trace: `atlas_brain/main.py:1223` mounts the root webhook ->
+  `tests/test_eom_card_vault.py:925` previously exercised only `main_eom.app` ->
+  a signed request must traverse `main.app` and its canonical pool fallback.
+- Upstream files: `tests/test_eom_card_vault.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: claimed-mechanism
+- Disposition: fixed-in
+- Allowed files: `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, `atlas_brain/eom_api/card_vault.py`, `atlas_brain/eom_api/config.py`, `atlas_brain/eom_api/funnel.py`, `atlas_brain/eom_api/funnel_auth.py`, `atlas_brain/main.py`, `atlas_brain/main_eom.py`, `plans/PR-EOM-Card-Vault-Authority.md`, `render.eom.yaml`, `requirements.eom.txt`, `tests/test_eom_card_vault.py`, `tests/test_eom_first_clean_completion.py`, `tests/test_eom_funnel_capability_manifest.py`, `tests/test_eom_missed_call_recovery.py`, `tests/test_eom_render_profile.py`.
+- Max files: 27
+- Parked hardening: none
 
 ### Guard class-closure declaration
 
@@ -171,8 +259,10 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/apply_eom_first_clean_completion_schema.py`
 - `tests/test_agent_operations_contract.py`
 - `tests/test_eom_card_vault.py`
+- `tests/test_eom_first_clean_completion.py`
 - `tests/test_eom_first_clean_completion_dba_runner.py`
 - `tests/test_eom_funnel_capability_manifest.py`
+- `tests/test_eom_missed_call_recovery.py`
 - `tests/test_eom_render_profile.py`
 - `tests/test_eom_terms_acceptance.py`
 - `tests/test_migrations_runner.py`
@@ -221,6 +311,11 @@ Parked hardening: none.
 - `uv run --isolated --with-requirements requirements.eom.txt --with pytest
   --with pytest-asyncio python -m pytest tests/test_eom_card_vault.py -q`: 44
   passed under the exact slim EOM dependency set.
+- `uv run --isolated --python 3.11 --with-requirements requirements.txt --with
+  pytest --with pytest-asyncio python -m pytest -q` over the card-vault,
+  migration-preflight, capability-manifest, and three affected legacy route
+  tests: 99 passed under the dependency profile that exposed the CI failure.
+- `python -m ruff check` over all eight changed Python files: passed.
 - Ruff import/undefined-name checks passed for the new files; fatal Python
   checks passed across every touched Python file; all four new Python files are
   formatter-clean; `py_compile` passed across every touched Python file.
@@ -239,24 +334,26 @@ Parked hardening: none.
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 15 |
 | `atlas_brain/eom_api/card_vault.py` | 241 |
 | `atlas_brain/eom_api/config.py` | 71 |
-| `atlas_brain/eom_api/funnel.py` | 15 |
+| `atlas_brain/eom_api/funnel.py` | 54 |
 | `atlas_brain/eom_api/funnel_auth.py` | 35 |
 | `atlas_brain/main.py` | 4 |
 | `atlas_brain/main_eom.py` | 3 |
-| `atlas_brain/services/eom_card_vault.py` | 1160 |
+| `atlas_brain/services/eom_card_vault.py` | 1211 |
 | `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 439 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Vault-Authority.md` | 262 |
+| `plans/PR-EOM-Card-Vault-Authority.md` | 359 |
 | `render.eom.yaml` | 21 |
 | `requirements.eom.txt` | 1 |
 | `scripts/apply_eom_card_vault_schema.py` | 37 |
-| `scripts/apply_eom_first_clean_completion_schema.py` | 12 |
+| `scripts/apply_eom_first_clean_completion_schema.py` | 31 |
 | `tests/test_agent_operations_contract.py` | 27 |
-| `tests/test_eom_card_vault.py` | 1046 |
-| `tests/test_eom_first_clean_completion_dba_runner.py` | 91 |
-| `tests/test_eom_funnel_capability_manifest.py` | 17 |
+| `tests/test_eom_card_vault.py` | 1211 |
+| `tests/test_eom_first_clean_completion.py` | 4 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 190 |
+| `tests/test_eom_funnel_capability_manifest.py` | 44 |
+| `tests/test_eom_missed_call_recovery.py` | 2 |
 | `tests/test_eom_render_profile.py` | 27 |
 | `tests/test_eom_terms_acceptance.py` | 90 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **3666** |
+| **Total** | **4169** |
