@@ -104,6 +104,7 @@ class _State:
             "email": "customer@example.test",
             "candidate_id": _CANDIDATE_ID,
             "candidate_status": "pending",
+            "service_commitment": "recurring",
             "database_now": _NOW,
             "later_material": False,
         }
@@ -343,7 +344,10 @@ class _Pool:
             yield self.connection
 
     async def fetchval(self, query: str, *_args: Any) -> bool:
-        assert "eom_card_vault_schema_ready" in query
+        assert (
+            "eom_card_vault_schema_ready" in query
+            or "eom_card_service_commitment_schema_ready" in query
+        )
         return self.state.schema_ready
 
     async def fetchrow(self, query: str, *_args: Any) -> dict[str, Any] | None:
@@ -359,6 +363,7 @@ class _Pool:
             "contact_type": "customer",
             "contact_status": "active",
             "candidate_id": eligibility.get("candidate_id"),
+            "service_commitment": eligibility.get("service_commitment"),
             "acceptance_id": eligibility.get("acceptance_id"),
             "acceptance_audience": eligibility.get("acceptance_audience"),
             "enrollment_id": enrollment.get("id"),
@@ -1076,6 +1081,8 @@ async def test_corrupt_reserved_return_url_stops_before_provider_retry() -> None
         ("full_name", "Another Customer"),
         ("candidate_id", None),
         ("candidate_status", "blocked"),
+        ("service_commitment", None),
+        ("service_commitment", "one_time"),
         ("email", None),
         ("invitation_recipient_email", "other@example.test"),
         ("acceptance_recipient_email", "other@example.test"),
@@ -1286,6 +1293,48 @@ async def test_readiness_keeps_commercial_outside_the_card_requirement() -> None
     assert result["cardRequired"] is False
     assert result["cardReady"] is True
     assert result["reason"] == "not_required"
+
+
+@pytest.mark.asyncio
+async def test_one_time_readiness_skips_card_and_unclassified_fails_closed() -> None:
+    one_time = _State()
+    assert one_time.eligibility is not None
+    one_time.eligibility["service_commitment"] = "one_time"
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(one_time), provider=provider)
+
+    readiness = await service.get_readiness(contact_id=_CONTACT_ID)
+    with pytest.raises(EOMCardVaultNotFoundError):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+
+    assert readiness["cardRequired"] is False
+    assert readiness["cardReady"] is True
+    assert readiness["reason"] == "not_required"
+    assert readiness["candidateId"] == str(_CANDIDATE_ID)
+    assert provider.customer_calls == []
+    assert provider.session_calls == []
+
+    unclassified = _State()
+    assert unclassified.eligibility is not None
+    unclassified.eligibility["service_commitment"] = None
+    unclassified_provider = _Provider()
+    unclassified_service = EOMCardVaultService(
+        pool=_Pool(unclassified), provider=unclassified_provider
+    )
+
+    unclassified_readiness = await unclassified_service.get_readiness(
+        contact_id=_CONTACT_ID
+    )
+    with pytest.raises(EOMCardVaultNotFoundError):
+        await unclassified_service.start_session(
+            token=_token(), public_base_url="https://eom.test"
+        )
+
+    assert unclassified_readiness["cardRequired"] is True
+    assert unclassified_readiness["cardReady"] is False
+    assert unclassified_readiness["reason"] == "service_commitment_required"
+    assert unclassified_provider.customer_calls == []
+    assert unclassified_provider.session_calls == []
 
 
 @pytest.mark.asyncio
@@ -1536,6 +1585,7 @@ async def test_readiness_does_not_require_provider_credentials() -> None:
         "contact_type": "customer",
         "contact_status": "active",
         "candidate_id": _CANDIDATE_ID,
+        "service_commitment": "recurring",
         "acceptance_id": _ACCEPTANCE_ID,
         "acceptance_audience": "residential",
         "enrollment_id": _ENROLLMENT_ID,

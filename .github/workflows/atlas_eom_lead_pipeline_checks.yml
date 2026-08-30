@@ -40,6 +40,7 @@ on:
       - "atlas_brain/services/eom_terms_authority.py"
       - "atlas_brain/services/eom_terms_acceptance.py"
       - "atlas_brain/services/eom_card_vault.py"
+      - "atlas_brain/services/eom_card_service_commitment.py"
       - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -89,11 +90,13 @@ on:
       - "atlas_brain/storage/migrations/396_eom_terms_authority.sql"
       - "atlas_brain/storage/migrations/397_eom_terms_acceptance.sql"
       - "atlas_brain/storage/migrations/398_eom_card_vault.sql"
+      - "atlas_brain/storage/migrations/399_eom_card_service_commitments.sql"
       - "atlas_brain/storage/migrations/reconciliation.py"
       - "scripts/apply_eom_first_clean_completion_schema.py"
       - "scripts/apply_eom_terms_authority_schema.py"
       - "scripts/apply_eom_terms_acceptance_schema.py"
       - "scripts/apply_eom_card_vault_schema.py"
+      - "scripts/apply_eom_card_service_commitment_schema.py"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_ack_commercial_templates.py"
@@ -114,6 +117,7 @@ on:
       - "tests/test_eom_terms_authority.py"
       - "tests/test_eom_terms_acceptance.py"
       - "tests/test_eom_card_vault.py"
+      - "tests/test_eom_card_service_commitment.py"
       - "tests/test_database_role_topology_preflight.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_render_profile.py"
@@ -173,6 +177,7 @@ on:
       - "atlas_brain/services/eom_terms_authority.py"
       - "atlas_brain/services/eom_terms_acceptance.py"
       - "atlas_brain/services/eom_card_vault.py"
+      - "atlas_brain/services/eom_card_service_commitment.py"
       - "atlas_brain/services/eom_public_onboarding_tokens.py"
       - "atlas_brain/templates/email/__init__.py"
       - "atlas_brain/templates/email/estimate_confirmation.py"
@@ -222,11 +227,13 @@ on:
       - "atlas_brain/storage/migrations/396_eom_terms_authority.sql"
       - "atlas_brain/storage/migrations/397_eom_terms_acceptance.sql"
       - "atlas_brain/storage/migrations/398_eom_card_vault.sql"
+      - "atlas_brain/storage/migrations/399_eom_card_service_commitments.sql"
       - "atlas_brain/storage/migrations/reconciliation.py"
       - "scripts/apply_eom_first_clean_completion_schema.py"
       - "scripts/apply_eom_terms_authority_schema.py"
       - "scripts/apply_eom_terms_acceptance_schema.py"
       - "scripts/apply_eom_card_vault_schema.py"
+      - "scripts/apply_eom_card_service_commitment_schema.py"
       - "atlas_brain/tools/calendar.py"
       - "atlas_brain/tools/scheduling.py"
       - "tests/test_ack_commercial_templates.py"
@@ -247,6 +254,7 @@ on:
       - "tests/test_eom_terms_authority.py"
       - "tests/test_eom_terms_acceptance.py"
       - "tests/test_eom_card_vault.py"
+      - "tests/test_eom_card_service_commitment.py"
       - "tests/test_database_role_topology_preflight.py"
       - "tests/test_eom_lead_conversion_integration.py"
       - "tests/test_eom_render_profile.py"
@@ -377,6 +385,7 @@ jobs:
             tests/test_eom_terms_authority.py \
             tests/test_eom_terms_acceptance.py \
             tests/test_eom_card_vault.py \
+            tests/test_eom_card_service_commitment.py \
             tests/test_database_role_topology_preflight.py \
             tests/test_eom_lead_conversion_integration.py \
             tests/test_eom_render_profile.py \

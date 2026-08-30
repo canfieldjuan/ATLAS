@@ -64,6 +64,10 @@ from ..services.eom_first_clean_completion import (
     EOMFirstCleanCompletionError,
     EOMFirstCleanCompletionService,
 )
+from ..services.eom_card_service_commitment import (
+    EOMCardServiceCommitmentError,
+    EOMCardServiceCommitmentService,
+)
 from ..services.eom_terms_authority import (
     EOMTermsAuthority,
     EOMTermsAuthorityError,
@@ -201,6 +205,40 @@ class EOMPostCleanOnboardingCandidateItem(BaseModel):
     tracker_service_id: int = Field(serialization_alias="trackerServiceId")
     completed_at: datetime = Field(serialization_alias="completedAt")
     created_at: datetime = Field(serialization_alias="createdAt")
+    service_commitment: Literal["recurring", "one_time"] | None = Field(
+        default=None, serialization_alias="serviceCommitment"
+    )
+    service_commitment_decided_by: str | None = Field(
+        default=None, serialization_alias="serviceCommitmentDecidedBy"
+    )
+    service_commitment_decided_at: datetime | None = Field(
+        default=None, serialization_alias="serviceCommitmentDecidedAt"
+    )
+
+
+class EOMCardServiceCommitmentRequest(BaseModel):
+    """One explicit office decision for post-clean card policy."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    service_commitment: Literal["recurring", "one_time"] = Field(
+        alias="serviceCommitment"
+    )
+
+
+class EOMCardServiceCommitmentResponse(BaseModel):
+    """Closed immutable decision receipt."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    candidate_id: UUID = Field(alias="candidateId")
+    contact_id: UUID = Field(alias="contactId")
+    service_commitment: Literal["recurring", "one_time"] = Field(
+        alias="serviceCommitment"
+    )
+    decided_by_name: str = Field(alias="decidedByName")
+    decided_at: datetime = Field(alias="decidedAt")
+    idempotent: bool
 
 
 class EOMPostCleanOnboardingCandidateResponse(BaseModel):
@@ -916,6 +954,23 @@ def _first_clean_completion_dependency(
     return EOMFirstCleanCompletionService(pool=pool)
 
 
+def _card_service_commitment_dependency(
+    request: Request,
+) -> EOMCardServiceCommitmentService:
+    """Bind the operator decision to the canonical EOM funnel database."""
+
+    pool_factory = getattr(
+        request.app.state, "eom_funnel_first_clean_completion_pool", None
+    )
+    if callable(pool_factory):
+        pool = pool_factory()
+    else:
+        from ..storage.database import get_db_pool
+
+        pool = get_db_pool()
+    return EOMCardServiceCommitmentService(pool=pool)
+
+
 def _terms_authority_dependency(request: Request) -> EOMTermsAuthority:
     """Bind Terms state to the same canonical funnel database."""
 
@@ -1151,6 +1206,10 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     "customer.post_clean_onboarding_candidate.list": (
         "GET",
         "/eom-funnel/post-clean-onboarding-candidates",
+    ),
+    "customer.post_clean_service_commitment.decide": (
+        "POST",
+        "/eom-funnel/post-clean-onboarding-candidates/{candidate_id}/service-commitment",
     ),
     "contact.operator_mutation": ("POST", "/eom-funnel/operator-contacts"),
     # Same route as contact.operator_mutation ON PURPOSE: this name versions
@@ -1970,6 +2029,43 @@ async def list_eom_post_clean_onboarding_candidates(
         has_more=has_more,
         next_cursor=next_cursor,
     )
+
+
+@router.post(
+    "/post-clean-onboarding-candidates/{candidate_id}/service-commitment",
+    response_model=EOMCardServiceCommitmentResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_eom_funnel_api)],
+)
+async def decide_eom_post_clean_service_commitment(
+    candidate_id: UUID,
+    payload: EOMCardServiceCommitmentRequest,
+    response: Response,
+    operation_key: str = Depends(_approval_key_dependency),
+    actor: dict[str, object] = Depends(require_eom_funnel_actor),
+    service: EOMCardServiceCommitmentService = Depends(
+        _card_service_commitment_dependency
+    ),
+) -> EOMCardServiceCommitmentResponse:
+    """Record the one-time or recurring decision before card eligibility."""
+
+    try:
+        result = await service.decide(
+            candidate_id=candidate_id,
+            service_commitment=payload.service_commitment,
+            operation_key=operation_key,
+            actor_id=int(actor["id"]),
+            actor_name=str(actor["name"]),
+        )
+    except EOMCardServiceCommitmentError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    response.status_code = (
+        status.HTTP_200_OK if bool(result["idempotent"]) else status.HTTP_201_CREATED
+    )
+    return EOMCardServiceCommitmentResponse.model_validate(result)
 
 
 @router.post(

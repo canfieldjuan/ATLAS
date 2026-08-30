@@ -18,6 +18,10 @@ from uuid import UUID, uuid4
 
 import asyncpg
 
+from .eom_card_service_commitment import (
+    eom_card_service_commitment_schema_ready,
+)
+
 
 _EOM_CONTEXT = "effingham_maids"
 _MAX_SIGNED_BIGINT = 2**63 - 1
@@ -1094,8 +1098,42 @@ class EOMFirstCleanCompletionService:
 
         await self.require_schema_ready()
         try:
+            commitment_schema_present = bool(
+                await self.pool.fetchval(
+                    """
+                    SELECT to_regclass(format(
+                        '%I.eom_post_clean_service_commitments',
+                        current_schema()
+                    )) IS NOT NULL
+                    """
+                )
+            )
+            if commitment_schema_present and not (
+                await eom_card_service_commitment_schema_ready(self.pool)
+            ):
+                raise EOMFirstCleanCompletionUnavailableError(
+                    "Service-commitment projection schema is unavailable"
+                )
+            commitment_columns = (
+                "commitment.service_commitment, "
+                "commitment.decided_by_name AS service_commitment_decided_by, "
+                "commitment.decided_at AS service_commitment_decided_at"
+                if commitment_schema_present
+                else (
+                    "NULL::varchar(16) AS service_commitment, "
+                    "NULL::varchar(128) AS service_commitment_decided_by, "
+                    "NULL::timestamptz AS service_commitment_decided_at"
+                )
+            )
+            commitment_join = (
+                "LEFT JOIN eom_post_clean_service_commitments AS commitment "
+                "ON commitment.candidate_id = candidate.id "
+                "AND commitment.contact_id = candidate.contact_id"
+                if commitment_schema_present
+                else ""
+            )
             rows = await self.pool.fetch(
-                """
+                f"""
                 SELECT candidate.id AS candidate_id,
                        candidate.completion_receipt_id,
                        candidate.contact_id,
@@ -1107,6 +1145,7 @@ class EOMFirstCleanCompletionService:
                        receipt.tracker_service_kind,
                        receipt.tracker_service_id,
                        receipt.completed_at,
+                       {commitment_columns},
                        CASE
                            WHEN contact.status <> 'active'
                              OR contact.contact_type <> 'customer'
@@ -1123,6 +1162,7 @@ class EOMFirstCleanCompletionService:
                   ON receipt.id = candidate.completion_receipt_id
                  AND receipt.contact_id = candidate.contact_id
                  AND receipt.handoff_id = candidate.handoff_id
+                {commitment_join}
                 WHERE candidate.business_context_id = $1
                   AND contact.business_context_id = $1
                   AND candidate.status = 'pending'

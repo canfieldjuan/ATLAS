@@ -20,6 +20,9 @@ from ..eom_api.config import (
 )
 from .eom_terms_acceptance import AuthenticatedEOMTermsToken
 from .eom_terms_authority import EOM_TERMS_PUBLICATION_LOCK_KEY
+from .eom_card_service_commitment import (
+    eom_card_service_commitment_schema_ready,
+)
 
 EOM_CARD_VAULT_SOURCE = "eom_card_vault"
 EOM_CARD_VAULT_STRIPE_API_VERSION = "2026-05-27.dahlia"
@@ -733,6 +736,11 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                       AND relation.relname IN (
                           SELECT name FROM expected_relations
                       )
+                      AND NOT (
+                          relation.relname = 'eom_card_vault_enrollments'
+                          AND trigger.tgname =
+                              'trg_require_eom_recurring_card_commitment'
+                      )
                       AND NOT trigger.tgisinternal
                 ) = (SELECT count(*) FROM expected_triggers)
                 AND NOT EXISTS (
@@ -808,7 +816,9 @@ class EOMCardVaultService:
         return self._provider
 
     async def require_schema_ready(self) -> None:
-        if not await eom_card_vault_schema_ready(self.pool):
+        if not await eom_card_vault_schema_ready(
+            self.pool
+        ) or not await eom_card_service_commitment_schema_ready(self.pool):
             raise EOMCardVaultUnavailableError("EOM card-vault schema is unavailable")
 
     @staticmethod
@@ -844,6 +854,7 @@ class EOMCardVaultService:
             != str(row["invitation_recipient_email"])
             or row["candidate_id"] is None
             or str(row["candidate_status"]) != "pending"
+            or str(row["service_commitment"]) != "recurring"
             or not str(row["email"] or "").strip()
         ):
             raise EOMCardVaultNotFoundError("Card setup is unavailable")
@@ -908,6 +919,7 @@ class EOMCardVaultService:
                            contact.email,
                            candidate.id AS candidate_id,
                            candidate.status AS candidate_status,
+                           commitment.service_commitment,
                            clock_timestamp() AS database_now,
                            EXISTS (
                                SELECT 1
@@ -926,6 +938,9 @@ class EOMCardVaultService:
                     JOIN contacts AS contact ON contact.id = invitation.contact_id
                     LEFT JOIN eom_post_clean_onboarding_candidates AS candidate
                       ON candidate.contact_id = contact.id
+                    LEFT JOIN eom_post_clean_service_commitments AS commitment
+                      ON commitment.candidate_id = candidate.id
+                     AND commitment.contact_id = contact.id
                     WHERE invitation.id = $1
                     FOR UPDATE OF invitation, contact
                     """,
@@ -1746,6 +1761,7 @@ class EOMCardVaultService:
                        contact.contact_type,
                        contact.status AS contact_status,
                        candidate.id AS candidate_id,
+                       commitment.service_commitment,
                        acceptance.id AS acceptance_id,
                        acceptance.audience AS acceptance_audience,
                        enrollment.id AS enrollment_id,
@@ -1763,6 +1779,9 @@ class EOMCardVaultService:
                 LEFT JOIN eom_post_clean_onboarding_candidates AS candidate
                   ON candidate.contact_id = contact.id
                  AND candidate.status = 'pending'
+                LEFT JOIN eom_post_clean_service_commitments AS commitment
+                  ON commitment.candidate_id = candidate.id
+                 AND commitment.contact_id = contact.id
                 LEFT JOIN LATERAL (
                     SELECT stored.*
                     FROM eom_terms_acceptances AS stored
@@ -1807,6 +1826,26 @@ class EOMCardVaultService:
             }
         if audience != "residential":
             raise EOMCardVaultNotFoundError("Card readiness is unavailable")
+        service_commitment = (
+            str(row["service_commitment"])
+            if row["service_commitment"] is not None
+            else None
+        )
+        if service_commitment == "one_time":
+            if row["enrollment_id"] is not None:
+                raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
+            return {
+                "contactId": str(parsed_contact_id),
+                "audience": audience,
+                "cardRequired": False,
+                "cardReady": True,
+                "reason": "not_required",
+                "candidateId": str(row["candidate_id"]),
+                "enrollmentId": None,
+                "providerConfirmedAt": None,
+            }
+        if service_commitment not in {None, "recurring"}:
+            raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
         if str(row["enrollment_status"]) == "ready":
             reason = "ready"
         elif (
@@ -1817,6 +1856,8 @@ class EOMCardVaultService:
             reason = "terms_not_ready"
         elif row["candidate_id"] is None:
             reason = "first_clean_not_confirmed"
+        elif service_commitment is None:
+            reason = "service_commitment_required"
         elif row["enrollment_id"] is None:
             reason = "not_started"
         elif str(row["enrollment_status"]) == "pending":

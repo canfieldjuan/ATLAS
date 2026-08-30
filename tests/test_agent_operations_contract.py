@@ -72,6 +72,7 @@ def test_eom_guarded_database_operations_are_closed_and_routed(
         "eom-terms-authority": "apply_eom_terms_authority_schema.py",
         "eom-terms-acceptance": "apply_eom_terms_acceptance_schema.py",
         "eom-card-vault": "apply_eom_card_vault_schema.py",
+        "eom-card-service-commitment": "apply_eom_card_service_commitment_schema.py",
     }
     root = Path("/workspace/atlas-terms-release")
     calls: list[tuple[list[str], Path | None]] = []
@@ -95,6 +96,13 @@ def test_eom_guarded_database_operations_are_closed_and_routed(
     assert run_controlled_database_operation("eom-terms-acceptance", "apply") == 0
     assert run_controlled_database_operation("eom-card-vault", "preflight") == 0
     assert run_controlled_database_operation("eom-card-vault", "apply") == 0
+    assert (
+        run_controlled_database_operation("eom-card-service-commitment", "preflight")
+        == 0
+    )
+    assert (
+        run_controlled_database_operation("eom-card-service-commitment", "apply") == 0
+    )
     authority_prefix = [
         "/venv/python",
         str(root / "scripts/apply_eom_terms_authority_schema.py"),
@@ -110,6 +118,11 @@ def test_eom_guarded_database_operations_are_closed_and_routed(
         str(root / "scripts/apply_eom_card_vault_schema.py"),
         "--json",
     ]
+    commitment_prefix = [
+        "/venv/python",
+        str(root / "scripts/apply_eom_card_service_commitment_schema.py"),
+        "--json",
+    ]
     assert calls == [
         (authority_prefix, root),
         ([*authority_prefix, "--apply"], root),
@@ -117,6 +130,8 @@ def test_eom_guarded_database_operations_are_closed_and_routed(
         ([*acceptance_prefix, "--apply"], root),
         (card_vault_prefix, root),
         ([*card_vault_prefix, "--apply"], root),
+        (commitment_prefix, root),
+        ([*commitment_prefix, "--apply"], root),
     ]
     with pytest.raises(OpsError, match="unknown controlled database operation"):
         run_controlled_database_operation("other", "preflight")
@@ -139,6 +154,8 @@ def test_eom_guarded_database_operations_are_closed_and_routed(
     assert db_command(["controlled", "eom-terms-acceptance", "apply"]) == 0
     assert db_command(["controlled", "eom-card-vault", "preflight"]) == 0
     assert db_command(["controlled", "eom-card-vault", "apply"]) == 0
+    assert db_command(["controlled", "eom-card-service-commitment", "preflight"]) == 0
+    assert db_command(["controlled", "eom-card-service-commitment", "apply"]) == 0
     assert dispatched == [
         ("eom-terms-authority", "preflight"),
         ("eom-terms-authority", "apply"),
@@ -146,6 +163,8 @@ def test_eom_guarded_database_operations_are_closed_and_routed(
         ("eom-terms-acceptance", "apply"),
         ("eom-card-vault", "preflight"),
         ("eom-card-vault", "apply"),
+        ("eom-card-service-commitment", "preflight"),
+        ("eom-card-service-commitment", "apply"),
     ]
 
 
@@ -1675,6 +1694,15 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
     assert card_vault_migration["apply"] == (
         "./ops db controlled eom-card-vault apply"
     )
+    commitment_migration = capabilities["database"]["controlled_migrations"][
+        "eom_card_service_commitment"
+    ]
+    assert commitment_migration["preflight"] == (
+        "./ops db controlled eom-card-service-commitment preflight"
+    )
+    assert commitment_migration["apply"] == (
+        "./ops db controlled eom-card-service-commitment apply"
+    )
     database_runbook = (ROOT / ".agent/runbooks/database.md").read_text(
         encoding="utf-8"
     )
@@ -1684,6 +1712,8 @@ def test_capability_map_is_machine_readable_and_has_required_surfaces() -> None:
     assert acceptance_migration["apply"] in database_runbook
     assert card_vault_migration["preflight"] in database_runbook
     assert card_vault_migration["apply"] in database_runbook
+    assert commitment_migration["preflight"] in database_runbook
+    assert commitment_migration["apply"] in database_runbook
     assert "Post-deployment application rollback is retention-only" in database_runbook
     assert capabilities["deployment"]["brain"]["provider"] == "local systemd user service"
     assert capabilities["deployment"]["frontend"]["provider"] == "Vercel"

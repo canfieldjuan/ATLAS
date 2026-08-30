@@ -99,6 +99,7 @@ class EOMCardVaultReadinessResponse(BaseModel):
         "not_required",
         "terms_not_ready",
         "first_clean_not_confirmed",
+        "service_commitment_required",
         "not_started",
         "pending",
         "ready",
