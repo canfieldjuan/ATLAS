@@ -8,6 +8,7 @@ import hmac
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -33,6 +34,7 @@ from atlas_brain.services.eom_card_vault import (
     EOMCardVaultSignatureError,
     EOMCardVaultUnavailableError,
     StripeEOMCardVaultProvider,
+    _provider_id,
 )
 from atlas_brain.services.eom_terms_acceptance import (
     AuthenticatedEOMTermsToken,
@@ -445,6 +447,89 @@ def test_card_vault_configuration_accepts_timeout_boundaries(timeout: int) -> No
         ).card_vault_request_timeout_seconds
         == timeout
     )
+
+
+def test_card_vault_config_grammar_is_closed_across_token_and_container_families() -> (
+    None
+):
+    """Spec-derived oracle: only an ASCII identifier in its exact family is safe."""
+
+    families = (
+        ("card_vault_stripe_secret_key", "sk_test_"),
+        ("card_vault_stripe_secret_key", "sk_live_"),
+        ("card_vault_stripe_secret_key", "rk_test_"),
+        ("card_vault_stripe_secret_key", "rk_live_"),
+        ("card_vault_stripe_webhook_secret", "whsec_"),
+    )
+    tokens = (
+        ("valid", lambda prefix: f"{prefix}AbC_123456789"),
+        ("wrong-family", lambda _prefix: "pk_test_AbC_123456789"),
+        ("too-short", lambda prefix: f"{prefix}x"),
+        (
+            "non-ascii",
+            lambda prefix: f"{prefix}AbC_12345678e\N{LATIN SMALL LETTER E WITH ACUTE}",
+        ),
+        ("punctuation", lambda prefix: f"{prefix}AbC-123456789"),
+    )
+    containers = (
+        ("scalar", lambda token: token),
+        ("list", lambda token: [token]),
+        ("mapping", lambda token: {"value": token}),
+    )
+
+    for (field, prefix), (token_class, make_token), (
+        container_class,
+        wrap,
+    ) in product(families, tokens, containers):
+        candidate = wrap(make_token(prefix))
+        expected = token_class == "valid" and container_class == "scalar"
+        if expected:
+            configured = _config(**{field: candidate})
+            actual = getattr(configured, field).get_secret_value()
+            assert actual == candidate
+        else:
+            with pytest.raises(ValidationError):
+                _config(**{field: candidate})
+
+
+def test_provider_id_grammar_is_closed_across_token_and_container_families() -> None:
+    """Spec-derived oracle: family match plus safe representation is mandatory."""
+
+    families = (
+        ("cus_", "customer"),
+        ("cs_", "Checkout session"),
+        ("seti_", "SetupIntent"),
+        ("pm_", "payment method"),
+        ("evt_", "event"),
+    )
+    tokens = (
+        ("valid", lambda prefix: f"{prefix}AbC_123"),
+        ("wrong-family", lambda _prefix: "bad_AbC_123"),
+        ("punctuation", lambda prefix: f"{prefix}AbC-123"),
+        ("too-long", lambda prefix: prefix + ("A" * 256)),
+    )
+    containers = (
+        ("scalar", lambda token: token),
+        ("mapping", lambda token: {"id": token}),
+        ("object", lambda token: SimpleNamespace(id=token)),
+        ("nested", lambda token: {"id": {"id": token}}),
+        ("sequence", lambda token: [token]),
+    )
+    admitted_containers = frozenset({"scalar", "mapping", "object"})
+
+    for (prefix, label), (token_class, make_token), (
+        container_class,
+        wrap,
+    ) in product(families, tokens, containers):
+        candidate = wrap(make_token(prefix))
+        expected = token_class == "valid" and container_class in admitted_containers
+        if expected:
+            assert _provider_id(candidate, prefix=prefix, label=label) == make_token(
+                prefix
+            )
+        else:
+            with pytest.raises(EOMCardVaultConflictError):
+                _provider_id(candidate, prefix=prefix, label=label)
 
 
 @pytest.mark.asyncio

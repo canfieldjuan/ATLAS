@@ -90,6 +90,25 @@ Slice phase: Vertical slice
   accidental coupling to the existing SaaS Stripe webhook.
 - Reviewer rules triggered: R1, R2, R3, R4, R5, R8, R10, R11, R12, R13, R14.
 
+### Guard class-closure declaration
+
+- Stripe credential and provider-object inputs are OPEN because environment
+  text and Stripe response/event containers are producer supplied. Membership
+  is DERIVED at each use from the documented key/identifier grammar, exact
+  provider source and subject metadata, and the expected scalar/mapping/object
+  representation. The semantic-oracle tests generate identifier families x
+  token classes x container shapes. Any malformed, unknown, or mismatched value
+  fails closed before a provider or readiness effect; a validly signed but
+  unrelated event is acknowledged without mutation, which is the safe side.
+- Eligibility and readiness fields are CLOSED and DERIVED from the named SQL
+  projections over the canonical contacts, candidate, invitation, acceptance,
+  and Terms-version schema. A missing or unrecognized status/audience/identity
+  takes the not-found or unavailable path before Stripe is called.
+- Runtime privileges and guard triggers are CLOSED and ENUMERATED from the exact
+  columns and writes used by this service and migration 398. Missing required
+  membership or any extra INSERT/UPDATE/DELETE/TRUNCATE authority makes schema
+  attestation fail, which is safer than serving against a drifted boundary.
+
 ### Boundary-change enumeration
 
 Required when this diff changes a guard, validator, normalizer, resolver,
@@ -197,10 +216,10 @@ Parked hardening: none.
 ## Verification
 
 - `uv run --with stripe==15.3.0 python -m pytest` over the seven directly
-  touched test modules: 410 passed with the real card-vault migration and
+  touched test modules: 412 passed with the real card-vault migration and
   migration-runner concurrency probes enabled against disposable PostgreSQL.
 - `uv run --isolated --with-requirements requirements.eom.txt --with pytest
-  --with pytest-asyncio python -m pytest tests/test_eom_card_vault.py -q`: 42
+  --with pytest-asyncio python -m pytest tests/test_eom_card_vault.py -q`: 44
   passed under the exact slim EOM dependency set.
 - Ruff import/undefined-name checks passed for the new files; fatal Python
   checks passed across every touched Python file; all four new Python files are
@@ -228,16 +247,16 @@ Parked hardening: none.
 | `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 439 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Vault-Authority.md` | 243 |
+| `plans/PR-EOM-Card-Vault-Authority.md` | 262 |
 | `render.eom.yaml` | 21 |
 | `requirements.eom.txt` | 1 |
 | `scripts/apply_eom_card_vault_schema.py` | 37 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 12 |
 | `tests/test_agent_operations_contract.py` | 27 |
-| `tests/test_eom_card_vault.py` | 961 |
+| `tests/test_eom_card_vault.py` | 1046 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 91 |
 | `tests/test_eom_funnel_capability_manifest.py` | 17 |
 | `tests/test_eom_render_profile.py` | 27 |
 | `tests/test_eom_terms_acceptance.py` | 90 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **3562** |
+| **Total** | **3666** |
