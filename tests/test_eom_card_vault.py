@@ -83,7 +83,8 @@ def _config(**overrides: Any) -> EOMFunnelConfig:
 
 class _State:
     def __init__(self) -> None:
-        self.schema_ready = True
+        self.card_vault_schema_ready = True
+        self.commitment_schema_ready = True
         self.lock = asyncio.Lock()
         self.eligibility: dict[str, Any] | None = {
             "signing_key_fingerprint": _FINGERPRINT,
@@ -344,11 +345,10 @@ class _Pool:
             yield self.connection
 
     async def fetchval(self, query: str, *_args: Any) -> bool:
-        assert (
-            "eom_card_vault_schema_ready" in query
-            or "eom_card_service_commitment_schema_ready" in query
-        )
-        return self.state.schema_ready
+        if "eom_card_service_commitment_schema_ready" in query:
+            return self.state.commitment_schema_ready
+        assert "eom_card_vault_schema_ready" in query
+        return self.state.card_vault_schema_ready
 
     async def fetchrow(self, query: str, *_args: Any) -> dict[str, Any] | None:
         assert "eom_card_vault_readiness" in query
@@ -1113,7 +1113,7 @@ async def test_session_creation_rejects_missing_schema_and_untyped_token_before_
     None
 ):
     state = _State()
-    state.schema_ready = False
+    state.card_vault_schema_ready = False
     provider = _Provider()
     service = EOMCardVaultService(pool=_Pool(state), provider=provider)
 
@@ -1252,7 +1252,7 @@ async def test_webhook_schema_gate_ignores_unrelated_events_but_precedes_provide
     None
 ):
     state = _State()
-    state.schema_ready = False
+    state.card_vault_schema_ready = False
     provider = _Provider()
     service = EOMCardVaultService(pool=_Pool(state), provider=provider)
 
@@ -1268,6 +1268,25 @@ async def test_webhook_schema_gate_ignores_unrelated_events_but_precedes_provide
         "idempotent": True,
     }
     assert provider.retrieve_setup_intent_calls == []
+
+
+@pytest.mark.asyncio
+async def test_commitment_schema_drift_blocks_issuance_but_not_open_confirmation() -> (
+    None
+):
+    state = _State()
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+    await service.start_session(token=_token(), public_base_url="https://eom.test")
+
+    state.commitment_schema_ready = False
+    with pytest.raises(EOMCardVaultUnavailableError):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+    confirmed = await service.confirm_checkout_session(event=_completed_event())
+
+    assert confirmed["status"] == "ready"
+    assert confirmed["idempotent"] is False
+    assert provider.retrieve_setup_intent_calls == ["seti_cardvault123"]
 
 
 @pytest.mark.asyncio

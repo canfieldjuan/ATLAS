@@ -456,6 +456,53 @@ async def _publish(
     )
 
 
+async def _seed_accepted_candidate(
+    *,
+    dba: Any,
+    terms: EOMTermsAcceptanceService,
+) -> tuple[UUID, UUID, UUID]:
+    contact_id = uuid4()
+    await _seed_customer(dba, contact_id=contact_id)
+    invitation = await terms.issue_and_send(
+        request_key=f"service-commitment:{contact_id.hex}",
+        contact_id=contact_id,
+        locale="en",
+        actor_id=7,
+        actor_name="Juan",
+        public_base_url="https://example.test/onboarding",
+        hmac_secret=_SECRET,
+        sender=_RecordingSender(),
+    )
+    authenticated = authenticate_eom_terms_token(
+        token=format_eom_terms_token(
+            invitation_id=UUID(invitation["invitationId"]),
+            secret=_SECRET,
+        ),
+        secret=_SECRET,
+    )
+    accepted = await terms.accept_and_send(
+        token=authenticated,
+        signer_name="Card Policy Signer",
+        terms_accepted=True,
+        additional_work_accepted=True,
+        client_ip="192.0.2.44",
+        sender=_RecordingSender(),
+    )
+    candidate_id = uuid4()
+    await dba.execute(
+        """
+        INSERT INTO eom_post_clean_onboarding_candidates (
+            id, completion_receipt_id, contact_id, handoff_id
+        ) VALUES ($1, $2, $3, $4)
+        """,
+        candidate_id,
+        uuid4(),
+        contact_id,
+        uuid4(),
+    )
+    return contact_id, candidate_id, UUID(accepted["acceptanceId"])
+
+
 def test_terms_bearer_is_domain_separated_fragment_only_and_rotatable() -> None:
     token = format_eom_terms_token(
         invitation_id=_INVITATION_ID,
@@ -2837,6 +2884,91 @@ async def test_card_vault_reservation_serializes_contact_eligibility() -> None:
 
 
 @pytest.mark.asyncio
+async def test_service_commitment_migration_serializes_legacy_enrollment_insert() -> (
+    None
+):
+    async with _real_terms_store() as (pool, dba, _schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (398, '398_eom_card_vault')"
+        )
+        await dba.execute(
+            "GRANT SELECT ON TABLE eom_post_clean_onboarding_candidates TO atlas"
+        )
+        await _publish(
+            EOMTermsAuthority(pool=pool),
+            label="service-commitment-race.1",
+            material=True,
+            marker="service-commitment-race",
+        )
+        subject = await _seed_accepted_candidate(
+            dba=dba,
+            terms=EOMTermsAcceptanceService(pool=pool),
+        )
+
+        migration_task: asyncio.Task[str]
+        lock_observed = False
+        async with pool.raw_pool.acquire() as writer:
+            async with writer.transaction():
+                await writer.execute(
+                    """
+                    INSERT INTO eom_card_vault_enrollments (
+                        id, contact_id, candidate_id, initial_acceptance_id
+                    ) VALUES ($1, $2, $3, $4)
+                    """,
+                    uuid4(),
+                    *subject,
+                )
+                migration_task = asyncio.create_task(
+                    dba.execute(_CARD_SERVICE_COMMITMENT_MIGRATION.read_text())
+                )
+                async with pool.raw_pool.acquire() as observer:
+                    for _attempt in range(100):
+                        lock_observed = bool(
+                            await observer.fetchval(
+                                """
+                                SELECT EXISTS (
+                                    SELECT 1
+                                      FROM pg_locks
+                                     WHERE relation = to_regclass(
+                                               'eom_card_vault_enrollments'
+                                           )
+                                       AND mode = 'ShareRowExclusiveLock'
+                                       AND NOT granted
+                                )
+                                """
+                            )
+                        )
+                        if lock_observed:
+                            break
+                        await asyncio.sleep(0.01)
+
+        with pytest.raises(
+            asyncpg.RaiseError,
+            match="existing EOM card enrollments require explicit reconciliation",
+        ):
+            await asyncio.wait_for(migration_task, timeout=2)
+        assert lock_observed is True
+        assert (
+            await dba.fetchval(
+                "SELECT to_regclass('eom_post_clean_service_commitments')"
+            )
+            is None
+        )
+
+
+@pytest.mark.asyncio
 async def test_service_commitment_database_guard_controls_card_enrollment() -> None:
     async with _real_terms_store() as (pool, dba, schema):
         await dba.execute(_CANDIDATE_MIGRATION.read_text())
@@ -2872,51 +3004,9 @@ async def test_service_commitment_database_guard_controls_card_enrollment() -> N
         terms = EOMTermsAcceptanceService(pool=pool)
         commitments = EOMCardServiceCommitmentService(pool=pool)
 
-        async def seed_subject() -> tuple[UUID, UUID, UUID]:
-            contact_id = uuid4()
-            await _seed_customer(dba, contact_id=contact_id)
-            invitation = await terms.issue_and_send(
-                request_key=f"service-commitment:{contact_id.hex}",
-                contact_id=contact_id,
-                locale="en",
-                actor_id=7,
-                actor_name="Juan",
-                public_base_url="https://example.test/onboarding",
-                hmac_secret=_SECRET,
-                sender=_RecordingSender(),
-            )
-            authenticated = authenticate_eom_terms_token(
-                token=format_eom_terms_token(
-                    invitation_id=UUID(invitation["invitationId"]),
-                    secret=_SECRET,
-                ),
-                secret=_SECRET,
-            )
-            accepted = await terms.accept_and_send(
-                token=authenticated,
-                signer_name="Card Policy Signer",
-                terms_accepted=True,
-                additional_work_accepted=True,
-                client_ip="192.0.2.44",
-                sender=_RecordingSender(),
-            )
-            candidate_id = uuid4()
-            await dba.execute(
-                """
-                INSERT INTO eom_post_clean_onboarding_candidates (
-                    id, completion_receipt_id, contact_id, handoff_id
-                ) VALUES ($1, $2, $3, $4)
-                """,
-                candidate_id,
-                uuid4(),
-                contact_id,
-                uuid4(),
-            )
-            return contact_id, candidate_id, UUID(accepted["acceptanceId"])
-
-        recurring = await seed_subject()
-        one_time = await seed_subject()
-        unclassified = await seed_subject()
+        recurring = await _seed_accepted_candidate(dba=dba, terms=terms)
+        one_time = await _seed_accepted_candidate(dba=dba, terms=terms)
+        unclassified = await _seed_accepted_candidate(dba=dba, terms=terms)
         app = _route_app(terms)
         app.dependency_overrides[funnel_mod._card_service_commitment_dependency] = (
             lambda: commitments

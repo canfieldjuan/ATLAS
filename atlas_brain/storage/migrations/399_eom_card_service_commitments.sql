@@ -78,6 +78,11 @@ BEGIN
         RAISE EXCEPTION
             'refusing to adopt a pre-existing EOM service-commitment object';
     END IF;
+    -- Serialize the emptiness decision with every legacy INSERT. The lock is
+    -- held through trigger installation by the migration transaction: an old
+    -- writer either commits first and is observed below, or resumes only after
+    -- the recurring-decision trigger exists.
+    LOCK TABLE eom_card_vault_enrollments IN SHARE ROW EXCLUSIVE MODE;
     IF EXISTS (SELECT 1 FROM eom_card_vault_enrollments) THEN
         RAISE EXCEPTION
             'existing EOM card enrollments require explicit reconciliation';

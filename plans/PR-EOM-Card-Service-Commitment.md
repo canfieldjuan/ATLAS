@@ -224,6 +224,42 @@ Completed before plan sync:
 - Plan synchronization, document shape, and plan/code consistency all pass
   against `origin/main`.
 
+### Review correction verification
+
+The cold correction audit found no contract gap, untraced change, or forbidden
+dependency:
+
+- Card-vault schema attestation is again the stable prerequisite for consuming
+  an already-open provider result, while the additive commitment attestation is
+  required only for new issuance and readiness (`eom_card_vault.py:818`, `:822`,
+  `:1420`, `:1559`, `:1758`). This preserves the declared existing-session
+  completion behavior without reopening an unclassified issuance path.
+- Migration 399 now acquires a `SHARE ROW EXCLUSIVE` table lock before deciding
+  that legacy enrollments are absent, and holds it through trigger creation
+  (`399_eom_card_service_commitments.sql:81-88`). The PostgreSQL concurrency
+  proof observes the waiting lock, commits the competing legacy insert, and
+  proves the migration then refuses adoption without creating the decision
+  relation (`test_eom_terms_acceptance.py:2887-2968`).
+- The candidate projection proof now creates a real first-clean candidate,
+  applies migrations 396 through 399, records the decision through the private
+  route, reads it back through the candidate route, and compares serialized
+  fields to the persisted row (`test_eom_first_clean_completion.py:287-314`,
+  `:3037-3098`). The previous SQL-text fake no longer supplies this proof.
+- The card-vault regression proves commitment-schema drift blocks a second
+  issuance but does not strand confirmation of the already-open session
+  (`test_eom_card_vault.py:1274-1289`).
+- The accepted-candidate setup extraction is test-only reuse required by the
+  migration race; it preserves the same issue, acceptance, and candidate facts
+  used by the existing database-guard test
+  (`test_eom_terms_acceptance.py:459-505`, `:3007-3009`).
+- No first-clean writer, Terms content/acceptance behavior, Stripe provider
+  adapter, webhook result semantics, money movement, commercial policy,
+  schedule/calendar/payroll behavior, Tracker, or Website file changed.
+
+Correction evidence: the full card-vault test file reports `74 passed`; the
+three focused real-PostgreSQL guard/projection cases report `3 passed`; Ruff
+reports `All checks passed!`; and `git diff --check` completes without output.
+
 ### Cold diff reconstruction
 
 No contract gap, untraced change, or forbidden dependency remains in the cold
@@ -258,8 +294,9 @@ read of the diff:
   first-clean writer, Terms semantics/content, Stripe adapter/provider contract,
   money movement, commercial policy, schedules, payroll, Tracker, or Website.
 
-Still required before push: the repository's single local pre-push review path.
-The full unit gate stays GitHub-only under repository policy.
+Still required before the correction push: plan synchronization and the
+repository's single local pre-push review path. The full unit gate stays
+GitHub-only under repository policy.
 
 ## Estimated diff size
 
@@ -271,19 +308,19 @@ The full unit gate stays GitHub-only under repository policy.
 | `atlas_brain/eom_api/card_vault.py` | 1 |
 | `atlas_brain/eom_api/funnel.py` | 96 |
 | `atlas_brain/services/eom_card_service_commitment.py` | 620 |
-| `atlas_brain/services/eom_card_vault.py` | 43 |
+| `atlas_brain/services/eom_card_vault.py` | 50 |
 | `atlas_brain/services/eom_first_clean_completion.py` | 42 |
-| `atlas_brain/storage/migrations/399_eom_card_service_commitments.sql` | 239 |
+| `atlas_brain/storage/migrations/399_eom_card_service_commitments.sql` | 244 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Service-Commitment.md` | 289 |
+| `plans/PR-EOM-Card-Service-Commitment.md` | 326 |
 | `scripts/apply_eom_card_service_commitment_schema.py` | 40 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 47 |
 | `tests/test_agent_operations_contract.py` | 30 |
 | `tests/test_eom_card_service_commitment.py` | 394 |
-| `tests/test_eom_card_vault.py` | 52 |
-| `tests/test_eom_first_clean_completion.py` | 83 |
+| `tests/test_eom_card_vault.py` | 77 |
+| `tests/test_eom_first_clean_completion.py` | 122 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 234 |
-| `tests/test_eom_terms_acceptance.py` | 317 |
+| `tests/test_eom_terms_acceptance.py` | 407 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **2591** |
+| **Total** | **2794** |

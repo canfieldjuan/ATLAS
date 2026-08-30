@@ -816,9 +816,14 @@ class EOMCardVaultService:
         return self._provider
 
     async def require_schema_ready(self) -> None:
-        if not await eom_card_vault_schema_ready(
-            self.pool
-        ) or not await eom_card_service_commitment_schema_ready(self.pool):
+        if not await eom_card_vault_schema_ready(self.pool):
+            raise EOMCardVaultUnavailableError("EOM card-vault schema is unavailable")
+
+    async def require_card_policy_schema_ready(self) -> None:
+        """Require the additive commitment boundary for issuance and readiness."""
+
+        await self.require_schema_ready()
+        if not await eom_card_service_commitment_schema_ready(self.pool):
             raise EOMCardVaultUnavailableError("EOM card-vault schema is unavailable")
 
     @staticmethod
@@ -1412,7 +1417,7 @@ class EOMCardVaultService:
 
         provider = self.provider
         authenticated = self._require_token(token)
-        await self.require_schema_ready()
+        await self.require_card_policy_schema_ready()
         try:
             checkout_success_url, checkout_cancel_url = (
                 build_eom_card_vault_return_urls(public_base_url)
@@ -1750,7 +1755,7 @@ class EOMCardVaultService:
         """Return card-only readiness without changing onboarding state."""
 
         parsed_contact_id = _uuid(contact_id, "contactId")
-        await self.require_schema_ready()
+        await self.require_card_policy_schema_ready()
         try:
             row = await self.pool.fetchrow(
                 """
