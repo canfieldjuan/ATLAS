@@ -2097,6 +2097,78 @@ async def test_card_vault_migration_applies_with_guarded_runtime_acl() -> None:
         )
 
         assert await eom_card_vault_schema_ready(pool) is True
+        original_enrollment_guard = await dba.fetchval(
+            """
+            SELECT pg_get_functiondef(
+                to_regprocedure('protect_eom_card_vault_enrollment()')
+            )
+            """
+        )
+        assert isinstance(original_enrollment_guard, str)
+        await dba.execute(
+            f"""
+            CREATE OR REPLACE FUNCTION protect_eom_card_vault_enrollment()
+            RETURNS TRIGGER
+            LANGUAGE plpgsql
+            SET search_path TO pg_catalog, "{schema}", pg_temp
+            AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(original_enrollment_guard)
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_sessions
+            ALTER COLUMN created_at DROP DEFAULT
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_sessions
+            ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at DROP NOT NULL
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at SET NOT NULL
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at DROP DEFAULT;
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at TYPE TIMESTAMP WITHOUT TIME ZONE
+                USING received_at AT TIME ZONE 'UTC'
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at TYPE TIMESTAMPTZ
+                USING received_at AT TIME ZONE 'UTC';
+            ALTER TABLE eom_card_vault_events
+            ALTER COLUMN received_at SET DEFAULT CURRENT_TIMESTAMP
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
         relations = await dba.fetch(
             """
             SELECT relation.relname,

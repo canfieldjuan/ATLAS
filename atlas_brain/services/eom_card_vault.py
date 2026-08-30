@@ -201,6 +201,7 @@ def _provider_id(value: Any, *, prefix: str, label: str) -> str:
     if (
         not isinstance(parsed, str)
         or not parsed.startswith(prefix)
+        or len(parsed) <= len(prefix)
         or not _PROVIDER_ID.fullmatch(parsed)
     ):
         raise EOMCardVaultConflictError(f"Stripe {label} is invalid")
@@ -278,27 +279,34 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                            ('eom_card_vault_events')
                 ),
                 expected_triggers(
-                    relation_name, function_name, trigger_name, trigger_type
+                    relation_name, function_name, trigger_name, trigger_type,
+                    function_body_md5
                 ) AS (
                     VALUES
                         ('eom_card_vault_enrollments',
                          'protect_eom_card_vault_enrollment',
-                         'trg_protect_eom_card_vault_enrollment', 31),
+                         'trg_protect_eom_card_vault_enrollment', 31,
+                         '45dc4afa04586575909eadfb5de4d629'),
                         ('eom_card_vault_enrollments',
                          'protect_eom_card_vault_enrollment',
-                         'trg_protect_eom_card_vault_enrollment_truncate', 34),
+                         'trg_protect_eom_card_vault_enrollment_truncate', 34,
+                         '45dc4afa04586575909eadfb5de4d629'),
                         ('eom_card_vault_sessions',
                          'protect_eom_card_vault_session',
-                         'trg_protect_eom_card_vault_session', 31),
+                         'trg_protect_eom_card_vault_session', 31,
+                         'f4d5e3cbee0f637f9d9bc377acd74140'),
                         ('eom_card_vault_sessions',
                          'protect_eom_card_vault_session',
-                         'trg_protect_eom_card_vault_session_truncate', 34),
+                         'trg_protect_eom_card_vault_session_truncate', 34,
+                         'f4d5e3cbee0f637f9d9bc377acd74140'),
                         ('eom_card_vault_events',
                          'protect_eom_card_vault_event',
-                         'trg_protect_eom_card_vault_event', 31),
+                         'trg_protect_eom_card_vault_event', 31,
+                         'c1ed425051daf9cbbb57e221a2c46ae7'),
                         ('eom_card_vault_events',
                          'protect_eom_card_vault_event',
-                         'trg_protect_eom_card_vault_event_truncate', 34)
+                         'trg_protect_eom_card_vault_event_truncate', 34,
+                         'c1ed425051daf9cbbb57e221a2c46ae7')
                 ),
                 expected_constraints(
                     relation_name, constraint_name, constraint_type,
@@ -428,6 +436,70 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                          'CHECK (stripe_payment_method_id::text ~ '
                          '''^pm_[A-Za-z0-9_]+$''::text)')
                 ),
+                expected_columns(
+                    relation_name, column_name, data_type, not_null,
+                    default_expression
+                ) AS (
+                    VALUES
+                        ('eom_card_vault_enrollments', 'id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_enrollments', 'candidate_id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_enrollments', 'contact_id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_enrollments', 'initial_acceptance_id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_enrollments', 'business_context_id',
+                         'character varying(64)', TRUE,
+                         '''effingham_maids''::character varying'),
+                        ('eom_card_vault_enrollments', 'stripe_customer_id',
+                         'character varying(255)', FALSE, NULL),
+                        ('eom_card_vault_enrollments', 'status',
+                         'character varying(16)', TRUE,
+                         '''pending''::character varying'),
+                        ('eom_card_vault_enrollments', 'stripe_setup_intent_id',
+                         'character varying(255)', FALSE, NULL),
+                        ('eom_card_vault_enrollments', 'stripe_payment_method_id',
+                         'character varying(255)', FALSE, NULL),
+                        ('eom_card_vault_enrollments', 'ready_at',
+                         'timestamp with time zone', FALSE, NULL),
+                        ('eom_card_vault_enrollments', 'created_at',
+                         'timestamp with time zone', TRUE, 'CURRENT_TIMESTAMP'),
+                        ('eom_card_vault_sessions', 'id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_sessions', 'enrollment_id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_sessions', 'acceptance_id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_sessions', 'checkout_success_url',
+                         'text', TRUE, NULL),
+                        ('eom_card_vault_sessions', 'checkout_cancel_url',
+                         'text', TRUE, NULL),
+                        ('eom_card_vault_sessions', 'provider_retry_until',
+                         'timestamp with time zone', TRUE, NULL),
+                        ('eom_card_vault_sessions', 'state',
+                         'character varying(16)', TRUE,
+                         '''creating''::character varying'),
+                        ('eom_card_vault_sessions',
+                         'stripe_checkout_session_id',
+                         'character varying(255)', FALSE, NULL),
+                        ('eom_card_vault_sessions', 'checkout_expires_at',
+                         'timestamp with time zone', FALSE, NULL),
+                        ('eom_card_vault_sessions', 'created_at',
+                         'timestamp with time zone', TRUE, 'CURRENT_TIMESTAMP'),
+                        ('eom_card_vault_events', 'stripe_event_id',
+                         'character varying(255)', TRUE, NULL),
+                        ('eom_card_vault_events', 'enrollment_id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_events', 'session_id',
+                         'uuid', TRUE, NULL),
+                        ('eom_card_vault_events', 'stripe_setup_intent_id',
+                         'character varying(255)', TRUE, NULL),
+                        ('eom_card_vault_events', 'stripe_payment_method_id',
+                         'character varying(255)', TRUE, NULL),
+                        ('eom_card_vault_events', 'received_at',
+                         'timestamp with time zone', TRUE, 'CURRENT_TIMESTAMP')
+                ),
                 expected_runtime_columns(relation_name, column_name, privilege) AS (
                     VALUES
                         ('eom_card_vault_enrollments', 'id', 'INSERT'),
@@ -528,6 +600,51 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                 )
                 AND NOT EXISTS (
                     SELECT 1
+                    FROM expected_columns AS expected
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM pg_attribute AS column_definition
+                        JOIN pg_class AS relation
+                          ON relation.oid = column_definition.attrelid
+                        JOIN pg_namespace AS namespace
+                          ON namespace.oid = relation.relnamespace
+                        LEFT JOIN pg_attrdef AS stored_default
+                          ON stored_default.adrelid = relation.oid
+                         AND stored_default.adnum = column_definition.attnum
+                        WHERE namespace.nspname = current_schema()
+                          AND relation.relname = expected.relation_name
+                          AND column_definition.attname = expected.column_name
+                          AND column_definition.attnum > 0
+                          AND NOT column_definition.attisdropped
+                          AND format_type(
+                              column_definition.atttypid,
+                              column_definition.atttypmod
+                          ) = expected.data_type
+                          AND column_definition.attnotnull = expected.not_null
+                          AND column_definition.attidentity = ''
+                          AND column_definition.attgenerated = ''
+                          AND pg_get_expr(
+                              stored_default.adbin,
+                              stored_default.adrelid
+                          ) IS NOT DISTINCT FROM expected.default_expression
+                    )
+                )
+                AND (
+                    SELECT count(*)
+                    FROM pg_attribute AS column_definition
+                    JOIN pg_class AS relation
+                      ON relation.oid = column_definition.attrelid
+                    JOIN pg_namespace AS namespace
+                      ON namespace.oid = relation.relnamespace
+                    WHERE namespace.nspname = current_schema()
+                      AND relation.relname IN (
+                          SELECT name FROM expected_relations
+                      )
+                      AND column_definition.attnum > 0
+                      AND NOT column_definition.attisdropped
+                ) = (SELECT count(*) FROM expected_columns)
+                AND NOT EXISTS (
+                    SELECT 1
                     FROM expected_runtime_columns AS expected
                     WHERE NOT COALESCE(
                         has_column_privilege(
@@ -579,6 +696,8 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                         JOIN pg_namespace AS namespace
                           ON namespace.oid = relation.relnamespace
                         JOIN pg_proc AS function ON function.oid = trigger.tgfoid
+                        JOIN pg_language AS language
+                          ON language.oid = function.prolang
                         JOIN pg_roles AS owner ON owner.oid = function.proowner
                         WHERE namespace.nspname = current_schema()
                           AND relation.relname = expected.relation_name
@@ -590,9 +709,17 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                           AND trigger.tgattr = ''::int2vector
                           AND trigger.tgnargs = 0
                           AND trigger.tgqual IS NULL
+                          AND language.lanname = 'plpgsql'
                           AND NOT function.prosecdef
+                          AND NOT function.proleakproof
+                          AND NOT function.proisstrict
+                          AND function.provolatile = 'v'
+                          AND function.proparallel = 'u'
+                          AND function.prokind = 'f'
                           AND function.pronargs = 0
                           AND function.prorettype = 'trigger'::regtype
+                          AND function.probin IS NULL
+                          AND md5(function.prosrc) = expected.function_body_md5
                           AND function.proconfig = ARRAY[
                               format(
                                   'search_path=pg_catalog, %I, pg_temp',
@@ -665,7 +792,12 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
 class EOMCardVaultService:
     """Own enrollment, hosted setup-session, and provider-confirmed readiness."""
 
-    def __init__(self, *, pool: Any, provider: EOMCardVaultProvider) -> None:
+    def __init__(
+        self,
+        *,
+        pool: Any,
+        provider: EOMCardVaultProvider | None = None,
+    ) -> None:
         self._pool = pool
         self._provider = provider
 
@@ -674,6 +806,12 @@ class EOMCardVaultService:
         if not bool(getattr(self._pool, "is_initialized", True)):
             raise EOMCardVaultUnavailableError("EOM card-vault database is unavailable")
         return self._pool
+
+    @property
+    def provider(self) -> EOMCardVaultProvider:
+        if self._provider is None:
+            raise EOMCardVaultUnavailableError("Stripe card setup is unavailable")
+        return self._provider
 
     async def require_schema_ready(self) -> None:
         if not await eom_card_vault_schema_ready(self.pool):
@@ -1005,6 +1143,7 @@ class EOMCardVaultService:
     ) -> dict[str, Any]:
         """Create or reuse one hosted setup session after locked eligibility."""
 
+        provider = self.provider
         authenticated = self._require_token(token)
         await self.require_schema_ready()
         checkout_success_url = _return_url(public_base_url, "success")
@@ -1047,7 +1186,7 @@ class EOMCardVaultService:
                     "contact_id": str(enrollment["contact_id"]),
                     "candidate_id": str(enrollment["candidate_id"]),
                 }
-                customer = await self._provider.create_customer(
+                customer = await provider.create_customer(
                     name=str(eligibility["invitation_customer_name"]),
                     email=str(eligibility["invitation_recipient_email"]),
                     metadata=customer_metadata,
@@ -1072,7 +1211,7 @@ class EOMCardVaultService:
                 customer_id = _provider_id(customer_id, prefix="cus_", label="customer")
 
             if str(session_row["state"]) == "open":
-                existing = await self._provider.retrieve_checkout_session(
+                existing = await provider.retrieve_checkout_session(
                     str(session_row["stripe_checkout_session_id"])
                 )
                 checkout_url = _value(existing, "url")
@@ -1110,7 +1249,7 @@ class EOMCardVaultService:
                     idempotent=True,
                 )
 
-            created = await self._provider.create_checkout_session(
+            created = await provider.create_checkout_session(
                 mode="setup",
                 locale="en",
                 payment_method_types=["card"],
@@ -1255,6 +1394,7 @@ class EOMCardVaultService:
     async def confirm_checkout_session(self, *, event: Any) -> dict[str, Any]:
         """Advance one enrollment only from a provider-confirmed SetupIntent."""
 
+        provider = self.provider
         event_id = _provider_id(_value(event, "id"), prefix="evt_", label="event")
         event_type = _value(event, "type")
         if event_type != "checkout.session.completed":
@@ -1303,7 +1443,7 @@ class EOMCardVaultService:
         if existing_confirmation is not None:
             return existing_confirmation
         try:
-            setup_intent = await self._provider.retrieve_setup_intent(setup_intent_id)
+            setup_intent = await provider.retrieve_setup_intent(setup_intent_id)
         except EOMCardVaultProviderError as exc:
             _log_boundary_failure(
                 "retrieve_setup_intent",

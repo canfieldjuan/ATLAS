@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
@@ -137,18 +137,26 @@ async def _provider_dependency(
         await provider.close()
 
 
-def _service_dependency(
-    request: Request,
-    provider: EOMCardVaultProvider = Depends(_provider_dependency),
-) -> EOMCardVaultService:
+def _pool_dependency(request: Request) -> Any:
     pool_factory = getattr(request.app.state, "eom_funnel_card_vault_pool", None)
     if callable(pool_factory):
-        pool = pool_factory()
-    else:
-        from ..storage.database import get_db_pool
+        return pool_factory()
+    from ..storage.database import get_db_pool
 
-        pool = get_db_pool()
+    return get_db_pool()
+
+
+def _service_dependency(
+    pool: Any = Depends(_pool_dependency),
+    provider: EOMCardVaultProvider = Depends(_provider_dependency),
+) -> EOMCardVaultService:
     return EOMCardVaultService(pool=pool, provider=provider)
+
+
+def _read_service_dependency(
+    pool: Any = Depends(_pool_dependency),
+) -> EOMCardVaultService:
+    return EOMCardVaultService(pool=pool)
 
 
 def _card_vault_error(exc: EOMCardVaultError) -> HTTPException:
@@ -203,7 +211,7 @@ async def create_eom_card_vault_session(
 )
 async def get_eom_card_vault_readiness(
     contact_id: UUID,
-    service: EOMCardVaultService = Depends(_service_dependency),
+    service: EOMCardVaultService = Depends(_read_service_dependency),
 ) -> EOMCardVaultReadinessResponse:
     """Read provider-confirmed card state without mutating onboarding."""
 

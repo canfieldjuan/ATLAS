@@ -414,7 +414,13 @@ async def test_schema_attestation_pins_trigger_and_constraint_definitions() -> N
             assert "trigger.tgtype = expected.trigger_type" in query
             assert "trigger.tgattr = ''::int2vector" in query
             assert "trigger.tgqual IS NULL" in query
+            assert "md5(function.prosrc) = expected.function_body_md5" in query
+            assert "language.lanname = 'plpgsql'" in query
             assert "pg_get_constraintdef(actual.oid, true)" in query
+            assert "format_type(" in query
+            assert "column_definition.attnotnull = expected.not_null" in query
+            assert "pg_get_expr(" in query
+            assert "eom_card_vault_events', 'received_at'" in query
             assert "uq_eom_card_vault_enrollment_candidate" in query
             assert "UNIQUE (candidate_id)" in query
             assert "ck_eom_card_vault_session_retry_window" in query
@@ -561,6 +567,7 @@ def test_provider_id_grammar_is_closed_across_token_and_container_families() -> 
     )
     tokens = (
         ("valid", lambda prefix: f"{prefix}AbC_123"),
+        ("prefix-only", lambda prefix: prefix),
         ("wrong-family", lambda _prefix: "bad_AbC_123"),
         ("punctuation", lambda prefix: f"{prefix}AbC-123"),
         ("too-long", lambda prefix: prefix + ("A" * 256)),
@@ -1323,6 +1330,51 @@ async def test_real_eom_entrypoint_reaches_api_and_root_webhook() -> None:
     assert readiness.status_code == 200
     assert readiness.json()["cardReady"] is True
     assert readiness.json()["reason"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_readiness_does_not_require_provider_credentials() -> None:
+    config = _config(
+        card_vault_enabled=False,
+        card_vault_stripe_secret_key="",
+        card_vault_stripe_webhook_secret="",
+    )
+    state = _State()
+    state.readiness = {
+        "contact_id": _CONTACT_ID,
+        "customer_type": "residential",
+        "business_context_id": "effingham_maids",
+        "contact_type": "customer",
+        "contact_status": "active",
+        "candidate_id": _CANDIDATE_ID,
+        "acceptance_id": _ACCEPTANCE_ID,
+        "acceptance_audience": "residential",
+        "enrollment_id": _ENROLLMENT_ID,
+        "enrollment_status": "ready",
+        "ready_at": _NOW,
+        "later_material": False,
+    }
+    original_pool_factory = main_eom.app.state.eom_funnel_card_vault_pool
+    main_eom.app.state.eom_funnel_card_vault_pool = lambda: _Pool(state)
+    main_eom.app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
+        config
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main_eom.app),
+            base_url="http://test",
+        ) as client:
+            response = await client.get(
+                f"/api/v1/eom-funnel/card-vault/readiness/{_CONTACT_ID}",
+                headers={"Authorization": f"Bearer {_SERVICE.token}"},
+            )
+    finally:
+        main_eom.app.dependency_overrides.clear()
+        main_eom.app.state.eom_funnel_card_vault_pool = original_pool_factory
+
+    assert response.status_code == 200
+    assert response.json()["cardReady"] is True
+    assert response.json()["reason"] == "ready"
 
 
 @pytest.mark.asyncio
