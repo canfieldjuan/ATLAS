@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -120,16 +121,20 @@ class EOMCardVaultWebhookResponse(BaseModel):
     idempotent: bool
 
 
-def _provider_dependency(
+async def _provider_dependency(
     config: EOMCardVaultProviderConfig = Depends(
         require_eom_card_vault_provider_config
     ),
-) -> EOMCardVaultProvider:
-    return StripeEOMCardVaultProvider(
+) -> AsyncIterator[EOMCardVaultProvider]:
+    provider = StripeEOMCardVaultProvider(
         secret_key=config.secret_key,
         webhook_secret=config.webhook_secret,
         timeout_seconds=config.request_timeout_seconds,
     )
+    try:
+        yield provider
+    finally:
+        await provider.close()
 
 
 def _service_dependency(

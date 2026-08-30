@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -209,6 +210,29 @@ class _Connection:
                 None,
             )
             return dict(row) if row is not None else None
+        if "eom_card_vault_existing_confirmation" in query:
+            event = next(
+                (item for item in state.events if item["stripe_event_id"] == args[0]),
+                None,
+            )
+            if event is None or state.enrollment is None:
+                return None
+            session = next(
+                item for item in state.sessions if item["id"] == event["session_id"]
+            )
+            return {
+                **event,
+                "enrollment_status": state.enrollment["status"],
+                "stripe_customer_id": state.enrollment["stripe_customer_id"],
+                "enrollment_setup_intent_id": state.enrollment[
+                    "stripe_setup_intent_id"
+                ],
+                "enrollment_payment_method_id": state.enrollment[
+                    "stripe_payment_method_id"
+                ],
+                "session_state": session["state"],
+                "stripe_checkout_session_id": session["stripe_checkout_session_id"],
+            }
         if "eom_card_vault_webhook_subject" in query:
             if state.enrollment is None:
                 return None
@@ -710,6 +734,10 @@ async def test_database_failure_keeps_stable_provider_identities(
             await service.start_session(
                 token=_token(), public_base_url="https://eom.test"
             )
+    if failure_point == "customer":
+        assert state.eligibility is not None
+        state.eligibility["full_name"] = "  EOM Customer  "
+        state.eligibility["email"] = " CUSTOMER@EXAMPLE.TEST "
     result = await service.start_session(
         token=_token(), public_base_url="https://eom.test"
     )
@@ -725,6 +753,10 @@ async def test_database_failure_keeps_stable_provider_identities(
     expected_session_calls = 1 if failure_point == "customer" else 2
     assert len(provider.customer_calls) == expected_customer_calls
     assert len(provider.session_calls) == expected_session_calls
+    assert {call["name"] for call in provider.customer_calls} == {"EOM Customer"}
+    assert {call["email"] for call in provider.customer_calls} == {
+        "customer@example.test"
+    }
     expected_operation = (
         "store_customer" if failure_point == "customer" else "store_session"
     )
@@ -887,6 +919,11 @@ async def test_verified_completed_event_is_monotonic_and_replay_safe() -> None:
     await service.start_session(token=_token(), public_base_url="https://eom.test")
 
     first = await service.confirm_checkout_session(event=_completed_event())
+
+    async def unavailable(_setup_intent_id: str) -> dict[str, Any]:
+        raise EOMCardVaultProviderError("injected provider failure")
+
+    provider.retrieve_setup_intent = unavailable  # type: ignore[method-assign]
     second = await service.confirm_checkout_session(event=_completed_event())
 
     assert first == {
@@ -900,6 +937,36 @@ async def test_verified_completed_event_is_monotonic_and_replay_safe() -> None:
     assert state.enrollment["status"] == "ready"
     assert state.enrollment["stripe_payment_method_id"] == "pm_cardvault123"
     assert len(state.events) == 1
+    assert provider.retrieve_setup_intent_calls == ["seti_cardvault123"]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("customer", "cus_someoneelse"),
+        ("setup_intent", "seti_someoneelse"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_stored_event_replay_requires_exact_signed_subject(
+    field: str,
+    value: str,
+) -> None:
+    state = _State()
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+    await service.start_session(token=_token(), public_base_url="https://eom.test")
+    await service.confirm_checkout_session(event=_completed_event())
+    replay = _completed_event()
+    replay["data"]["object"][field] = value
+
+    with pytest.raises(
+        EOMCardVaultConflictError,
+        match="Stripe event replay does not match",
+    ):
+        await service.confirm_checkout_session(event=replay)
+
+    assert provider.retrieve_setup_intent_calls == ["seti_cardvault123"]
 
 
 @pytest.mark.asyncio
@@ -1034,12 +1101,46 @@ async def test_card_readiness_survives_a_later_current_terms_acceptance() -> Non
 @pytest.mark.asyncio
 async def test_stripe_adapter_passes_per_request_authority(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
+    configured_timeouts: list[int] = []
 
-    def create_customer(**kwargs: Any) -> dict[str, str]:
-        calls.append(kwargs)
-        return {"id": "cus_adapter123"}
+    class RecordingHTTPClient(stripe.HTTPClient):
+        name = "recording"
 
-    monkeypatch.setattr(stripe.Customer, "create", create_customer)
+        def __init__(self) -> None:
+            super().__init__()
+            self.closed = False
+
+        async def request_async(
+            self,
+            method: str,
+            url: str,
+            headers: dict[str, str],
+            post_data: str | None = None,
+        ) -> tuple[bytes, int, dict[str, str]]:
+            calls.append(
+                {
+                    "method": method,
+                    "url": url,
+                    "headers": headers,
+                    "post_data": post_data,
+                }
+            )
+            return (
+                json.dumps({"id": "cus_adapter123", "object": "customer"}).encode(),
+                200,
+                {"request-id": "req_adapter123"},
+            )
+
+        async def close_async(self) -> None:
+            self.closed = True
+
+    transport = RecordingHTTPClient()
+
+    def httpx_client(*, timeout: int) -> RecordingHTTPClient:
+        configured_timeouts.append(timeout)
+        return transport
+
+    monkeypatch.setattr(stripe, "HTTPXClient", httpx_client)
     provider = StripeEOMCardVaultProvider(
         secret_key="sk_" + "test_" + "placeholderxxxx",
         webhook_secret="whsec_" + "placeholderxxxx",
@@ -1049,19 +1150,24 @@ async def test_stripe_adapter_passes_per_request_authority(monkeypatch) -> None:
         email="customer@example.test",
         idempotency_key="eom-card-vault-customer:test",
     )
+    await provider.close()
 
-    assert calls == [
-        {
-            "api_key": "sk_" + "test_" + "placeholderxxxx",
-            "stripe_version": EOM_CARD_VAULT_STRIPE_API_VERSION,
-            "timeout": 7,
-            "email": "customer@example.test",
-            "idempotency_key": "eom-card-vault-customer:test",
-        }
-    ]
+    assert configured_timeouts == [7]
+    assert transport.closed is True
+    assert len(calls) == 1
+    assert calls[0]["method"] == "post"
+    assert calls[0]["url"].endswith("/v1/customers")
+    assert calls[0]["headers"]["Authorization"] == (
+        "Bearer sk_" + "test_" + "placeholderxxxx"
+    )
+    assert calls[0]["headers"]["Stripe-Version"] == EOM_CARD_VAULT_STRIPE_API_VERSION
+    assert calls[0]["headers"]["Idempotency-Key"] == ("eom-card-vault-customer:test")
+    assert calls[0]["post_data"] == "email=customer%40example.test"
+    assert "timeout" not in calls[0]["post_data"]
 
 
-def test_stripe_adapter_verifies_the_raw_signed_payload() -> None:
+@pytest.mark.asyncio
+async def test_stripe_adapter_verifies_the_raw_signed_payload() -> None:
     secret = "whsec_" + "placeholderxxxx"
     provider = StripeEOMCardVaultProvider(
         secret_key="sk_" + "test_" + "placeholderxxxx",
@@ -1081,6 +1187,38 @@ def test_stripe_adapter_verifies_the_raw_signed_payload() -> None:
     assert event["id"] == "evt_signature123"
     with pytest.raises(EOMCardVaultSignatureError):
         provider.construct_event(payload + b" ", header)
+    await provider.close()
+
+
+@pytest.mark.asyncio
+async def test_provider_dependency_closes_its_stripe_transport(monkeypatch) -> None:
+    created: list[Any] = []
+
+    class Provider:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+            self.closed = False
+            created.append(self)
+
+        async def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(api_mod, "StripeEOMCardVaultProvider", Provider)
+    dependency = api_mod._provider_dependency(
+        config=auth_mod.EOMCardVaultProviderConfig(
+            secret_key="sk_" + "test_" + "placeholderxxxx",
+            webhook_secret="whsec_" + "placeholderxxxx",
+            request_timeout_seconds=7,
+        )
+    )
+
+    provider = await anext(dependency)
+    assert provider.kwargs["timeout_seconds"] == 7
+    assert provider.closed is False
+    await dependency.aclose()
+
+    assert created == [provider]
+    assert provider.closed is True
 
 
 class _RouteService:

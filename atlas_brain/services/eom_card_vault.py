@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import hmac
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -119,30 +118,58 @@ class StripeEOMCardVaultProvider:
     secret_key: str
     webhook_secret: str
     timeout_seconds: int
+    _http_client: Any = field(init=False, repr=False, compare=False)
+    _client: Any = field(init=False, repr=False, compare=False)
 
-    async def _call(self, operation: Any, /, **kwargs: Any) -> Any:
-        try:
-            return await asyncio.to_thread(
-                operation,
-                api_key=self.secret_key,
+    def __post_init__(self) -> None:
+        http_client = stripe.HTTPXClient(timeout=self.timeout_seconds)
+        object.__setattr__(self, "_http_client", http_client)
+        object.__setattr__(
+            self,
+            "_client",
+            stripe.StripeClient(
+                self.secret_key,
                 stripe_version=EOM_CARD_VAULT_STRIPE_API_VERSION,
-                timeout=self.timeout_seconds,
-                **kwargs,
-            )
+                http_client=http_client,
+            ),
+        )
+
+    async def _call(self, operation: Any, /, *args: Any, **kwargs: Any) -> Any:
+        try:
+            return await operation(*args, **kwargs)
         except (*_stripe_error_types(), OSError, TimeoutError) as exc:
             raise EOMCardVaultProviderError("Stripe operation failed") from exc
 
+    async def close(self) -> None:
+        await self._http_client.close_async()
+
     async def create_customer(self, **kwargs: Any) -> Any:
-        return await self._call(stripe.Customer.create, **kwargs)
+        params = dict(kwargs)
+        idempotency_key = params.pop("idempotency_key")
+        return await self._call(
+            self._client.v1.customers.create_async,
+            params,
+            {"idempotency_key": idempotency_key},
+        )
 
     async def create_checkout_session(self, **kwargs: Any) -> Any:
-        return await self._call(stripe.checkout.Session.create, **kwargs)
+        params = dict(kwargs)
+        idempotency_key = params.pop("idempotency_key")
+        return await self._call(
+            self._client.v1.checkout.sessions.create_async,
+            params,
+            {"idempotency_key": idempotency_key},
+        )
 
     async def retrieve_checkout_session(self, session_id: str) -> Any:
-        return await self._call(stripe.checkout.Session.retrieve, id=session_id)
+        return await self._call(
+            self._client.v1.checkout.sessions.retrieve_async, session_id
+        )
 
     async def retrieve_setup_intent(self, setup_intent_id: str) -> Any:
-        return await self._call(stripe.SetupIntent.retrieve, id=setup_intent_id)
+        return await self._call(
+            self._client.v1.setup_intents.retrieve_async, setup_intent_id
+        )
 
     def construct_event(self, payload: bytes, signature: str) -> Any:
         try:
@@ -827,8 +854,8 @@ class EOMCardVaultService:
                     "candidate_id": str(enrollment["candidate_id"]),
                 }
                 customer = await self._provider.create_customer(
-                    name=str(eligibility["full_name"]),
-                    email=str(eligibility["email"]),
+                    name=str(eligibility["invitation_customer_name"]),
+                    email=str(eligibility["invitation_recipient_email"]),
                     metadata=customer_metadata,
                     idempotency_key=f"eom-card-vault-customer:{enrollment['id']}",
                 )
@@ -958,6 +985,79 @@ class EOMCardVaultService:
                 "Stripe card setup is temporarily unavailable"
             ) from exc
 
+    async def _existing_confirmation_result(
+        self,
+        *,
+        event_id: str,
+        enrollment_id: UUID,
+        session_row_id: UUID,
+        checkout_session_id: str,
+        customer_id: str,
+        setup_intent_id: str,
+    ) -> dict[str, Any] | None:
+        """Acknowledge only an exact durable replay without another provider read."""
+
+        try:
+            async with self.pool.transaction() as connection:
+                existing = await connection.fetchrow(
+                    """
+                    /* eom_card_vault_existing_confirmation */
+                    SELECT event.stripe_event_id,
+                           event.enrollment_id,
+                           event.session_id,
+                           event.stripe_setup_intent_id,
+                           event.stripe_payment_method_id,
+                           enrollment.status AS enrollment_status,
+                           enrollment.stripe_customer_id,
+                           enrollment.stripe_setup_intent_id
+                               AS enrollment_setup_intent_id,
+                           enrollment.stripe_payment_method_id
+                               AS enrollment_payment_method_id,
+                           session.state AS session_state,
+                           session.stripe_checkout_session_id
+                    FROM eom_card_vault_events AS event
+                    JOIN eom_card_vault_enrollments AS enrollment
+                      ON enrollment.id = event.enrollment_id
+                    JOIN eom_card_vault_sessions AS session
+                      ON session.id = event.session_id
+                    WHERE event.stripe_event_id = $1
+                    LIMIT 1
+                    """,
+                    event_id,
+                )
+        except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure(
+                "read_existing_confirmation",
+                event_id=event_id,
+                enrollment_id=enrollment_id,
+                session_id=session_row_id,
+            )
+            raise EOMCardVaultUnavailableError(
+                "EOM card-vault confirmation is unavailable"
+            ) from exc
+        if existing is None:
+            return None
+        if (
+            str(existing["stripe_event_id"]) != event_id
+            or UUID(str(existing["enrollment_id"])) != enrollment_id
+            or UUID(str(existing["session_id"])) != session_row_id
+            or str(existing["stripe_setup_intent_id"]) != setup_intent_id
+            or str(existing["stripe_customer_id"]) != customer_id
+            or str(existing["stripe_checkout_session_id"]) != checkout_session_id
+            or str(existing["enrollment_status"]) != "ready"
+            or str(existing["session_state"]) != "open"
+            or str(existing["enrollment_setup_intent_id"]) != setup_intent_id
+            or str(existing["enrollment_payment_method_id"])
+            != str(existing["stripe_payment_method_id"])
+        ):
+            raise EOMCardVaultConflictError("Stripe event replay does not match")
+        return {
+            "eventId": event_id,
+            "enrollmentId": str(enrollment_id),
+            "status": "ready",
+            "idempotent": True,
+        }
+
     async def confirm_checkout_session(self, *, event: Any) -> dict[str, Any]:
         """Advance one enrollment only from a provider-confirmed SetupIntent."""
 
@@ -998,6 +1098,16 @@ class EOMCardVaultService:
             raise EOMCardVaultConflictError(
                 "Completed Checkout session subject does not match"
             )
+        existing_confirmation = await self._existing_confirmation_result(
+            event_id=event_id,
+            enrollment_id=enrollment_id,
+            session_row_id=session_row_id,
+            checkout_session_id=checkout_session_id,
+            customer_id=customer_id,
+            setup_intent_id=setup_intent_id,
+        )
+        if existing_confirmation is not None:
+            return existing_confirmation
         try:
             setup_intent = await self._provider.retrieve_setup_intent(setup_intent_id)
         except EOMCardVaultProviderError as exc:
