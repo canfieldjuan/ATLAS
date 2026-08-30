@@ -1218,6 +1218,10 @@ app.include_router(campaign_webhook_router)
 from .api.billing import webhook_router as stripe_webhook_router
 app.include_router(stripe_webhook_router)
 
+# EOM card-vault webhook uses its own signing secret and canonical EOM store.
+from .eom_api.card_vault import webhook_router as eom_card_vault_webhook_router
+app.include_router(eom_card_vault_webhook_router)
+
 # Include API routers with /api/v1 prefix
 app.include_router(api_router, prefix="/api/v1")
 

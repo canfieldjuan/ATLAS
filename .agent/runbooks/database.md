@@ -164,6 +164,38 @@ separately reviewed DBA containment action after all affected Atlas processes
 are stopped; preserve read-only audit access and roll forward with a reviewed
 repair.
 
+## EOM card-vault migration
+
+Migration `398_eom_card_vault` is excluded from automatic startup. It creates
+guard-owned enrollment, hosted-session, and signed provider-event evidence. It
+depends on recorded migration `397_eom_terms_acceptance`; applying it creates
+no Stripe customer, Checkout Session, payment method, charge, or customer
+communication.
+
+Run the read-only preflight against the exact deployment target first:
+
+```bash
+git rev-parse HEAD
+./ops deploy status
+./ops db controlled eom-terms-acceptance preflight
+./ops db controlled eom-card-vault preflight
+```
+
+After recording the target and confirming migration 397, apply once and repeat
+the preflight before enabling `ATLAS_EOM_FUNNEL_CARD_VAULT_ENABLED`:
+
+```bash
+./ops db controlled eom-card-vault apply
+./ops db controlled eom-card-vault preflight
+```
+
+The card-vault flag, dedicated Stripe key, dedicated webhook secret, and public
+onboarding authority must be configured as one reviewed deployment change. The
+webhook endpoint is `/webhooks/eom-card-vault`; do not point it at the separate
+SaaS billing webhook. Rollback is retention-only: disable callers and the
+feature flag, roll application code back, and retain migration 398 and every
+provider identifier/event row.
+
 ## Role-topology evidence preflight
 
 This is a read-only prerequisite for a later least-privilege role cutover. It

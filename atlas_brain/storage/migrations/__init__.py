@@ -26,6 +26,7 @@ CONTROLLED_DBA_MIGRATION_NAMES = frozenset(
         "394_eom_first_clean_completion_receipts",
         "396_eom_terms_authority",
         "397_eom_terms_acceptance",
+        "398_eom_card_vault",
     }
 )
 

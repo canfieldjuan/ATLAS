@@ -44,6 +44,16 @@ _TERMS_CAPABILITY_ROUTES = {
     "terms.public.session": ("POST", "/eom-funnel/terms/public/session"),
     "terms.public.accept": ("POST", "/eom-funnel/terms/public/accept"),
 }
+_CARD_VAULT_CAPABILITY_ROUTES = {
+    "card_vault.public.session": (
+        "POST",
+        "/eom-funnel/card-vault/public/session",
+    ),
+    "card_vault.readiness.read": (
+        "GET",
+        "/eom-funnel/card-vault/readiness/{contact_id}",
+    ),
+}
 
 
 class _CRM:
@@ -137,6 +147,13 @@ def test_terms_capabilities_pin_the_existing_route_contract() -> None:
     """The Tracker contract names each existing Terms route exactly."""
     registered = _registered_routes()
     for name, signature in _TERMS_CAPABILITY_ROUTES.items():
+        assert funnel_mod._CAPABILITY_ROUTES[name] == signature
+        assert signature in registered
+
+
+def test_card_vault_capabilities_pin_the_provider_route_contract() -> None:
+    registered = _registered_routes()
+    for name, signature in _CARD_VAULT_CAPABILITY_ROUTES.items():
         assert funnel_mod._CAPABILITY_ROUTES[name] == signature
         assert signature in registered
 

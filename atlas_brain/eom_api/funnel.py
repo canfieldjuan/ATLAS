@@ -1199,6 +1199,14 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     ),
     "terms.public.session": ("POST", "/eom-funnel/terms/public/session"),
     "terms.public.accept": ("POST", "/eom-funnel/terms/public/accept"),
+    "card_vault.public.session": (
+        "POST",
+        "/eom-funnel/card-vault/public/session",
+    ),
+    "card_vault.readiness.read": (
+        "GET",
+        "/eom-funnel/card-vault/readiness/{contact_id}",
+    ),
     "onboarding.draft.list": ("GET", "/eom-funnel/onboarding-drafts"),
     "onboarding.draft.edit": ("PATCH", "/eom-funnel/onboarding-drafts/{draft_id}"),
     "onboarding.draft.approve_send": (
@@ -2789,3 +2797,10 @@ async def _log_draft_reconciliation(
             result.get("draft_id"),
             exc_info=True,
         )
+
+
+# Kept as a child router so existing full/slim EOM mounts gain the versioned
+# service API without coupling the separately signed root webhook to /api/v1.
+from .card_vault import router as card_vault_router  # noqa: E402
+
+router.include_router(card_vault_router)

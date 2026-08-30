@@ -59,6 +59,16 @@ class EOMPublicOnboardingConfig:
     previous_hmac_secret: str | None = field(default=None, repr=False)
 
 
+@dataclass(frozen=True)
+class EOMCardVaultConfig:
+    """Validated server-only Stripe authority for EOM card setup."""
+
+    public_base_url: str
+    secret_key: str = field(repr=False)
+    webhook_secret: str = field(repr=False)
+    request_timeout_seconds: int
+
+
 def _token_sha256(token: str) -> str:
     return hashlib.sha256(token.encode("ascii")).hexdigest()
 
@@ -145,6 +155,31 @@ def require_eom_public_onboarding_config(
         base_url=base_url,
         hmac_secret=secret,
         previous_hmac_secret=previous_secret,
+    )
+
+
+def require_eom_card_vault_config(
+    config: EOMFunnelConfig = Depends(get_eom_funnel_api_config),
+) -> EOMCardVaultConfig:
+    """Require the independently enabled EOM Stripe authority, fail closed."""
+
+    if not config.card_vault_enabled:
+        raise HTTPException(status_code=503, detail="EOM card vault is not enabled")
+    secret_key = config.card_vault_stripe_secret_key.get_secret_value().strip()
+    webhook_secret = (
+        config.card_vault_stripe_webhook_secret.get_secret_value().strip()
+    )
+    public_base_url = config.public_onboarding_url.strip()
+    if not secret_key or not webhook_secret or not public_base_url:
+        raise HTTPException(
+            status_code=503,
+            detail="EOM card-vault configuration is unavailable",
+        )
+    return EOMCardVaultConfig(
+        public_base_url=public_base_url,
+        secret_key=secret_key,
+        webhook_secret=webhook_secret,
+        request_timeout_seconds=config.card_vault_request_timeout_seconds,
     )
 
 

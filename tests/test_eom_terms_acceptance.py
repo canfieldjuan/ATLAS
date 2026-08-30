@@ -36,6 +36,7 @@ from atlas_brain.services.eom_terms_acceptance import (
     render_eom_terms_executed_copy,
     render_eom_terms_invitation,
 )
+from atlas_brain.services.eom_card_vault import eom_card_vault_schema_ready
 from atlas_brain.services.eom_terms_authority import (
     EOMTermsAuthority,
     eom_terms_authority_schema_ready,
@@ -60,6 +61,14 @@ _AUTHORITY_MIGRATION = (
 _ACCEPTANCE_MIGRATION = (
     Path(__file__).resolve().parent.parent
     / "atlas_brain/storage/migrations/397_eom_terms_acceptance.sql"
+)
+_CANDIDATE_MIGRATION = (
+    Path(__file__).resolve().parent.parent
+    / "atlas_brain/storage/migrations/395_eom_post_clean_onboarding_candidates.sql"
+)
+_CARD_VAULT_MIGRATION = (
+    Path(__file__).resolve().parent.parent
+    / "atlas_brain/storage/migrations/398_eom_card_vault.sql"
 )
 
 
@@ -2064,6 +2073,87 @@ async def test_real_postgres_serializes_duplicate_and_opposing_operations() -> N
                 client_ip="192.0.2.23",
                 sender=_RecordingSender(),
             )
+
+
+@pytest.mark.asyncio
+async def test_card_vault_migration_applies_with_guarded_runtime_acl() -> None:
+    async with _real_terms_store() as (pool, dba, schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES (398, '398_eom_card_vault')
+            """
+        )
+
+        assert await eom_card_vault_schema_ready(pool) is True
+        relations = await dba.fetch(
+            """
+            SELECT relation.relname,
+                   owner.rolname AS owner,
+                   has_table_privilege('atlas', relation.oid, 'SELECT') AS can_select,
+                   has_table_privilege('atlas', relation.oid, 'DELETE') AS can_delete
+            FROM pg_class AS relation
+            JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+            JOIN pg_roles AS owner ON owner.oid = relation.relowner
+            WHERE namespace.nspname = $1
+              AND relation.relname LIKE 'eom_card_vault_%'
+              AND relation.relkind = 'r'
+            ORDER BY relation.relname
+            """,
+            schema,
+        )
+        assert [row["relname"] for row in relations] == [
+            "eom_card_vault_enrollments",
+            "eom_card_vault_events",
+            "eom_card_vault_sessions",
+        ]
+        assert all(row["owner"] == "atlas_eom_handoff_owner" for row in relations)
+        assert all(row["can_select"] is True for row in relations)
+        assert all(row["can_delete"] is False for row in relations)
+
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            DISABLE TRIGGER trg_protect_eom_card_vault_event
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            """
+            ALTER TABLE eom_card_vault_events
+            ENABLE TRIGGER trg_protect_eom_card_vault_event
+            """
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            "REVOKE UPDATE (ready_at) ON eom_card_vault_enrollments FROM atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            "GRANT UPDATE (ready_at) ON eom_card_vault_enrollments TO atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        await dba.execute(
+            "GRANT UPDATE (contact_id) ON eom_card_vault_enrollments TO atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is False
+        await dba.execute(
+            "REVOKE UPDATE (contact_id) ON eom_card_vault_enrollments FROM atlas"
+        )
+        assert await eom_card_vault_schema_ready(pool) is True
+        with pytest.raises(asyncpg.RaiseError, match="event evidence is append-only"):
+            await dba.execute("TRUNCATE eom_card_vault_events")
 
 
 def test_migration_is_guard_owned_append_only_and_seeds_no_content() -> None:

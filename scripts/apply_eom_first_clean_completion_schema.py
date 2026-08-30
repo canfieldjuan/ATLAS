@@ -44,15 +44,21 @@ FUNNEL_DSN_ENV = "ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING"
 MIGRATION_NAME = "394_eom_first_clean_completion_receipts"
 TERMS_AUTHORITY_MIGRATION_NAME = "396_eom_terms_authority"
 TERMS_ACCEPTANCE_MIGRATION_NAME = "397_eom_terms_acceptance"
+CARD_VAULT_MIGRATION_NAME = "398_eom_card_vault"
 CONTROLLED_MIGRATION_NAMES = frozenset(
     {
         MIGRATION_NAME,
         TERMS_AUTHORITY_MIGRATION_NAME,
         TERMS_ACCEPTANCE_MIGRATION_NAME,
+        CARD_VAULT_MIGRATION_NAME,
     }
 )
 CONTROLLED_MIGRATION_PREDECESSORS = {
-    TERMS_ACCEPTANCE_MIGRATION_NAME: TERMS_AUTHORITY_MIGRATION_NAME,
+    TERMS_ACCEPTANCE_MIGRATION_NAME: (TERMS_AUTHORITY_MIGRATION_NAME,),
+    CARD_VAULT_MIGRATION_NAME: (
+        "395_eom_post_clean_onboarding_candidates",
+        TERMS_ACCEPTANCE_MIGRATION_NAME,
+    ),
 }
 
 
@@ -429,8 +435,8 @@ async def _run(
                 expected_target=runtime_target,
                 migration_name=migration_name,
             )
-            predecessor = CONTROLLED_MIGRATION_PREDECESSORS.get(migration_name)
-            if predecessor is not None:
+            predecessors = CONTROLLED_MIGRATION_PREDECESSORS.get(migration_name, ())
+            for predecessor in predecessors:
                 _executor_is_superuser, predecessor_recorded = await _migration_state(
                     pool,
                     expected_target=runtime_target,

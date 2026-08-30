@@ -70,6 +70,7 @@ from .eom_api.config import (
     invoicing_settings,
 )
 from .eom_api.funnel import router as funnel_router
+from .eom_api.card_vault import webhook_router as card_vault_webhook_router
 from .eom_api.funnel_auth import validate_eom_funnel_api_config
 from .eom_api.funnel_database import (
     close_eom_funnel_database,
@@ -320,4 +321,6 @@ app.state.eom_funnel_missed_call_recovery_pool = get_eom_funnel_db_pool
 app.state.eom_funnel_first_clean_completion_pool = get_eom_funnel_db_pool
 app.state.eom_funnel_terms_pool = get_eom_funnel_db_pool
 app.state.eom_funnel_terms_acceptance_pool = get_eom_funnel_db_pool
+app.state.eom_funnel_card_vault_pool = get_eom_funnel_db_pool
 app.include_router(funnel_router, prefix="/api/v1")
+app.include_router(card_vault_webhook_router)

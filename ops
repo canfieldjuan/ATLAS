@@ -56,6 +56,7 @@ DATABASE_INSPECTIONS = {
 CONTROLLED_DATABASE_OPERATIONS = {
     "eom-terms-authority": "apply_eom_terms_authority_schema.py",
     "eom-terms-acceptance": "apply_eom_terms_acceptance_schema.py",
+    "eom-card-vault": "apply_eom_card_vault_schema.py",
 }
 TEST_DATABASE_URL_KEYS = (
     "ATLAS_MIGRATION_TEST_DATABASE_URL",
@@ -581,7 +582,7 @@ def db_command(args: list[str]) -> int:
     if action == "controlled":
         if len(args) != 3:
             raise OpsError(
-                "usage: ./ops db controlled {eom-terms-authority|eom-terms-acceptance} {preflight|apply}"
+                "usage: ./ops db controlled {eom-terms-authority|eom-terms-acceptance|eom-card-vault} {preflight|apply}"
             )
         return run_controlled_database_operation(args[1], args[2])
     if action in ("query", "write", "migrate", "rollback", "drop"):
@@ -902,7 +903,7 @@ Read-only discovery and inspection:
   ci {status [LIMIT]|run RUN_ID [--log-failed]}
 
 Guarded database changes:
-  db controlled {eom-terms-authority|eom-terms-acceptance} {preflight|apply}
+  db controlled {eom-terms-authority|eom-terms-acceptance|eom-card-vault} {preflight|apply}
 
 Local/test execution:
   test unit  # GitHub-only; prints the canonical hosted gate and exits

@@ -398,7 +398,7 @@ def test_eom_env_loader_preserves_process_env_and_local_precedence(
     assert os.environ[process_interpolated_key] == "process-secret"
 
 
-def test_eom_requirements_cover_estimate_booking_calendar_runtime():
+def test_eom_requirements_cover_slim_runtime_imports():
     """The booking route loads tools/calendar.py, whose module-level
     `import httpx` must be satisfiable in the slim EOM runtime: the Render
     build installs only requirements.eom.txt, so the httpx pin has to live
@@ -419,6 +419,12 @@ def test_eom_requirements_cover_estimate_booking_calendar_runtime():
         if line.strip().startswith("httpx==")
     )
     assert eom_pins["httpx"] == main_httpx_pin
+    main_stripe_pin = next(
+        line.strip()
+        for line in main_requirements.splitlines()
+        if line.strip().startswith("stripe==")
+    )
+    assert eom_pins["stripe"] == main_stripe_pin
 
 
 def test_eom_render_blueprint_maps_database_and_receivables_auth():
@@ -451,6 +457,18 @@ def test_eom_render_blueprint_maps_database_and_receivables_auth():
             "name": "atlas-eom-postgres",
             "property": "connectionString",
         },
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_CARD_VAULT_ENABLED"] == {
+        "key": "ATLAS_EOM_FUNNEL_CARD_VAULT_ENABLED",
+        "value": "false",
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_SECRET_KEY"] == {
+        "key": "ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_SECRET_KEY",
+        "sync": False,
+    }
+    assert env_vars["ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_WEBHOOK_SECRET"] == {
+        "key": "ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_WEBHOOK_SECRET",
+        "sync": False,
     }
     assert env_vars["ATLAS_INVOICING_RECEIVABLES_API_ENABLED"] == {
         "key": "ATLAS_INVOICING_RECEIVABLES_API_ENABLED",
@@ -556,6 +574,10 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
         "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL",
         "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET",
         "ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_PREVIOUS_HMAC_SECRET",
+        "ATLAS_EOM_FUNNEL_CARD_VAULT_ENABLED",
+        "ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_SECRET_KEY",
+        "ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_WEBHOOK_SECRET",
+        "ATLAS_EOM_FUNNEL_CARD_VAULT_REQUEST_TIMEOUT_SECONDS",
         _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV,
     ):
         monkeypatch.delenv(key, raising=False)
@@ -575,6 +597,9 @@ def test_eom_funnel_canonical_crm_config_defaults_fail_closed(monkeypatch):
     assert funnel_defaults.public_onboarding_url == ""
     assert funnel_defaults.public_onboarding_hmac_secret.get_secret_value() == ""
     assert funnel_defaults.public_onboarding_previous_hmac_secret.get_secret_value() == ""
+    assert funnel_defaults.card_vault_enabled is False
+    assert funnel_defaults.card_vault_stripe_secret_key.get_secret_value() == ""
+    assert funnel_defaults.card_vault_stripe_webhook_secret.get_secret_value() == ""
     validate_eom_funnel_canonical_crm_config(
         funnel_defaults,
         canonical_crm_database_confirmed=False,

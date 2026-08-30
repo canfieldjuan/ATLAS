@@ -32,6 +32,27 @@ services:
         sync: false
       - key: ATLAS_EOM_FUNNEL_DB_CONNECTION_STRING
         sync: false
+      - key: ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED
+        value: "false"
+      - key: ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ISSUANCE_ENABLED
+        value: "false"
+      - key: ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_URL
+        sync: false
+      - key: ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_HMAC_SECRET
+        sync: false
+      - key: ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_PREVIOUS_HMAC_SECRET
+        sync: false
+      # A separate Stripe authority from Atlas SaaS billing. Keep the feature
+      # disabled until migration 398, the dedicated webhook, and consumers are
+      # deployed; `sync: false` prevents secrets from entering this blueprint.
+      - key: ATLAS_EOM_FUNNEL_CARD_VAULT_ENABLED
+        value: "false"
+      - key: ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_SECRET_KEY
+        sync: false
+      - key: ATLAS_EOM_FUNNEL_CARD_VAULT_STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: ATLAS_EOM_FUNNEL_CARD_VAULT_REQUEST_TIMEOUT_SECONDS
+        value: "10"
       # Remains fail-closed until the Atlas provider, tracker proxy, and CRM
       # Leads card are all deployed. The booking URL is intentionally a
       # deploy-time secret/configuration value rather than repository copy.

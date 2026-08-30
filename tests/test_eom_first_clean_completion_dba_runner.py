@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "apply_eom_first_clean_completion_schema.py"
 TERMS_SCRIPT = ROOT / "scripts" / "apply_eom_terms_authority_schema.py"
 TERMS_ACCEPTANCE_SCRIPT = ROOT / "scripts" / "apply_eom_terms_acceptance_schema.py"
+CARD_VAULT_SCRIPT = ROOT / "scripts" / "apply_eom_card_vault_schema.py"
 
 
 def _load_runner_module() -> ModuleType:
@@ -48,6 +49,19 @@ def _load_terms_acceptance_runner_module() -> ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.path.insert(0, str(TERMS_ACCEPTANCE_SCRIPT.parent))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+def _load_card_vault_runner_module() -> ModuleType:
+    module_name = "test_eom_card_vault_dba_runner_script"
+    spec = importlib.util.spec_from_file_location(module_name, CARD_VAULT_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(CARD_VAULT_SCRIPT.parent))
     try:
         spec.loader.exec_module(module)
     finally:
@@ -312,6 +326,7 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
         "394_eom_first_clean_completion_receipts",
         "396_eom_terms_authority",
         "397_eom_terms_acceptance",
+        "398_eom_card_vault",
     ],
 )
 def test_runner_applies_only_its_named_migration_in_pinned_transaction(
@@ -330,10 +345,12 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
         schema_name=schema_name,
         migration_lock_results=[False, True],
     )
-    if migration_name == "397_eom_terms_acceptance":
+    if migration_name in {"397_eom_terms_acceptance", "398_eom_card_vault"}:
         state.migration_records = {
+            "395_eom_post_clean_onboarding_candidates": True,
             "396_eom_terms_authority": True,
-            "397_eom_terms_acceptance": False,
+            "397_eom_terms_acceptance": migration_name == "398_eom_card_vault",
+            "398_eom_card_vault": False,
         }
     runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
     dba_pool = _Pool(state)
@@ -424,6 +441,76 @@ def test_terms_acceptance_entrypoint_pins_migration_397() -> None:
     assert shared_runner._parse_args(argv).migration == "397_eom_terms_acceptance"
     with pytest.raises(SystemExit):
         terms_runner._terms_acceptance_argv(["--migration=396_eom_terms_authority"])
+
+
+def test_card_vault_entrypoint_pins_migration_398() -> None:
+    card_vault_runner = _load_card_vault_runner_module()
+
+    argv = card_vault_runner._card_vault_argv(["--apply", "--json"])
+    assert argv == ["--migration", "398_eom_card_vault", "--apply", "--json"]
+    shared_runner = sys.modules[card_vault_runner._main.__module__]
+    assert shared_runner._parse_args(argv).migration == "398_eom_card_vault"
+    with pytest.raises(SystemExit):
+        card_vault_runner._card_vault_argv(["--migration=397_eom_terms_acceptance"])
+
+
+@pytest.mark.parametrize(
+    "missing_predecessor",
+    [
+        "395_eom_post_clean_onboarding_candidates",
+        "397_eom_terms_acceptance",
+    ],
+)
+def test_card_vault_refuses_any_unrecorded_predecessor(
+    monkeypatch,
+    missing_predecessor: str,
+) -> None:
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        migration_recorded=False,
+        migration_records={
+            "395_eom_post_clean_onboarding_candidates": True,
+            "397_eom_terms_acceptance": True,
+            "398_eom_card_vault": False,
+        },
+        schema_name=schema_name,
+    )
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
+    state.migration_records[missing_predecessor] = False
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            return runtime_pool
+        return dba_pool
+
+    args = runner._parse_args(["--migration", "398_eom_card_vault"])
+    with pytest.raises(
+        RuntimeError,
+        match=f"Controlled predecessor {missing_predecessor} must be recorded",
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
 
 
 def test_terms_acceptance_refuses_an_unrecorded_authority_predecessor(
