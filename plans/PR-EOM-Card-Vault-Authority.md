@@ -187,7 +187,7 @@ Max files: 27
 - Max files: 27
 - Parked hardening: none
 
-- Root decision: Persist retry parameters and bound ambiguous provider retries
+- Root decision: Persist retry parameters with the session reservation
 - Source trace: `atlas_brain/services/eom_card_vault.py` previously recomputed
   success/cancel URLs from mutable deployment configuration while reusing one
   session idempotency key indefinitely -> migration 398 and the reservation now
@@ -197,13 +197,13 @@ Max files: 27
   `atlas_brain/storage/migrations/398_eom_card_vault.sql`,
   `tests/test_eom_card_vault.py`, `.agent/runbooks/database.md`.
 - Fix strategy: upstream-root
-- Blocking predicate: data-integrity
+- Blocking predicate: data
 - Disposition: fixed-in
 - Allowed files: `.agent/runbooks/database.md`, `atlas_brain/services/eom_card_vault.py`, `atlas_brain/storage/migrations/398_eom_card_vault.sql`, `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
 - Max files: 27
 - Parked hardening: none
 
-- Root decision: Keep confirmation available while issuance is paused
+- Root decision: Keep webhook confirmation available while issuance is paused
 - Source trace: `atlas_brain/eom_api/card_vault.py` previously constructed the
   webhook provider through the same enabled dependency as new session issuance
   -> provider credentials now have an independent dependency while the feature
@@ -212,20 +212,20 @@ Max files: 27
   `atlas_brain/eom_api/funnel_auth.py`, `atlas_brain/eom_api/config.py`,
   `.agent/runbooks/database.md`, `tests/test_eom_card_vault.py`.
 - Fix strategy: upstream-root
-- Blocking predicate: data-integrity
+- Blocking predicate: data
 - Disposition: fixed-in
 - Allowed files: `.agent/runbooks/database.md`, `atlas_brain/eom_api/card_vault.py`, `atlas_brain/eom_api/config.py`, `atlas_brain/eom_api/funnel_auth.py`, `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
 - Max files: 27
 - Parked hardening: none
 
-- Root decision: Keep full-Atlas composition proof profile-correct
+- Root decision: Keep full-Atlas proof out of the slim dependency contract
 - Source trace: `tests/test_eom_card_vault.py` contains both slim-EOM tests and
   a full `atlas_brain.main` composition test -> that one test now explicitly
   skips when the main-only NumPy dependency is absent and still executes under
   the main requirements profile.
 - Upstream files: `tests/test_eom_card_vault.py`.
 - Fix strategy: upstream-root
-- Blocking predicate: deployability
+- Blocking predicate: ci
 - Disposition: fixed-in
 - Allowed files: `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
 - Max files: 27
