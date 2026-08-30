@@ -25,7 +25,10 @@ from pydantic import ValidationError
 from atlas_brain import main_eom
 from atlas_brain.eom_api import card_vault as api_mod
 from atlas_brain.eom_api import funnel_auth as auth_mod
-from atlas_brain.eom_api.config import EOMFunnelConfig
+from atlas_brain.eom_api.config import (
+    EOM_CARD_VAULT_RETURN_URL_MAX_BYTES,
+    EOMFunnelConfig,
+)
 from atlas_brain.services.eom_card_vault import (
     EOM_CARD_VAULT_SOURCE,
     EOM_CARD_VAULT_STRIPE_API_VERSION,
@@ -35,6 +38,7 @@ from atlas_brain.services.eom_card_vault import (
     EOMCardVaultService,
     EOMCardVaultSignatureError,
     EOMCardVaultUnavailableError,
+    EOMCardVaultValidationError,
     StripeEOMCardVaultProvider,
     eom_card_vault_schema_ready,
     _provider_id,
@@ -192,6 +196,31 @@ class _Connection:
             }
             state.sessions.append(row)
             return dict(row)
+        if "eom_card_vault_fenced_session" in query:
+            if state.enrollment is None:
+                return None
+            row = next(
+                (
+                    item
+                    for item in state.sessions
+                    if item["id"] == args[1]
+                    and item["enrollment_id"] == state.enrollment["id"]
+                ),
+                None,
+            )
+            if row is None:
+                return None
+            return {
+                **state.enrollment,
+                "session_row_id": row["id"],
+                "session_state": row["state"],
+                "stripe_checkout_session_id": row["stripe_checkout_session_id"],
+                "checkout_expires_at": row["checkout_expires_at"],
+                "checkout_success_url": row["checkout_success_url"],
+                "checkout_cancel_url": row["checkout_cancel_url"],
+                "provider_retry_until": row["provider_retry_until"],
+                "database_now": (state.eligibility or {})["database_now"],
+            }
         if "eom_card_vault_store_session" in query:
             row = next(item for item in state.sessions if item["id"] == args[0])
             if state.fail_session_store_once:
@@ -512,6 +541,40 @@ def test_card_vault_configuration_accepts_timeout_boundaries(timeout: int) -> No
     )
 
 
+def test_card_vault_configuration_pins_derived_return_url_byte_boundary() -> None:
+    prefix = "https://example.test/"
+    longest_suffix = "?cardVault=cancelled"
+    path_bytes = (
+        EOM_CARD_VAULT_RETURN_URL_MAX_BYTES
+        - len(prefix.encode("utf-8"))
+        - len(longest_suffix.encode("utf-8"))
+    )
+    exact_base_url = prefix + ("a" * path_bytes)
+
+    admitted = _config(public_onboarding_url=exact_base_url)
+    assert (
+        auth_mod.require_eom_card_vault_config(config=admitted).public_base_url
+        == exact_base_url
+    )
+    with pytest.raises(
+        ValidationError,
+        match="card-vault return URLs must not exceed 2048 bytes",
+    ):
+        _config(public_onboarding_url=exact_base_url + "a")
+    state = _State()
+    provider = _Provider()
+    with pytest.raises(EOMCardVaultValidationError):
+        asyncio.run(
+            EOMCardVaultService(pool=_Pool(state), provider=provider).start_session(
+                token=_token(),
+                public_base_url=exact_base_url + "a",
+            )
+        )
+    assert state.enrollment is None
+    assert provider.customer_calls == []
+    assert provider.session_calls == []
+
+
 def test_card_vault_config_grammar_is_closed_across_token_and_container_families() -> (
     None
 ):
@@ -620,11 +683,11 @@ async def test_session_creation_is_setup_only_and_concurrency_idempotent() -> No
     assert {call["idempotency_key"] for call in provider.customer_calls} == {
         f"eom-card-vault-customer:{_ENROLLMENT_ID}"
     }
-    assert len(provider.session_calls) == 2
+    assert len(provider.session_calls) == 1
     assert {call["idempotency_key"] for call in provider.session_calls} == {
         f"eom-card-vault-session:{_SESSION_ROW_ID}"
     }
-    assert provider.retrieve_session_calls == []
+    assert provider.retrieve_session_calls == ["cs_test_cardvault123"]
     call = provider.session_calls[0]
     assert call["mode"] == "setup"
     assert call["locale"] == "en"
@@ -634,6 +697,42 @@ async def test_session_creation_is_setup_only_and_concurrency_idempotent() -> No
     assert call["cancel_url"] == "https://eom.test/onboard?cardVault=cancelled"
     assert call["metadata"]["enrollment_id"] == str(_ENROLLMENT_ID)
     assert call["setup_intent_data"]["metadata"]["source"] == EOM_CARD_VAULT_SOURCE
+
+
+@pytest.mark.asyncio
+async def test_ready_transition_wins_before_new_session_materialization() -> None:
+    state = _State()
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+    await service.start_session(token=_token(), public_base_url="https://eom.test")
+    state.sessions[0]["checkout_expires_at"] = _NOW - timedelta(seconds=1)
+    original_reserve = service._reserve_session
+    new_session_reserved = asyncio.Event()
+    release_start = asyncio.Event()
+
+    async def reserve_then_pause(*args: Any, **kwargs: Any):
+        result = await original_reserve(*args, **kwargs)
+        if len(state.sessions) == 2:
+            new_session_reserved.set()
+            await release_start.wait()
+        return result
+
+    service._reserve_session = reserve_then_pause  # type: ignore[method-assign]
+    start_task = asyncio.create_task(
+        service.start_session(token=_token(), public_base_url="https://eom.test")
+    )
+    await new_session_reserved.wait()
+    try:
+        confirmed = await service.confirm_checkout_session(event=_completed_event())
+    finally:
+        release_start.set()
+    result = await start_task
+
+    assert confirmed["status"] == "ready"
+    assert result["status"] == "ready"
+    assert result["checkoutUrl"] is None
+    assert len(provider.session_calls) == 1
+    assert state.sessions[1]["state"] == "creating"
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import dotenv_values
@@ -18,6 +18,39 @@ RAW_RECEIVABLES_SERVICE_TOKEN_ENV = "ATLAS_INVOICING_RECEIVABLES_SERVICE_TOKEN"
 _RAW_RECEIVABLES_SERVICE_TOKEN_ENV_KEY = RAW_RECEIVABLES_SERVICE_TOKEN_ENV.casefold()
 RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV = "ATLAS_EOM_FUNNEL_SERVICE_TOKEN"
 _RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV_KEY = RAW_EOM_FUNNEL_SERVICE_TOKEN_ENV.casefold()
+EOM_CARD_VAULT_RETURN_URL_MAX_BYTES = 2048
+
+
+def build_eom_card_vault_return_urls(base_url: str) -> tuple[str, str]:
+    """Build the two stored redirects and enforce their database byte boundary."""
+
+    parsed = urlsplit(base_url)
+    urls = (
+        urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode({"cardVault": "success"}),
+                "",
+            )
+        ),
+        urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                urlencode({"cardVault": "cancelled"}),
+                "",
+            )
+        ),
+    )
+    if any(
+        not url or len(url.encode("utf-8")) > EOM_CARD_VAULT_RETURN_URL_MAX_BYTES
+        for url in urls
+    ):
+        raise ValueError("card-vault return URLs must not exceed 2048 bytes")
+    return urls
 
 
 def _has_raw_service_token(value: object) -> bool:
@@ -454,6 +487,8 @@ class EOMFunnelConfig(BaseSettings):
             raise ValueError(
                 "card vault requires ATLAS_EOM_FUNNEL_PUBLIC_ONBOARDING_ENABLED=true"
             )
+        if self.card_vault_enabled:
+            build_eom_card_vault_return_urls(self.public_onboarding_url.strip())
         if not has_secret_key:
             return self
         stripe_key_prefixes = ("sk_test_", "sk_live_", "rk_test_", "rk_live_")

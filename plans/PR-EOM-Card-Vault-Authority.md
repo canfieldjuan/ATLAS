@@ -67,20 +67,27 @@ Max files: 27
     PostgreSQL serializes reservation with the invitation row lock, unique
     candidate/contact enrollment constraints, and a locked latest-session read;
     it commits stable enrollment/session UUIDs, exact success/cancel URLs, and a
-    bounded provider-retry deadline before releasing those locks and starting
-    provider I/O. Multiple callers may consequently issue the same Stripe
-    request, but each uses identical persisted parameters and an idempotency key
-    derived only from the committed UUID. Stripe must return the same Customer
-    or Checkout Session for that key (and reject parameter drift), while the
-    compare-and-store database writes accept only that same provider identity.
+    bounded provider-retry deadline before releasing those reservation locks.
+    Checkout materialization then reacquires the same per-enrollment advisory
+    fence used by webhook confirmation, re-reads the enrollment/session under
+    row locks, and holds that fence through provider retrieval/creation and the
+    compare-and-store write. If a delayed valid webhook reaches the fence first,
+    creation performs no new Checkout call and returns the durable ready
+    projection; if creation reaches it first, confirmation waits until the open
+    session is stored. Concurrent callers and crash retries still use identical
+    persisted parameters and an idempotency key derived only from the committed
+    UUID, so Stripe must return the same Customer or Checkout Session for that
+    key and reject parameter drift.
     A provider success followed by cancellation or database failure therefore
     leaves a reusable `creating` reservation only inside its one-hour retry
     window; after that deadline Atlas fails closed for provider reconciliation
     instead of risking a new object beyond Stripe's deduplication lifetime. This
-    is logical exactly-once state, not a claim that only one outbound HTTP
-    attempt occurs. The concurrent request, config-drift retry, deadline-boundary,
-    provider-failure, and post-provider database-failure tests exercise those
-    interleavings and pin the stable key, parameters, and monotonic identity.
+    is logical exactly-once state, not a claim that crash/retry recovery makes
+    only one outbound HTTP attempt. The concurrent request, delayed-webhook,
+    config-drift retry, deadline-boundary, provider-failure, and post-provider
+    database-failure tests exercise the delayed-webhook-wins path and the normal
+    creation-before-confirmation path while pinning the stable key, parameters,
+    and monotonic identity.
   - Checkout uses `mode=setup` and never creates a PaymentIntent or charge;
     settled by the Stripe-call contract assertion.
   - The webhook reads the raw request, rejects missing/invalid/oversized
@@ -121,10 +128,11 @@ Max files: 27
 ### Fix-loop disposition preflight
 
 - Root decision: Specify the concurrency execution model
-- Source trace: `plans/PR-EOM-Card-Vault-Authority.md:60` claimed one logical
-  provider operation -> `atlas_brain/services/eom_card_vault.py:719` releases
-  database locks before provider I/O -> the plan must state the admitted
-  interleavings and Stripe/database convergence invariant.
+- Source trace: reservation commits stable provider identity before network I/O
+  -> a delayed webhook can otherwise mark the enrollment ready before a new
+  Checkout is stored -> session materialization and webhook confirmation now
+  share one per-enrollment advisory/row-lock fence and return the projection of
+  the transition that wins it.
 - Upstream files: `plans/PR-EOM-Card-Vault-Authority.md`.
 - Fix strategy: upstream-root
 - Blocking predicate: claimed-mechanism
@@ -291,8 +299,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
   produce no provider or database side effect.
 - Side-effect ordering: eligibility and current Terms are locked and validated,
   and stable operation identifiers are committed before provider creation;
-  provider confirmation is validated before the monotonic ready update;
-  unrelated/invalid events write nothing.
+  Checkout materialization re-reads pending state under the same per-enrollment
+  fence as the monotonic ready update; provider confirmation is validated before
+  taking that fence; unrelated/invalid events write nothing.
 
 ### Files touched
 
@@ -333,7 +342,10 @@ acceptance. The public route authenticates the existing Terms token, revalidates
 all persisted relationships under a transaction, and commits the enrollment and
 stable provider-operation identifiers, exact redirect parameters, and bounded
 retry deadline before making network calls. Those identifiers become Stripe
-idempotency keys for a hosted Checkout Session in setup mode. The browser
+idempotency keys for a hosted Checkout Session in setup mode. Session
+materialization and webhook confirmation share a per-enrollment advisory lock;
+the materializer re-reads the row under lock and either returns an already-ready
+projection or holds the fence through Checkout creation and storage. The browser
 receives only the hosted URL; the return URL never marks readiness. A dedicated
 EOM webhook verifies Stripe's signature over the raw body, validates the
 completed Checkout Session and retrieved SetupIntent against the enrollment,
@@ -370,8 +382,8 @@ Parked hardening: none.
   touched test modules: 424 passed with the real card-vault migration and
   migration-runner concurrency probes enabled against disposable PostgreSQL.
 - `uv run --isolated --with-requirements requirements.eom.txt --with pytest
-  --with pytest-asyncio python -m pytest tests/test_eom_card_vault.py -q`: 54
-  passed and the full-Atlas-only composition test skipped under the exact slim
+  --with pytest-asyncio python -m pytest tests/test_eom_card_vault.py -q`: 61
+  passed and 1 full-Atlas-only composition test skipped under the exact slim
   EOM dependency set; that composition test separately passed under the main
   dependency profile.
 - `uv run --isolated --python 3.11 --with-requirements requirements.txt --with
@@ -385,6 +397,9 @@ Parked hardening: none.
 - Ruff import/undefined-name checks passed for the new files; fatal Python
   checks passed across every touched Python file; all four new Python files are
   formatter-clean; `py_compile` passed across every touched Python file.
+- The full card-vault module passes 62 tests; its delayed-webhook fence and
+  2,048-byte derived-return-URL boundary probes also pass in the slim EOM
+  dependency profile.
 - Cold diff audit: every production, schema, deployment, operations, and test
   change traces to the Problem-derived contract; no required item is absent and
   no declared non-scope surface changed.
@@ -399,22 +414,22 @@ Parked hardening: none.
 | `.agent/runbooks/database.md` | 40 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 15 |
 | `atlas_brain/eom_api/card_vault.py` | 245 |
-| `atlas_brain/eom_api/config.py` | 72 |
+| `atlas_brain/eom_api/config.py` | 110 |
 | `atlas_brain/eom_api/funnel.py` | 54 |
 | `atlas_brain/eom_api/funnel_auth.py` | 60 |
 | `atlas_brain/main.py` | 5 |
 | `atlas_brain/main_eom.py` | 3 |
-| `atlas_brain/services/eom_card_vault.py` | 1266 |
+| `atlas_brain/services/eom_card_vault.py` | 1800 |
 | `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 462 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Vault-Authority.md` | 425 |
+| `plans/PR-EOM-Card-Vault-Authority.md` | 450 |
 | `render.eom.yaml` | 21 |
 | `requirements.eom.txt` | 1 |
 | `scripts/apply_eom_card_vault_schema.py` | 37 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 31 |
 | `tests/test_agent_operations_contract.py` | 27 |
-| `tests/test_eom_card_vault.py` | 1350 |
+| `tests/test_eom_card_vault.py` | 1660 |
 | `tests/test_eom_first_clean_completion.py` | 4 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 190 |
 | `tests/test_eom_funnel_capability_manifest.py` | 44 |
@@ -422,4 +437,4 @@ Parked hardening: none.
 | `tests/test_eom_render_profile.py` | 27 |
 | `tests/test_eom_terms_acceptance.py` | 90 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **4491** |
+| **Total** | **5398** |

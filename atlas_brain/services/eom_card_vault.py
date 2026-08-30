@@ -8,12 +8,16 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Protocol
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import urlencode, urlsplit
 from uuid import UUID, uuid4
 
 import asyncpg
 import stripe
 
+from ..eom_api.config import (
+    EOM_CARD_VAULT_RETURN_URL_MAX_BYTES,
+    build_eom_card_vault_return_urls,
+)
 from .eom_terms_acceptance import AuthenticatedEOMTermsToken
 from .eom_terms_authority import EOM_TERMS_PUBLICATION_LOCK_KEY
 
@@ -217,21 +221,11 @@ def _uuid(value: object, label: str) -> UUID:
         raise EOMCardVaultValidationError(f"{label} is invalid") from exc
 
 
-def _return_url(base_url: str, outcome: str) -> str:
-    parsed = urlsplit(base_url)
-    return urlunsplit(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            urlencode({"cardVault": outcome}),
-            "",
-        )
-    )
-
-
 def _reserved_return_url(value: object, outcome: str) -> str:
-    if not isinstance(value, str) or len(value.encode("utf-8")) > 2048:
+    if (
+        not isinstance(value, str)
+        or len(value.encode("utf-8")) > EOM_CARD_VAULT_RETURN_URL_MAX_BYTES
+    ):
         raise EOMCardVaultConflictError("Stored Checkout return URL is invalid")
     try:
         parsed = urlsplit(value)
@@ -1087,46 +1081,55 @@ class EOMCardVaultService:
     async def _store_session(
         self,
         *,
+        connection: Any,
         session_row_id: UUID,
+        enrollment_id: UUID,
         checkout_session_id: str,
         checkout_expires_at: datetime,
     ) -> dict[str, Any]:
         try:
-            async with self.pool.transaction() as connection:
+            session = await connection.fetchrow(
+                """
+                /* eom_card_vault_store_session */
+                UPDATE eom_card_vault_sessions AS session
+                SET state = 'open',
+                    stripe_checkout_session_id = $2,
+                    checkout_expires_at = $3
+                WHERE session.id = $1
+                  AND session.state = 'creating'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM eom_card_vault_enrollments AS enrollment
+                      WHERE enrollment.id = $4
+                        AND enrollment.status = 'pending'
+                  )
+                RETURNING session.*
+                """,
+                session_row_id,
+                checkout_session_id,
+                checkout_expires_at,
+                enrollment_id,
+            )
+            if session is None:
                 session = await connection.fetchrow(
                     """
-                    /* eom_card_vault_store_session */
-                    UPDATE eom_card_vault_sessions
-                    SET state = 'open',
-                        stripe_checkout_session_id = $2,
-                        checkout_expires_at = $3
-                    WHERE id = $1 AND state = 'creating'
-                    RETURNING *
+                    /* eom_card_vault_existing_session */
+                    SELECT * FROM eom_card_vault_sessions
+                    WHERE id = $1
+                    FOR UPDATE
                     """,
                     session_row_id,
-                    checkout_session_id,
-                    checkout_expires_at,
                 )
-                if session is None:
-                    session = await connection.fetchrow(
-                        """
-                        /* eom_card_vault_existing_session */
-                        SELECT * FROM eom_card_vault_sessions
-                        WHERE id = $1
-                        FOR UPDATE
-                        """,
-                        session_row_id,
-                    )
-                if (
-                    session is None
-                    or str(session["state"]) != "open"
-                    or str(session["stripe_checkout_session_id"]) != checkout_session_id
-                    or session["checkout_expires_at"] != checkout_expires_at
-                ):
-                    raise EOMCardVaultConflictError(
-                        "Stored Stripe Checkout session does not match"
-                    )
-                return dict(session)
+            if (
+                session is None
+                or str(session["state"]) != "open"
+                or str(session["stripe_checkout_session_id"]) != checkout_session_id
+                or session["checkout_expires_at"] != checkout_expires_at
+            ):
+                raise EOMCardVaultConflictError(
+                    "Stored Stripe Checkout session does not match"
+                )
+            return dict(session)
         except EOMCardVaultError:
             raise
         except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
@@ -1134,6 +1137,183 @@ class EOMCardVaultService:
             raise EOMCardVaultUnavailableError(
                 "Stripe Checkout session could not be stored"
             ) from exc
+
+    async def _materialize_session(
+        self,
+        *,
+        provider: EOMCardVaultProvider,
+        enrollment_id: UUID,
+        session_row_id: UUID,
+        reused: bool,
+    ) -> dict[str, Any]:
+        """Serialize provider materialization with the monotonic ready transition."""
+
+        async with self.pool.transaction() as connection:
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+                f"eom-card-vault:{enrollment_id}",
+            )
+            subject = await connection.fetchrow(
+                """
+                /* eom_card_vault_fenced_session */
+                SELECT enrollment.*,
+                       session.id AS session_row_id,
+                       session.state AS session_state,
+                       session.stripe_checkout_session_id,
+                       session.checkout_expires_at,
+                       session.checkout_success_url,
+                       session.checkout_cancel_url,
+                       session.provider_retry_until,
+                       clock_timestamp() AS database_now
+                FROM eom_card_vault_enrollments AS enrollment
+                JOIN eom_card_vault_sessions AS session
+                  ON session.enrollment_id = enrollment.id
+                WHERE enrollment.id = $1
+                  AND session.id = $2
+                FOR UPDATE OF enrollment, session
+                """,
+                enrollment_id,
+                session_row_id,
+            )
+            if subject is None:
+                raise EOMCardVaultNotFoundError("Card-vault session was not found")
+            enrollment = dict(subject)
+            if str(enrollment["status"]) == "ready":
+                return self._checkout_result(
+                    enrollment=enrollment,
+                    checkout_url=None,
+                    checkout_expires_at=None,
+                    idempotent=True,
+                )
+            if str(enrollment["status"]) != "pending":
+                raise EOMCardVaultConflictError(
+                    "Stored card-vault enrollment state is invalid"
+                )
+            customer_id = _provider_id(
+                enrollment["stripe_customer_id"],
+                prefix="cus_",
+                label="customer",
+            )
+            checkout_success_url = _reserved_return_url(
+                subject["checkout_success_url"], "success"
+            )
+            checkout_cancel_url = _reserved_return_url(
+                subject["checkout_cancel_url"], "cancelled"
+            )
+            session_state = str(subject["session_state"])
+            if session_state == "open":
+                checkout_session_id = _provider_id(
+                    subject["stripe_checkout_session_id"],
+                    prefix="cs_",
+                    label="Checkout session",
+                )
+                existing = await provider.retrieve_checkout_session(checkout_session_id)
+                checkout_url = _value(existing, "url")
+                checkout_metadata = _value(existing, "metadata")
+                if (
+                    _provider_id(
+                        _value(existing, "id"),
+                        prefix="cs_",
+                        label="Checkout session",
+                    )
+                    != checkout_session_id
+                    or _provider_id(
+                        _value(existing, "customer"),
+                        prefix="cus_",
+                        label="customer",
+                    )
+                    != customer_id
+                    or _value(existing, "mode") != "setup"
+                    or _value(existing, "status") != "open"
+                    or _value(existing, "client_reference_id") != str(enrollment_id)
+                    or not isinstance(checkout_metadata, Mapping)
+                    or checkout_metadata.get("source") != EOM_CARD_VAULT_SOURCE
+                    or checkout_metadata.get("enrollment_id") != str(enrollment_id)
+                    or checkout_metadata.get("session_id") != str(session_row_id)
+                    or not isinstance(checkout_url, str)
+                    or not checkout_url.startswith("https://")
+                ):
+                    raise EOMCardVaultConflictError(
+                        "Stored Stripe Checkout session is no longer reusable"
+                    )
+                return self._checkout_result(
+                    enrollment=enrollment,
+                    checkout_url=checkout_url,
+                    checkout_expires_at=subject["checkout_expires_at"],
+                    idempotent=True,
+                )
+            if session_state != "creating":
+                raise EOMCardVaultConflictError(
+                    "Stored card-vault session state is invalid"
+                )
+            provider_retry_until = subject["provider_retry_until"]
+            if not isinstance(provider_retry_until, datetime):
+                raise EOMCardVaultConflictError(
+                    "Stored Checkout retry deadline is invalid"
+                )
+            if provider_retry_until <= subject["database_now"]:
+                raise EOMCardVaultUnavailableError(
+                    "Card setup requires provider reconciliation before retry"
+                )
+            created = await provider.create_checkout_session(
+                mode="setup",
+                locale="en",
+                payment_method_types=["card"],
+                customer=customer_id,
+                client_reference_id=str(enrollment_id),
+                success_url=checkout_success_url,
+                cancel_url=checkout_cancel_url,
+                metadata={
+                    "source": EOM_CARD_VAULT_SOURCE,
+                    "enrollment_id": str(enrollment_id),
+                    "session_id": str(session_row_id),
+                },
+                setup_intent_data={
+                    "metadata": {
+                        "source": EOM_CARD_VAULT_SOURCE,
+                        "enrollment_id": str(enrollment_id),
+                    }
+                },
+                idempotency_key=f"eom-card-vault-session:{session_row_id}",
+            )
+            checkout_session_id = _provider_id(
+                _value(created, "id"), prefix="cs_", label="Checkout session"
+            )
+            checkout_url = _value(created, "url")
+            checkout_expires_at = _expires_at(_value(created, "expires_at"))
+            checkout_metadata = _value(created, "metadata")
+            if (
+                _provider_id(
+                    _value(created, "customer"),
+                    prefix="cus_",
+                    label="customer",
+                )
+                != customer_id
+                or _value(created, "mode") != "setup"
+                or _value(created, "status") != "open"
+                or _value(created, "client_reference_id") != str(enrollment_id)
+                or not isinstance(checkout_metadata, Mapping)
+                or checkout_metadata.get("source") != EOM_CARD_VAULT_SOURCE
+                or checkout_metadata.get("enrollment_id") != str(enrollment_id)
+                or checkout_metadata.get("session_id") != str(session_row_id)
+                or not isinstance(checkout_url, str)
+                or not checkout_url.startswith("https://")
+                or checkout_expires_at <= subject["database_now"]
+            ):
+                raise EOMCardVaultConflictError("Stripe Checkout session is invalid")
+            await self._store_session(
+                connection=connection,
+                session_row_id=session_row_id,
+                enrollment_id=enrollment_id,
+                checkout_session_id=checkout_session_id,
+                checkout_expires_at=checkout_expires_at,
+            )
+            return self._checkout_result(
+                enrollment=enrollment,
+                checkout_url=checkout_url,
+                checkout_expires_at=checkout_expires_at,
+                idempotent=reused,
+            )
 
     async def start_session(
         self,
@@ -1146,8 +1326,14 @@ class EOMCardVaultService:
         provider = self.provider
         authenticated = self._require_token(token)
         await self.require_schema_ready()
-        checkout_success_url = _return_url(public_base_url, "success")
-        checkout_cancel_url = _return_url(public_base_url, "cancelled")
+        try:
+            checkout_success_url, checkout_cancel_url = (
+                build_eom_card_vault_return_urls(public_base_url)
+            )
+        except ValueError as exc:
+            raise EOMCardVaultValidationError(
+                "Card setup return URL is invalid"
+            ) from exc
         eligibility, enrollment, session_row, reused = await self._reserve_session(
             authenticated,
             checkout_success_url=checkout_success_url,
@@ -1161,22 +1347,6 @@ class EOMCardVaultService:
                 idempotent=True,
             )
         assert session_row is not None
-        provider_retry_until = session_row["provider_retry_until"]
-        if not isinstance(provider_retry_until, datetime):
-            raise EOMCardVaultConflictError("Stored Checkout retry deadline is invalid")
-        if (
-            str(session_row["state"]) == "creating"
-            and provider_retry_until <= eligibility["database_now"]
-        ):
-            raise EOMCardVaultUnavailableError(
-                "Card setup requires provider reconciliation before retry"
-            )
-        checkout_success_url = _reserved_return_url(
-            session_row["checkout_success_url"], "success"
-        )
-        checkout_cancel_url = _reserved_return_url(
-            session_row["checkout_cancel_url"], "cancelled"
-        )
         try:
             customer_id = enrollment["stripe_customer_id"]
             if customer_id is None:
@@ -1209,102 +1379,11 @@ class EOMCardVaultService:
                 )
             else:
                 customer_id = _provider_id(customer_id, prefix="cus_", label="customer")
-
-            if str(session_row["state"]) == "open":
-                existing = await provider.retrieve_checkout_session(
-                    str(session_row["stripe_checkout_session_id"])
-                )
-                checkout_url = _value(existing, "url")
-                checkout_metadata = _value(existing, "metadata")
-                if (
-                    _provider_id(
-                        _value(existing, "id"),
-                        prefix="cs_",
-                        label="Checkout session",
-                    )
-                    != str(session_row["stripe_checkout_session_id"])
-                    or _provider_id(
-                        _value(existing, "customer"),
-                        prefix="cus_",
-                        label="customer",
-                    )
-                    != customer_id
-                    or _value(existing, "mode") != "setup"
-                    or _value(existing, "status") != "open"
-                    or _value(existing, "client_reference_id") != str(enrollment["id"])
-                    or not isinstance(checkout_metadata, Mapping)
-                    or checkout_metadata.get("source") != EOM_CARD_VAULT_SOURCE
-                    or checkout_metadata.get("enrollment_id") != str(enrollment["id"])
-                    or checkout_metadata.get("session_id") != str(session_row["id"])
-                    or not isinstance(checkout_url, str)
-                    or not checkout_url.startswith("https://")
-                ):
-                    raise EOMCardVaultConflictError(
-                        "Stored Stripe Checkout session is no longer reusable"
-                    )
-                return self._checkout_result(
-                    enrollment=enrollment,
-                    checkout_url=checkout_url,
-                    checkout_expires_at=session_row["checkout_expires_at"],
-                    idempotent=True,
-                )
-
-            created = await provider.create_checkout_session(
-                mode="setup",
-                locale="en",
-                payment_method_types=["card"],
-                customer=customer_id,
-                client_reference_id=str(enrollment["id"]),
-                success_url=checkout_success_url,
-                cancel_url=checkout_cancel_url,
-                metadata={
-                    "source": EOM_CARD_VAULT_SOURCE,
-                    "enrollment_id": str(enrollment["id"]),
-                    "session_id": str(session_row["id"]),
-                },
-                setup_intent_data={
-                    "metadata": {
-                        "source": EOM_CARD_VAULT_SOURCE,
-                        "enrollment_id": str(enrollment["id"]),
-                    }
-                },
-                idempotency_key=f"eom-card-vault-session:{session_row['id']}",
-            )
-            checkout_session_id = _provider_id(
-                _value(created, "id"), prefix="cs_", label="Checkout session"
-            )
-            checkout_url = _value(created, "url")
-            checkout_expires_at = _expires_at(_value(created, "expires_at"))
-            checkout_metadata = _value(created, "metadata")
-            if (
-                _provider_id(
-                    _value(created, "customer"),
-                    prefix="cus_",
-                    label="customer",
-                )
-                != customer_id
-                or _value(created, "mode") != "setup"
-                or _value(created, "status") != "open"
-                or _value(created, "client_reference_id") != str(enrollment["id"])
-                or not isinstance(checkout_metadata, Mapping)
-                or checkout_metadata.get("source") != EOM_CARD_VAULT_SOURCE
-                or checkout_metadata.get("enrollment_id") != str(enrollment["id"])
-                or checkout_metadata.get("session_id") != str(session_row["id"])
-                or not isinstance(checkout_url, str)
-                or not checkout_url.startswith("https://")
-                or checkout_expires_at <= eligibility["database_now"]
-            ):
-                raise EOMCardVaultConflictError("Stripe Checkout session is invalid")
-            await self._store_session(
+            return await self._materialize_session(
+                provider=provider,
+                enrollment_id=UUID(str(enrollment["id"])),
                 session_row_id=UUID(str(session_row["id"])),
-                checkout_session_id=checkout_session_id,
-                checkout_expires_at=checkout_expires_at,
-            )
-            return self._checkout_result(
-                enrollment=enrollment,
-                checkout_url=checkout_url,
-                checkout_expires_at=checkout_expires_at,
-                idempotent=reused,
+                reused=reused,
             )
         except EOMCardVaultError:
             raise
@@ -1316,6 +1395,15 @@ class EOMCardVaultService:
             )
             raise EOMCardVaultUnavailableError(
                 "Stripe card setup is temporarily unavailable"
+            ) from exc
+        except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure(
+                "materialize_session",
+                enrollment_id=enrollment["id"],
+                session_id=session_row["id"],
+            )
+            raise EOMCardVaultUnavailableError(
+                "EOM card setup could not be finalized"
             ) from exc
 
     async def _existing_confirmation_result(
