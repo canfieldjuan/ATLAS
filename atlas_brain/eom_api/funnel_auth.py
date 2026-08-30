@@ -60,8 +60,17 @@ class EOMPublicOnboardingConfig:
 
 
 @dataclass(frozen=True)
+class EOMCardVaultProviderConfig:
+    """Validated server-only Stripe authority retained for confirmation."""
+
+    secret_key: str = field(repr=False)
+    webhook_secret: str = field(repr=False)
+    request_timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class EOMCardVaultConfig:
-    """Validated server-only Stripe authority for EOM card setup."""
+    """Validated provider authority plus the separately gated issuance URL."""
 
     public_base_url: str
     secret_key: str = field(repr=False)
@@ -158,28 +167,44 @@ def require_eom_public_onboarding_config(
     )
 
 
+def require_eom_card_vault_provider_config(
+    config: EOMFunnelConfig = Depends(get_eom_funnel_api_config),
+) -> EOMCardVaultProviderConfig:
+    """Retain signed confirmation while new card-vault issuance is paused."""
+
+    secret_key = config.card_vault_stripe_secret_key.get_secret_value().strip()
+    webhook_secret = config.card_vault_stripe_webhook_secret.get_secret_value().strip()
+    if not secret_key or not webhook_secret:
+        raise HTTPException(
+            status_code=503,
+            detail="EOM card-vault configuration is unavailable",
+        )
+    return EOMCardVaultProviderConfig(
+        secret_key=secret_key,
+        webhook_secret=webhook_secret,
+        request_timeout_seconds=config.card_vault_request_timeout_seconds,
+    )
+
+
 def require_eom_card_vault_config(
     config: EOMFunnelConfig = Depends(get_eom_funnel_api_config),
 ) -> EOMCardVaultConfig:
-    """Require the independently enabled EOM Stripe authority, fail closed."""
+    """Require new-session issuance while confirmation stays independent."""
 
     if not config.card_vault_enabled:
         raise HTTPException(status_code=503, detail="EOM card vault is not enabled")
-    secret_key = config.card_vault_stripe_secret_key.get_secret_value().strip()
-    webhook_secret = (
-        config.card_vault_stripe_webhook_secret.get_secret_value().strip()
-    )
+    provider = require_eom_card_vault_provider_config(config=config)
     public_base_url = config.public_onboarding_url.strip()
-    if not secret_key or not webhook_secret or not public_base_url:
+    if not public_base_url:
         raise HTTPException(
             status_code=503,
             detail="EOM card-vault configuration is unavailable",
         )
     return EOMCardVaultConfig(
         public_base_url=public_base_url,
-        secret_key=secret_key,
-        webhook_secret=webhook_secret,
-        request_timeout_seconds=config.card_vault_request_timeout_seconds,
+        secret_key=provider.secret_key,
+        webhook_secret=provider.webhook_secret,
+        request_timeout_seconds=provider.request_timeout_seconds,
     )
 
 

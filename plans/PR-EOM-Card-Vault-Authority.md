@@ -66,24 +66,31 @@ Max files: 27
     candidate/acceptance, including cancellation or process loss at every await.
     PostgreSQL serializes reservation with the invitation row lock, unique
     candidate/contact enrollment constraints, and a locked latest-session read;
-    it commits stable enrollment/session UUIDs before releasing those locks and
-    starting provider I/O. Multiple callers may consequently issue the same
-    Stripe request, but each uses identical parameters and an idempotency key
+    it commits stable enrollment/session UUIDs, exact success/cancel URLs, and a
+    bounded provider-retry deadline before releasing those locks and starting
+    provider I/O. Multiple callers may consequently issue the same Stripe
+    request, but each uses identical persisted parameters and an idempotency key
     derived only from the committed UUID. Stripe must return the same Customer
     or Checkout Session for that key (and reject parameter drift), while the
     compare-and-store database writes accept only that same provider identity.
     A provider success followed by cancellation or database failure therefore
-    leaves a reusable `creating` reservation; a retry repeats the same key and
-    converges on the same logical provider object. This is logical exactly-once
-    state, not a claim that only one outbound HTTP attempt occurs. The concurrent
-    request, provider-failure, and post-provider database-failure tests exercise
-    those interleavings and pin the stable keys and monotonic stored identity.
+    leaves a reusable `creating` reservation only inside its one-hour retry
+    window; after that deadline Atlas fails closed for provider reconciliation
+    instead of risking a new object beyond Stripe's deduplication lifetime. This
+    is logical exactly-once state, not a claim that only one outbound HTTP
+    attempt occurs. The concurrent request, config-drift retry, deadline-boundary,
+    provider-failure, and post-provider database-failure tests exercise those
+    interleavings and pin the stable key, parameters, and monotonic identity.
   - Checkout uses `mode=setup` and never creates a PaymentIntent or charge;
     settled by the Stripe-call contract assertion.
   - The webhook reads the raw request, rejects missing/invalid/oversized
     signatures, ignores unrelated events, validates Checkout/SetupIntent
     ownership, and only then stores the provider payment-method identifier;
     settled by webhook boundary tests.
+  - Disabling new card-vault issuance leaves signed webhook confirmation active
+    while the dedicated provider credentials remain configured, so a rollback
+    cannot strand an already successful hosted session; settled by a real signed
+    root-webhook request with issuance disabled and by the rollback runbook.
   - Duplicate successful events are idempotent and cannot regress ready state;
     settled by replay tests and monotonic SQL update conditions.
   - Readiness reports card required only for residential contacts and ready only
@@ -180,6 +187,50 @@ Max files: 27
 - Max files: 27
 - Parked hardening: none
 
+- Root decision: Persist retry parameters and bound ambiguous provider retries
+- Source trace: `atlas_brain/services/eom_card_vault.py` previously recomputed
+  success/cancel URLs from mutable deployment configuration while reusing one
+  session idempotency key indefinitely -> migration 398 and the reservation now
+  persist the exact URLs plus a one-hour retry deadline, and retries use only
+  those stored values or fail closed for reconciliation.
+- Upstream files: `atlas_brain/services/eom_card_vault.py`,
+  `atlas_brain/storage/migrations/398_eom_card_vault.sql`,
+  `tests/test_eom_card_vault.py`, `.agent/runbooks/database.md`.
+- Fix strategy: upstream-root
+- Blocking predicate: data-integrity
+- Disposition: fixed-in
+- Allowed files: `.agent/runbooks/database.md`, `atlas_brain/services/eom_card_vault.py`, `atlas_brain/storage/migrations/398_eom_card_vault.sql`, `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
+- Root decision: Keep confirmation available while issuance is paused
+- Source trace: `atlas_brain/eom_api/card_vault.py` previously constructed the
+  webhook provider through the same enabled dependency as new session issuance
+  -> provider credentials now have an independent dependency while the feature
+  flag gates only issuance, and rollback requires outstanding sessions to drain.
+- Upstream files: `atlas_brain/eom_api/card_vault.py`,
+  `atlas_brain/eom_api/funnel_auth.py`, `atlas_brain/eom_api/config.py`,
+  `.agent/runbooks/database.md`, `tests/test_eom_card_vault.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: data-integrity
+- Disposition: fixed-in
+- Allowed files: `.agent/runbooks/database.md`, `atlas_brain/eom_api/card_vault.py`, `atlas_brain/eom_api/config.py`, `atlas_brain/eom_api/funnel_auth.py`, `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
+- Root decision: Keep full-Atlas composition proof profile-correct
+- Source trace: `tests/test_eom_card_vault.py` contains both slim-EOM tests and
+  a full `atlas_brain.main` composition test -> that one test now explicitly
+  skips when the main-only NumPy dependency is absent and still executes under
+  the main requirements profile.
+- Upstream files: `tests/test_eom_card_vault.py`.
+- Fix strategy: upstream-root
+- Blocking predicate: deployability
+- Disposition: fixed-in
+- Allowed files: `tests/test_eom_card_vault.py`, `plans/PR-EOM-Card-Vault-Authority.md`.
+- Max files: 27
+- Parked hardening: none
+
 ### Guard class-closure declaration
 
 - Stripe credential and provider-object inputs are OPEN because environment
@@ -205,9 +256,11 @@ Required when this diff changes a guard, validator, normalizer, resolver,
 router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
-- Boundary path/seam: typed environment -> enabled provider dependency; public
-  token -> candidate/contact/current acceptance; provider event -> enrollment
-  transition; private service bearer -> readiness projection.
+- Boundary path/seam: typed environment -> independent issuance and provider
+  confirmation dependencies; public token -> candidate/contact/current
+  acceptance; reserved retry identity/parameters/deadline -> provider request;
+  provider event -> enrollment transition; private service bearer -> readiness
+  projection.
 - Replaced-path behaviors: none. These are additive routes and state. Existing
   Terms and billing paths remain authoritative for their own contracts.
 - Guard-relevant fields: enabled flag, Stripe secret/webhook secret, public
@@ -228,7 +281,9 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - Deployed/default config values: card vault is disabled by default; no Stripe
   key or webhook secret is inferred from the SaaS billing configuration.
 - Explicit value probe: enabled plus valid dedicated Stripe values and public
-  onboarding URL constructs the provider dependency and routes successfully.
+  onboarding URL constructs the issuance and provider dependencies; disabling
+  issuance with those credentials retained rejects a new session while a signed
+  webhook still reaches confirmation.
 - Absent value probe: enabled with either secret or public onboarding disabled
   fails configuration validation before serving card-vault behavior.
 - Default-session/default-context probe: default/unset configuration leaves all
@@ -276,14 +331,15 @@ initial acceptance is immutable audit evidence rather than the lifetime of the
 saved card. Each hosted-session attempt records the then-current Terms
 acceptance. The public route authenticates the existing Terms token, revalidates
 all persisted relationships under a transaction, and commits the enrollment and
-stable provider-operation identifiers before making network calls. Those
-identifiers become Stripe idempotency keys for a hosted Checkout Session in
-setup mode. The browser receives only the hosted URL; the return URL never marks
-readiness. A dedicated EOM webhook verifies Stripe's signature over the raw body,
-validates the completed Checkout Session and retrieved SetupIntent against the
-enrollment, records the event, and advances the row monotonically. A private read
-model derives whether a card is required and provider-confirmed independently of
-later Terms reacceptance.
+stable provider-operation identifiers, exact redirect parameters, and bounded
+retry deadline before making network calls. Those identifiers become Stripe
+idempotency keys for a hosted Checkout Session in setup mode. The browser
+receives only the hosted URL; the return URL never marks readiness. A dedicated
+EOM webhook verifies Stripe's signature over the raw body, validates the
+completed Checkout Session and retrieved SetupIntent against the enrollment,
+records the event, and advances the row monotonically even when new issuance is
+paused. A private read model derives whether a card is required and
+provider-confirmed independently of later Terms reacceptance.
 
 ## Intentional
 
@@ -292,7 +348,10 @@ later Terms reacceptance.
   billing webhook, because the EOM slim deployment has a distinct database and
   entrypoint.
 - Treat the database row as durable operation authority and Stripe idempotency
-  as retry protection, not as permanent deduplication.
+  as bounded retry protection, not as permanent deduplication; require manual
+  provider reconciliation once a `creating` reservation reaches its deadline.
+- Treat the feature flag as an issuance gate, not permission to disable signed
+  confirmation for already-issued hosted sessions.
 - Do not treat the success redirect as proof; only a signed event plus retrieved
   SetupIntent can make readiness true.
 
@@ -308,15 +367,17 @@ Parked hardening: none.
 ## Verification
 
 - `uv run --with stripe==15.3.0 python -m pytest` over the seven directly
-  touched test modules: 412 passed with the real card-vault migration and
+  touched test modules: 424 passed with the real card-vault migration and
   migration-runner concurrency probes enabled against disposable PostgreSQL.
 - `uv run --isolated --with-requirements requirements.eom.txt --with pytest
-  --with pytest-asyncio python -m pytest tests/test_eom_card_vault.py -q`: 44
-  passed under the exact slim EOM dependency set.
+  --with pytest-asyncio python -m pytest tests/test_eom_card_vault.py -q`: 54
+  passed and the full-Atlas-only composition test skipped under the exact slim
+  EOM dependency set; that composition test separately passed under the main
+  dependency profile.
 - `uv run --isolated --python 3.11 --with-requirements requirements.txt --with
   pytest --with pytest-asyncio python -m pytest -q` over the card-vault,
   migration-preflight, capability-manifest, and three affected legacy route
-  tests: 99 passed under the dependency profile that exposed the CI failure.
+  tests: 103 passed under the dependency profile that exposed the CI failure.
 - `python -m ruff check` over all eight changed Python files: passed.
 - The full-Atlas signed-webhook entrypoint test passes through the explicit
   production pool-factory composition seam; the exact storage maturity-sweep
@@ -335,25 +396,25 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.agent/capabilities.yaml` | 11 |
-| `.agent/runbooks/database.md` | 32 |
+| `.agent/runbooks/database.md` | 40 |
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 15 |
-| `atlas_brain/eom_api/card_vault.py` | 241 |
-| `atlas_brain/eom_api/config.py` | 71 |
+| `atlas_brain/eom_api/card_vault.py` | 245 |
+| `atlas_brain/eom_api/config.py` | 72 |
 | `atlas_brain/eom_api/funnel.py` | 54 |
-| `atlas_brain/eom_api/funnel_auth.py` | 35 |
+| `atlas_brain/eom_api/funnel_auth.py` | 60 |
 | `atlas_brain/main.py` | 5 |
 | `atlas_brain/main_eom.py` | 3 |
-| `atlas_brain/services/eom_card_vault.py` | 1211 |
-| `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 439 |
+| `atlas_brain/services/eom_card_vault.py` | 1266 |
+| `atlas_brain/storage/migrations/398_eom_card_vault.sql` | 462 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
 | `ops` | 5 |
-| `plans/PR-EOM-Card-Vault-Authority.md` | 364 |
+| `plans/PR-EOM-Card-Vault-Authority.md` | 425 |
 | `render.eom.yaml` | 21 |
 | `requirements.eom.txt` | 1 |
 | `scripts/apply_eom_card_vault_schema.py` | 37 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 31 |
 | `tests/test_agent_operations_contract.py` | 27 |
-| `tests/test_eom_card_vault.py` | 1214 |
+| `tests/test_eom_card_vault.py` | 1350 |
 | `tests/test_eom_first_clean_completion.py` | 4 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 190 |
 | `tests/test_eom_funnel_capability_manifest.py` | 44 |
@@ -361,4 +422,4 @@ Parked hardening: none.
 | `tests/test_eom_render_profile.py` | 27 |
 | `tests/test_eom_terms_acceptance.py` | 90 |
 | `tests/test_migrations_runner.py` | 3 |
-| **Total** | **4178** |
+| **Total** | **4491** |

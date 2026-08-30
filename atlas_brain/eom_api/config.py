@@ -218,8 +218,9 @@ class EOMFunnelConfig(BaseSettings):
     card_vault_enabled: bool = Field(
         default=False,
         description=(
-            "Enable Stripe-hosted card-on-file setup for eligible residential "
-            "post-clean onboarding"
+            "Enable issuance of new Stripe-hosted card-on-file setup sessions "
+            "for eligible residential post-clean onboarding; signed webhook "
+            "confirmation remains available while dedicated credentials remain set"
         ),
     )
     card_vault_stripe_secret_key: SecretStr = Field(

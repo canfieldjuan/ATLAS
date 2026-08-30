@@ -143,6 +143,9 @@ CREATE TABLE eom_card_vault_sessions (
     id UUID CONSTRAINT pk_eom_card_vault_sessions PRIMARY KEY,
     enrollment_id UUID NOT NULL,
     acceptance_id UUID NOT NULL,
+    checkout_success_url TEXT NOT NULL,
+    checkout_cancel_url TEXT NOT NULL,
+    provider_retry_until TIMESTAMPTZ NOT NULL,
     state VARCHAR(16) NOT NULL DEFAULT 'creating',
     stripe_checkout_session_id VARCHAR(255),
     checkout_expires_at TIMESTAMPTZ,
@@ -155,6 +158,19 @@ CREATE TABLE eom_card_vault_sessions (
     CONSTRAINT fk_eom_card_vault_session_acceptance
         FOREIGN KEY (acceptance_id)
         REFERENCES eom_terms_acceptances(id) ON DELETE RESTRICT,
+    CONSTRAINT ck_eom_card_vault_session_return_urls
+        CHECK (
+            octet_length(checkout_success_url) BETWEEN 1 AND 2048
+            AND octet_length(checkout_cancel_url) BETWEEN 1 AND 2048
+            AND checkout_success_url LIKE 'https://%?cardVault=success'
+            AND checkout_cancel_url LIKE 'https://%?cardVault=cancelled'
+            AND checkout_success_url <> checkout_cancel_url
+        ),
+    CONSTRAINT ck_eom_card_vault_session_retry_window
+        CHECK (
+            provider_retry_until > created_at
+            AND provider_retry_until <= created_at + INTERVAL '2 hours'
+        ),
     CONSTRAINT ck_eom_card_vault_session_state
         CHECK (
             (state = 'creating'
@@ -293,9 +309,15 @@ BEGIN
         END IF;
         RETURN NEW;
     END IF;
-    IF ROW(NEW.id, NEW.enrollment_id, NEW.acceptance_id, NEW.created_at)
+    IF ROW(
+        NEW.id, NEW.enrollment_id, NEW.acceptance_id,
+        NEW.checkout_success_url, NEW.checkout_cancel_url,
+        NEW.provider_retry_until, NEW.created_at
+    )
        IS DISTINCT FROM ROW(
-           OLD.id, OLD.enrollment_id, OLD.acceptance_id, OLD.created_at
+           OLD.id, OLD.enrollment_id, OLD.acceptance_id,
+           OLD.checkout_success_url, OLD.checkout_cancel_url,
+           OLD.provider_retry_until, OLD.created_at
        ) THEN
         RAISE EXCEPTION 'EOM card-vault session identity is immutable';
     END IF;
@@ -413,7 +435,8 @@ BEGIN
         'GRANT SELECT ON TABLE %I.eom_card_vault_sessions TO atlas', schema_name
     );
     EXECUTE format(
-        'GRANT INSERT (id, enrollment_id, acceptance_id) '
+        'GRANT INSERT (id, enrollment_id, acceptance_id, '
+        || 'checkout_success_url, checkout_cancel_url, provider_retry_until) '
         || 'ON TABLE %I.eom_card_vault_sessions TO atlas', schema_name
     );
     EXECUTE format(

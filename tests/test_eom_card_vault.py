@@ -180,6 +180,9 @@ class _Connection:
                 "id": _SESSION_ROW_ID if not state.sessions else args[0],
                 "enrollment_id": args[1],
                 "acceptance_id": args[2],
+                "checkout_success_url": args[3],
+                "checkout_cancel_url": args[4],
+                "provider_retry_until": args[5],
                 "state": "creating",
                 "stripe_checkout_session_id": None,
                 "checkout_expires_at": None,
@@ -397,6 +400,13 @@ def test_card_vault_defaults_disabled_and_requires_a_complete_authority() -> Non
     assert auth_mod.require_eom_card_vault_config(
         config=configured
     ).public_base_url == ("https://example.test/onboarding")
+    paused = _config(card_vault_enabled=False)
+    provider_config = auth_mod.require_eom_card_vault_provider_config(config=paused)
+    assert provider_config.request_timeout_seconds == 10
+    assert provider_config.secret_key.startswith("sk_test_")
+    with pytest.raises(HTTPException) as issuance_paused:
+        auth_mod.require_eom_card_vault_config(config=paused)
+    assert issuance_paused.value.status_code == 503
     disabled = _config(
         card_vault_enabled=False,
         card_vault_stripe_secret_key="",
@@ -733,6 +743,76 @@ async def test_database_failure_keeps_stable_provider_identities(
         expected_context_key: expected_context_value
     }
     assert _SECRET not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_session_store_retry_reuses_reserved_urls_and_key_after_config_drift() -> (
+    None
+):
+    state = _State()
+    state.fail_session_store_once = True
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+
+    with pytest.raises(EOMCardVaultUnavailableError):
+        await service.start_session(
+            token=_token(), public_base_url="https://original.eom.test/onboarding"
+        )
+    result = await service.start_session(
+        token=_token(), public_base_url="https://moved.eom.test/new-onboarding"
+    )
+
+    assert result["status"] == "pending"
+    assert len(provider.session_calls) == 2
+    assert {call["idempotency_key"] for call in provider.session_calls} == {
+        f"eom-card-vault-session:{_SESSION_ROW_ID}"
+    }
+    assert {call["success_url"] for call in provider.session_calls} == {
+        "https://original.eom.test/onboarding?cardVault=success"
+    }
+    assert {call["cancel_url"] for call in provider.session_calls} == {
+        "https://original.eom.test/onboarding?cardVault=cancelled"
+    }
+
+
+@pytest.mark.asyncio
+async def test_creating_session_retry_stops_at_reserved_deadline() -> None:
+    state = _State()
+    state.fail_session_store_once = True
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+
+    with pytest.raises(EOMCardVaultUnavailableError):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+    assert state.eligibility is not None
+    state.eligibility["database_now"] = _NOW + timedelta(hours=1)
+
+    with pytest.raises(
+        EOMCardVaultUnavailableError,
+        match="requires provider reconciliation",
+    ):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+
+    assert len(provider.session_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_corrupt_reserved_return_url_stops_before_provider_retry() -> None:
+    state = _State()
+    state.fail_session_store_once = True
+    provider = _Provider()
+    service = EOMCardVaultService(pool=_Pool(state), provider=provider)
+
+    with pytest.raises(EOMCardVaultUnavailableError):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+    state.sessions[0]["checkout_success_url"] = (
+        "https://eom.test?cardVault=success&redirect=https://attacker.test"
+    )
+
+    with pytest.raises(EOMCardVaultConflictError, match="return URL is invalid"):
+        await service.start_session(token=_token(), public_base_url="https://eom.test")
+
+    assert len(provider.session_calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -1090,7 +1170,55 @@ async def test_real_eom_entrypoint_reaches_api_and_root_webhook() -> None:
 
 
 @pytest.mark.asyncio
+async def test_paused_issuance_keeps_signed_root_webhook_available() -> None:
+    config = _config(card_vault_enabled=False)
+    secret = config.card_vault_stripe_webhook_secret.get_secret_value()
+    payload = (
+        b'{"id":"evt_paused123","object":"event",'
+        b'"type":"customer.created","data":{"object":{}}}'
+    )
+    timestamp = int(time.time())
+    signed = f"{timestamp}.".encode("ascii") + payload
+    signature = hmac.new(secret.encode("ascii"), signed, hashlib.sha256).hexdigest()
+    header = f"t={timestamp},v1={signature}"
+    main_eom.app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
+        config
+    )
+    main_eom.app.dependency_overrides[api_mod._service_dependency] = _RouteService
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main_eom.app),
+            base_url="http://test",
+        ) as client:
+            issuance = await client.post(
+                "/api/v1/eom-funnel/card-vault/public/session",
+                headers={"Authorization": f"Bearer {_SERVICE.token}"},
+                json={"token": "unused-while-issuance-is-paused"},
+            )
+            webhook = await client.post(
+                "/webhooks/eom-card-vault",
+                headers={"Stripe-Signature": header},
+                content=payload,
+            )
+    finally:
+        main_eom.app.dependency_overrides.clear()
+
+    assert issuance.status_code == 503
+    assert webhook.status_code == 200
+    assert webhook.json() == {
+        "eventId": "evt_ignored123",
+        "enrollmentId": None,
+        "status": "ignored",
+        "idempotent": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_full_atlas_entrypoint_reaches_signed_root_webhook(monkeypatch) -> None:
+    pytest.importorskip(
+        "numpy",
+        reason="full Atlas entrypoint uses the main requirements profile",
+    )
     from atlas_brain import main
 
     config = _config()
@@ -1210,5 +1338,13 @@ def test_migration_is_controlled_and_stores_no_raw_card_data() -> None:
     for forbidden in ("card_number", "cvc", "routing_number", "account_number"):
         assert forbidden not in executable_sql
     assert "GRANT UPDATE (stripe_customer_id, status" in sql
-    assert "GRANT INSERT (id, enrollment_id, acceptance_id)" in sql
+    assert "checkout_success_url TEXT NOT NULL" in sql
+    assert "checkout_cancel_url TEXT NOT NULL" in sql
+    assert "provider_retry_until TIMESTAMPTZ NOT NULL" in sql
+    assert "provider_retry_until <= created_at + INTERVAL '2 hours'" in sql
+    assert (
+        "GRANT INSERT (id, enrollment_id, acceptance_id, "
+        "'\n        || 'checkout_success_url, checkout_cancel_url, provider_retry_until)"
+        in sql
+    )
     assert "GRANT DELETE" not in sql

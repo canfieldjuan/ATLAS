@@ -7,7 +7,7 @@ import hmac
 import logging
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping, Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from uuid import UUID, uuid4
@@ -21,6 +21,7 @@ from .eom_terms_authority import EOM_TERMS_PUBLICATION_LOCK_KEY
 EOM_CARD_VAULT_SOURCE = "eom_card_vault"
 EOM_CARD_VAULT_STRIPE_API_VERSION = "2026-05-27.dahlia"
 _PROVIDER_ID = re.compile(r"^[A-Za-z0-9_]{4,255}$")
+_PROVIDER_RETRY_WINDOW = timedelta(hours=1)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -201,6 +202,29 @@ def _return_url(base_url: str, outcome: str) -> str:
     )
 
 
+def _reserved_return_url(value: object, outcome: str) -> str:
+    if not isinstance(value, str) or len(value.encode("utf-8")) > 2048:
+        raise EOMCardVaultConflictError("Stored Checkout return URL is invalid")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise EOMCardVaultConflictError(
+            "Stored Checkout return URL is invalid"
+        ) from exc
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port == 0
+        or parsed.query != urlencode({"cardVault": outcome})
+        or parsed.fragment
+    ):
+        raise EOMCardVaultConflictError("Stored Checkout return URL is invalid")
+    return value
+
+
 def _expires_at(value: Any) -> datetime:
     if isinstance(value, bool) or not isinstance(value, int):
         raise EOMCardVaultConflictError("Stripe Checkout expiration is invalid")
@@ -261,6 +285,9 @@ async def eom_card_vault_schema_ready(pool: Any) -> bool:
                         ('eom_card_vault_sessions', 'id', 'INSERT'),
                         ('eom_card_vault_sessions', 'enrollment_id', 'INSERT'),
                         ('eom_card_vault_sessions', 'acceptance_id', 'INSERT'),
+                        ('eom_card_vault_sessions', 'checkout_success_url', 'INSERT'),
+                        ('eom_card_vault_sessions', 'checkout_cancel_url', 'INSERT'),
+                        ('eom_card_vault_sessions', 'provider_retry_until', 'INSERT'),
                         ('eom_card_vault_sessions', 'state', 'UPDATE'),
                         ('eom_card_vault_sessions', 'stripe_checkout_session_id', 'UPDATE'),
                         ('eom_card_vault_sessions', 'checkout_expires_at', 'UPDATE'),
@@ -491,6 +518,9 @@ class EOMCardVaultService:
     async def _reserve_session(
         self,
         authenticated: AuthenticatedEOMTermsToken,
+        *,
+        checkout_success_url: str,
+        checkout_cancel_url: str,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any] | None, bool]:
         """Commit stable operation IDs before making a provider request."""
 
@@ -615,13 +645,18 @@ class EOMCardVaultService:
                         """
                         /* eom_card_vault_reserve_session */
                         INSERT INTO eom_card_vault_sessions (
-                            id, enrollment_id, acceptance_id
-                        ) VALUES ($1, $2, $3)
+                            id, enrollment_id, acceptance_id,
+                            checkout_success_url, checkout_cancel_url,
+                            provider_retry_until
+                        ) VALUES ($1, $2, $3, $4, $5, $6)
                         RETURNING *
                         """,
                         uuid4(),
                         enrollment["id"],
                         eligibility["acceptance_id"],
+                        checkout_success_url,
+                        checkout_cancel_url,
+                        eligibility["database_now"] + _PROVIDER_RETRY_WINDOW,
                     )
                     reused = False
                 if latest is None:
@@ -751,8 +786,12 @@ class EOMCardVaultService:
 
         authenticated = self._require_token(token)
         await self.require_schema_ready()
+        checkout_success_url = _return_url(public_base_url, "success")
+        checkout_cancel_url = _return_url(public_base_url, "cancelled")
         eligibility, enrollment, session_row, reused = await self._reserve_session(
-            authenticated
+            authenticated,
+            checkout_success_url=checkout_success_url,
+            checkout_cancel_url=checkout_cancel_url,
         )
         if str(enrollment["status"]) == "ready":
             return self._checkout_result(
@@ -762,6 +801,22 @@ class EOMCardVaultService:
                 idempotent=True,
             )
         assert session_row is not None
+        provider_retry_until = session_row["provider_retry_until"]
+        if not isinstance(provider_retry_until, datetime):
+            raise EOMCardVaultConflictError("Stored Checkout retry deadline is invalid")
+        if (
+            str(session_row["state"]) == "creating"
+            and provider_retry_until <= eligibility["database_now"]
+        ):
+            raise EOMCardVaultUnavailableError(
+                "Card setup requires provider reconciliation before retry"
+            )
+        checkout_success_url = _reserved_return_url(
+            session_row["checkout_success_url"], "success"
+        )
+        checkout_cancel_url = _reserved_return_url(
+            session_row["checkout_cancel_url"], "cancelled"
+        )
         try:
             customer_id = enrollment["stripe_customer_id"]
             if customer_id is None:
@@ -840,8 +895,8 @@ class EOMCardVaultService:
                 payment_method_types=["card"],
                 customer=customer_id,
                 client_reference_id=str(enrollment["id"]),
-                success_url=_return_url(public_base_url, "success"),
-                cancel_url=_return_url(public_base_url, "cancelled"),
+                success_url=checkout_success_url,
+                cancel_url=checkout_cancel_url,
                 metadata={
                     "source": EOM_CARD_VAULT_SOURCE,
                     "enrollment_id": str(enrollment["id"]),

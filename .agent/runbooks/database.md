@@ -189,12 +189,20 @@ the preflight before enabling `ATLAS_EOM_FUNNEL_CARD_VAULT_ENABLED`:
 ./ops db controlled eom-card-vault preflight
 ```
 
-The card-vault flag, dedicated Stripe key, dedicated webhook secret, and public
-onboarding authority must be configured as one reviewed deployment change. The
-webhook endpoint is `/webhooks/eom-card-vault`; do not point it at the separate
-SaaS billing webhook. Rollback is retention-only: disable callers and the
-feature flag, roll application code back, and retain migration 398 and every
-provider identifier/event row.
+The card-vault flag controls only issuance of new hosted setup sessions. The
+dedicated Stripe key, dedicated webhook secret, and public onboarding authority
+must be configured with it as one reviewed deployment change. The webhook
+endpoint is `/webhooks/eom-card-vault`; do not point it at the separate SaaS
+billing webhook.
+
+Rollback is retention-only. Disable callers and the feature flag to stop new
+issuance, but keep the current application/webhook route and both dedicated
+Stripe credentials active while any `creating` or `open` hosted session can
+still complete. Reconcile every `creating` session and wait for every `open`
+session to become ready or expire before rotating/removing those credentials or
+rolling application code behind the webhook contract. Retain migration 398 and
+every provider identifier/event row throughout; disabling issuance is not
+authorization to strand provider-confirmed customer state.
 
 ## Role-topology evidence preflight
 

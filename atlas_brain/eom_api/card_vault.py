@@ -23,8 +23,10 @@ from ..services.eom_terms_acceptance import (
 )
 from .funnel_auth import (
     EOMCardVaultConfig,
+    EOMCardVaultProviderConfig,
     EOMPublicOnboardingConfig,
     require_eom_card_vault_config,
+    require_eom_card_vault_provider_config,
     require_eom_funnel_api,
     require_eom_public_onboarding_config,
 )
@@ -119,7 +121,9 @@ class EOMCardVaultWebhookResponse(BaseModel):
 
 
 def _provider_dependency(
-    config: EOMCardVaultConfig = Depends(require_eom_card_vault_config),
+    config: EOMCardVaultProviderConfig = Depends(
+        require_eom_card_vault_provider_config
+    ),
 ) -> EOMCardVaultProvider:
     return StripeEOMCardVaultProvider(
         secret_key=config.secret_key,
