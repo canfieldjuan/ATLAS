@@ -46,6 +46,10 @@ _TERMS_CAPABILITY_ROUTES = {
     "terms.public.accept": ("POST", "/eom-funnel/terms/public/accept"),
 }
 _CARD_VAULT_CAPABILITY_ROUTES = {
+    "card_vault.public.readiness": (
+        "POST",
+        "/eom-funnel/card-vault/public/readiness",
+    ),
     "card_vault.public.session": (
         "POST",
         "/eom-funnel/card-vault/public/session",

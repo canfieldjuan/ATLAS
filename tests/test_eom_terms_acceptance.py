@@ -2969,6 +2969,80 @@ async def test_service_commitment_migration_serializes_legacy_enrollment_insert(
 
 
 @pytest.mark.asyncio
+async def test_public_card_readiness_executes_against_the_guarded_schema() -> None:
+    async with _real_terms_store() as (pool, dba, schema):
+        await dba.execute(_CANDIDATE_MIGRATION.read_text())
+        await dba.execute(
+            """
+            INSERT INTO schema_migrations (version, name)
+            VALUES
+                (395, '395_eom_post_clean_onboarding_candidates'),
+                (397, '397_eom_terms_acceptance')
+            ON CONFLICT (version) DO NOTHING
+            """
+        )
+        await dba.execute(_CARD_VAULT_MIGRATION.read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (398, '398_eom_card_vault')"
+        )
+        await dba.execute(_CARD_SERVICE_COMMITMENT_MIGRATION.read_text())
+        await dba.execute(
+            "INSERT INTO schema_migrations (version, name) "
+            "VALUES (399, '399_eom_card_service_commitments')"
+        )
+        await dba.execute(
+            "GRANT SELECT, UPDATE ON TABLE "
+            f'"{schema}".eom_post_clean_onboarding_candidates TO atlas'
+        )
+        await _publish(
+            EOMTermsAuthority(pool=pool),
+            label="public-card-readiness.1",
+            material=True,
+            marker="public-card-readiness",
+        )
+        terms = EOMTermsAcceptanceService(pool=pool)
+        contact_id, candidate_id, _acceptance_id = await _seed_accepted_candidate(
+            dba=dba,
+            terms=terms,
+        )
+        await EOMCardServiceCommitmentService(pool=pool).decide(
+            candidate_id=candidate_id,
+            service_commitment="recurring",
+            operation_key=f"public-card-readiness:{candidate_id.hex}",
+            actor_id=7,
+            actor_name="Juan",
+        )
+        invitation_id = await dba.fetchval(
+            "SELECT id FROM eom_terms_invitations WHERE contact_id = $1",
+            contact_id,
+        )
+        token = authenticate_eom_terms_token(
+            token=format_eom_terms_token(
+                invitation_id=UUID(str(invitation_id)),
+                secret=_SECRET,
+            ),
+            secret=_SECRET,
+        )
+        card_vault = EOMCardVaultService(pool=pool)
+
+        public = await card_vault.get_public_readiness(token=token)
+        internal = await card_vault.get_readiness(contact_id=contact_id)
+
+        assert public == {
+            "cardRequired": True,
+            "cardReady": False,
+            "reason": "not_started",
+        }
+        assert public == {
+            key: internal[key] for key in ("cardRequired", "cardReady", "reason")
+        }
+        assert (
+            await dba.fetchval("SELECT count(*) FROM eom_card_vault_enrollments") == 0
+        )
+
+
+@pytest.mark.asyncio
 async def test_service_commitment_database_guard_controls_card_enrollment() -> None:
     async with _real_terms_store() as (pool, dba, schema):
         await dba.execute(_CANDIDATE_MIGRATION.read_text())

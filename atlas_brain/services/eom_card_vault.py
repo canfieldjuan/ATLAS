@@ -865,6 +865,116 @@ class EOMCardVaultService:
             raise EOMCardVaultNotFoundError("Card setup is unavailable")
 
     @staticmethod
+    def _validate_public_readiness_subject(
+        row: Mapping[str, Any] | None,
+        token: AuthenticatedEOMTermsToken,
+    ) -> None:
+        """Keep the public read bound to the invitation's current subject."""
+
+        if row is None or not hmac.compare_digest(
+            str(row["signing_key_fingerprint"]),
+            token.signing_key_fingerprint,
+        ):
+            raise EOMCardVaultNotFoundError("Card readiness is unavailable")
+        customer_type = str(row["customer_type"])
+        if (
+            row["revoked_at"] is not None
+            or bool(row["is_expired"])
+            or str(row["business_context_id"]) != "effingham_maids"
+            or str(row["contact_type"]) != "customer"
+            or str(row["contact_status"]) != "active"
+            or customer_type not in {"residential", "commercial"}
+            or str(row["invitation_audience"]) != customer_type
+            or str(row["full_name"]).strip() != str(row["invitation_customer_name"])
+            or str(row["email"] or "").strip().lower()
+            != str(row["invitation_recipient_email"])
+            or not str(row["email"] or "").strip()
+        ):
+            raise EOMCardVaultNotFoundError("Card readiness is unavailable")
+
+    @staticmethod
+    def _readiness_result(
+        row: Mapping[str, Any] | None,
+        *,
+        contact_id: UUID,
+    ) -> dict[str, Any]:
+        """Derive the one card-only policy projection used by both reads."""
+
+        if (
+            row is None
+            or str(row["business_context_id"]) != "effingham_maids"
+            or str(row["contact_type"]) != "customer"
+            or str(row["contact_status"]) != "active"
+        ):
+            raise EOMCardVaultNotFoundError("Card readiness is unavailable")
+        audience = str(row["customer_type"])
+        if audience == "commercial":
+            return {
+                "contactId": str(contact_id),
+                "audience": audience,
+                "cardRequired": False,
+                "cardReady": True,
+                "reason": "not_required",
+                "candidateId": None,
+                "enrollmentId": None,
+                "providerConfirmedAt": None,
+            }
+        if audience != "residential":
+            raise EOMCardVaultNotFoundError("Card readiness is unavailable")
+        service_commitment = (
+            str(row["service_commitment"])
+            if row["service_commitment"] is not None
+            else None
+        )
+        if service_commitment == "one_time":
+            if row["enrollment_id"] is not None:
+                raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
+            return {
+                "contactId": str(contact_id),
+                "audience": audience,
+                "cardRequired": False,
+                "cardReady": True,
+                "reason": "not_required",
+                "candidateId": str(row["candidate_id"]),
+                "enrollmentId": None,
+                "providerConfirmedAt": None,
+            }
+        if service_commitment not in {None, "recurring"}:
+            raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
+        if str(row["enrollment_status"]) == "ready":
+            reason = "ready"
+        elif (
+            row["acceptance_id"] is None
+            or str(row["acceptance_audience"]) != "residential"
+            or bool(row["later_material"])
+        ):
+            reason = "terms_not_ready"
+        elif row["candidate_id"] is None:
+            reason = "first_clean_not_confirmed"
+        elif service_commitment is None:
+            reason = "service_commitment_required"
+        elif row["enrollment_id"] is None:
+            reason = "not_started"
+        elif str(row["enrollment_status"]) == "pending":
+            reason = "pending"
+        else:
+            raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
+        return {
+            "contactId": str(contact_id),
+            "audience": audience,
+            "cardRequired": True,
+            "cardReady": reason == "ready",
+            "reason": reason,
+            "candidateId": (
+                str(row["candidate_id"]) if row["candidate_id"] is not None else None
+            ),
+            "enrollmentId": (
+                str(row["enrollment_id"]) if row["enrollment_id"] is not None else None
+            ),
+            "providerConfirmedAt": row["ready_at"] if reason == "ready" else None,
+        }
+
+    @staticmethod
     def _checkout_result(
         *,
         enrollment: Mapping[str, Any],
@@ -1751,6 +1861,83 @@ class EOMCardVaultService:
                 "EOM card-vault confirmation is unavailable"
             ) from exc
 
+    async def get_public_readiness(self, *, token: object) -> dict[str, Any]:
+        """Return a minimal readiness projection for one invitation bearer."""
+
+        authenticated = self._require_token(token)
+        await self.require_card_policy_schema_ready()
+        try:
+            row = await self.pool.fetchrow(
+                """
+                /* eom_card_vault_public_readiness */
+                SELECT invitation.signing_key_fingerprint,
+                       invitation.revoked_at,
+                       clock_timestamp() > invitation.expires_at AS is_expired,
+                       invitation.audience AS invitation_audience,
+                       invitation.customer_name AS invitation_customer_name,
+                       invitation.recipient_email AS invitation_recipient_email,
+                       contact.id AS contact_id,
+                       contact.customer_type,
+                       contact.business_context_id,
+                       contact.contact_type,
+                       contact.status AS contact_status,
+                       contact.full_name,
+                       contact.email,
+                       candidate.id AS candidate_id,
+                       commitment.service_commitment,
+                       acceptance.id AS acceptance_id,
+                       acceptance.audience AS acceptance_audience,
+                       enrollment.id AS enrollment_id,
+                       enrollment.status AS enrollment_status,
+                       enrollment.ready_at,
+                       EXISTS (
+                           SELECT 1
+                           FROM eom_terms_versions AS later
+                           WHERE acceptance.id IS NOT NULL
+                             AND later.status = 'published'
+                             AND later.material_change
+                             AND later.publication_order
+                                 > accepted_version.publication_order
+                       ) AS later_material
+                FROM eom_terms_invitations AS invitation
+                JOIN contacts AS contact ON contact.id = invitation.contact_id
+                LEFT JOIN eom_post_clean_onboarding_candidates AS candidate
+                  ON candidate.contact_id = contact.id
+                 AND candidate.status = 'pending'
+                LEFT JOIN eom_post_clean_service_commitments AS commitment
+                  ON commitment.candidate_id = candidate.id
+                 AND commitment.contact_id = contact.id
+                LEFT JOIN eom_terms_acceptances AS acceptance
+                  ON acceptance.invitation_id = invitation.id
+                 AND acceptance.contact_id = contact.id
+                LEFT JOIN eom_terms_versions AS accepted_version
+                  ON accepted_version.id = acceptance.version_id
+                LEFT JOIN eom_card_vault_enrollments AS enrollment
+                  ON enrollment.candidate_id = candidate.id
+                WHERE invitation.id = $1
+                """,
+                authenticated.invitation_id,
+            )
+        except (asyncpg.PostgresError, OSError, TimeoutError) as exc:
+            _log_boundary_failure(
+                "get_public_readiness",
+                invitation_id=authenticated.invitation_id,
+            )
+            raise EOMCardVaultUnavailableError(
+                "EOM card readiness is unavailable"
+            ) from exc
+        self._validate_public_readiness_subject(row, authenticated)
+        assert row is not None
+        result = self._readiness_result(
+            row,
+            contact_id=UUID(str(row["contact_id"])),
+        )
+        return {
+            "cardRequired": result["cardRequired"],
+            "cardReady": result["cardReady"],
+            "reason": result["reason"],
+        }
+
     async def get_readiness(self, *, contact_id: object) -> dict[str, Any]:
         """Return card-only readiness without changing onboarding state."""
 
@@ -1810,76 +1997,4 @@ class EOMCardVaultService:
             raise EOMCardVaultUnavailableError(
                 "EOM card readiness is unavailable"
             ) from exc
-        if (
-            row is None
-            or str(row["business_context_id"]) != "effingham_maids"
-            or str(row["contact_type"]) != "customer"
-            or str(row["contact_status"]) != "active"
-        ):
-            raise EOMCardVaultNotFoundError("Card readiness is unavailable")
-        audience = str(row["customer_type"])
-        if audience == "commercial":
-            return {
-                "contactId": str(parsed_contact_id),
-                "audience": audience,
-                "cardRequired": False,
-                "cardReady": True,
-                "reason": "not_required",
-                "candidateId": None,
-                "enrollmentId": None,
-                "providerConfirmedAt": None,
-            }
-        if audience != "residential":
-            raise EOMCardVaultNotFoundError("Card readiness is unavailable")
-        service_commitment = (
-            str(row["service_commitment"])
-            if row["service_commitment"] is not None
-            else None
-        )
-        if service_commitment == "one_time":
-            if row["enrollment_id"] is not None:
-                raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
-            return {
-                "contactId": str(parsed_contact_id),
-                "audience": audience,
-                "cardRequired": False,
-                "cardReady": True,
-                "reason": "not_required",
-                "candidateId": str(row["candidate_id"]),
-                "enrollmentId": None,
-                "providerConfirmedAt": None,
-            }
-        if service_commitment not in {None, "recurring"}:
-            raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
-        if str(row["enrollment_status"]) == "ready":
-            reason = "ready"
-        elif (
-            row["acceptance_id"] is None
-            or str(row["acceptance_audience"]) != "residential"
-            or bool(row["later_material"])
-        ):
-            reason = "terms_not_ready"
-        elif row["candidate_id"] is None:
-            reason = "first_clean_not_confirmed"
-        elif service_commitment is None:
-            reason = "service_commitment_required"
-        elif row["enrollment_id"] is None:
-            reason = "not_started"
-        elif str(row["enrollment_status"]) == "pending":
-            reason = "pending"
-        else:
-            raise EOMCardVaultUnavailableError("Stored card readiness is invalid")
-        return {
-            "contactId": str(parsed_contact_id),
-            "audience": audience,
-            "cardRequired": True,
-            "cardReady": reason == "ready",
-            "reason": reason,
-            "candidateId": (
-                str(row["candidate_id"]) if row["candidate_id"] is not None else None
-            ),
-            "enrollmentId": (
-                str(row["enrollment_id"]) if row["enrollment_id"] is not None else None
-            ),
-            "providerConfirmedAt": row["ready_at"] if reason == "ready" else None,
-        }
+        return self._readiness_result(row, contact_id=parsed_contact_id)

@@ -113,6 +113,7 @@ class _State:
         self.sessions: list[dict[str, Any]] = []
         self.events: list[dict[str, Any]] = []
         self.readiness: dict[str, Any] | None = None
+        self.transaction_count = 0
         self.fail_customer_store_once = False
         self.fail_session_store_once = False
         self.fail_event_store_once = False
@@ -341,6 +342,7 @@ class _Pool:
 
     @asynccontextmanager
     async def transaction(self):
+        self.state.transaction_count += 1
         async with self.state.lock:
             yield self.connection
 
@@ -351,6 +353,37 @@ class _Pool:
         return self.state.card_vault_schema_ready
 
     async def fetchrow(self, query: str, *_args: Any) -> dict[str, Any] | None:
+        if "eom_card_vault_public_readiness" in query:
+            assert _args == (_INVITATION_ID,)
+            eligibility = self.state.eligibility
+            if eligibility is None:
+                return None
+            enrollment = self.state.enrollment or {}
+            return {
+                "signing_key_fingerprint": eligibility.get("signing_key_fingerprint"),
+                "revoked_at": eligibility.get("revoked_at"),
+                "is_expired": eligibility.get("is_expired", False),
+                "invitation_audience": eligibility.get("invitation_audience"),
+                "invitation_customer_name": eligibility.get("invitation_customer_name"),
+                "invitation_recipient_email": eligibility.get(
+                    "invitation_recipient_email"
+                ),
+                "contact_id": eligibility.get("contact_id"),
+                "customer_type": eligibility.get("customer_type"),
+                "business_context_id": eligibility.get("business_context_id"),
+                "contact_type": eligibility.get("contact_type"),
+                "contact_status": eligibility.get("contact_status"),
+                "full_name": eligibility.get("full_name"),
+                "email": eligibility.get("email"),
+                "candidate_id": eligibility.get("candidate_id"),
+                "service_commitment": eligibility.get("service_commitment"),
+                "acceptance_id": eligibility.get("acceptance_id"),
+                "acceptance_audience": eligibility.get("acceptance_audience"),
+                "enrollment_id": enrollment.get("id"),
+                "enrollment_status": enrollment.get("status"),
+                "ready_at": enrollment.get("ready_at"),
+                "later_material": eligibility.get("later_material", False),
+            }
         assert "eom_card_vault_readiness" in query
         if self.state.readiness is not None:
             return dict(self.state.readiness)
@@ -1357,6 +1390,151 @@ async def test_one_time_readiness_skips_card_and_unclassified_fails_closed() -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("updates", "enrollment_status", "expected"),
+    [
+        (
+            {
+                "customer_type": "commercial",
+                "invitation_audience": "commercial",
+                "acceptance_audience": "commercial",
+                "candidate_id": None,
+                "service_commitment": None,
+            },
+            None,
+            {"cardRequired": False, "cardReady": True, "reason": "not_required"},
+        ),
+        (
+            {"service_commitment": "one_time"},
+            None,
+            {"cardRequired": False, "cardReady": True, "reason": "not_required"},
+        ),
+        (
+            {"acceptance_id": None, "acceptance_audience": None},
+            None,
+            {
+                "cardRequired": True,
+                "cardReady": False,
+                "reason": "terms_not_ready",
+            },
+        ),
+        (
+            {"candidate_id": None, "service_commitment": None},
+            None,
+            {
+                "cardRequired": True,
+                "cardReady": False,
+                "reason": "first_clean_not_confirmed",
+            },
+        ),
+        (
+            {"service_commitment": None},
+            None,
+            {
+                "cardRequired": True,
+                "cardReady": False,
+                "reason": "service_commitment_required",
+            },
+        ),
+        (
+            {},
+            None,
+            {"cardRequired": True, "cardReady": False, "reason": "not_started"},
+        ),
+        (
+            {},
+            "pending",
+            {"cardRequired": True, "cardReady": False, "reason": "pending"},
+        ),
+        (
+            {},
+            "ready",
+            {"cardRequired": True, "cardReady": True, "reason": "ready"},
+        ),
+    ],
+    ids=(
+        "commercial",
+        "one-time",
+        "terms-not-ready",
+        "first-clean-missing",
+        "service-undecided",
+        "not-started",
+        "pending",
+        "ready",
+    ),
+)
+async def test_public_readiness_projects_the_existing_card_policy(
+    updates: dict[str, Any],
+    enrollment_status: str | None,
+    expected: dict[str, Any],
+) -> None:
+    state = _State()
+    assert state.eligibility is not None
+    state.eligibility.update(updates)
+    if enrollment_status is not None:
+        state.enrollment = {
+            "id": _ENROLLMENT_ID,
+            "status": enrollment_status,
+            "ready_at": _NOW if enrollment_status == "ready" else None,
+        }
+
+    result = await EOMCardVaultService(pool=_Pool(state)).get_public_readiness(
+        token=_token()
+    )
+
+    assert result == expected
+    assert state.transaction_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "updates",
+    [
+        None,
+        {"signing_key_fingerprint": "b" * 64},
+        {"revoked_at": _NOW},
+        {"is_expired": True},
+        {"business_context_id": "another_business"},
+        {"contact_type": "lead"},
+        {"contact_status": "inactive"},
+        {"customer_type": "unknown"},
+        {"invitation_audience": "commercial"},
+        {"full_name": "Another Customer"},
+        {"email": "another@example.test"},
+    ],
+    ids=(
+        "missing",
+        "wrong-key",
+        "revoked",
+        "expired",
+        "wrong-business",
+        "not-customer",
+        "inactive",
+        "unknown-audience",
+        "audience-drift",
+        "name-drift",
+        "email-drift",
+    ),
+)
+async def test_public_readiness_rejects_every_drifted_token_subject(
+    updates: dict[str, Any] | None,
+) -> None:
+    state = _State()
+    if updates is None:
+        state.eligibility = None
+    else:
+        assert state.eligibility is not None
+        state.eligibility.update(updates)
+
+    with pytest.raises(EOMCardVaultNotFoundError):
+        await EOMCardVaultService(pool=_Pool(state)).get_public_readiness(
+            token=_token()
+        )
+
+    assert state.transaction_count == 0
+
+
+@pytest.mark.asyncio
 async def test_card_readiness_survives_a_later_current_terms_acceptance() -> None:
     state = _State()
     provider = _Provider()
@@ -1633,6 +1811,52 @@ async def test_readiness_does_not_require_provider_credentials() -> None:
     assert response.status_code == 200
     assert response.json()["cardReady"] is True
     assert response.json()["reason"] == "ready"
+
+
+@pytest.mark.asyncio
+async def test_public_readiness_route_is_minimal_and_provider_independent() -> None:
+    config = _config(
+        card_vault_enabled=False,
+        card_vault_stripe_secret_key="",
+        card_vault_stripe_webhook_secret="",
+    )
+    state = _State()
+    token = format_eom_terms_token(invitation_id=_INVITATION_ID, secret=_SECRET)
+    authenticated = authenticate_eom_terms_token(token=token, secret=_SECRET)
+    assert state.eligibility is not None
+    state.eligibility["signing_key_fingerprint"] = authenticated.signing_key_fingerprint
+    original_pool_factory = main_eom.app.state.eom_funnel_card_vault_pool
+    main_eom.app.state.eom_funnel_card_vault_pool = lambda: _Pool(state)
+    main_eom.app.dependency_overrides[auth_mod.get_eom_funnel_api_config] = lambda: (
+        config
+    )
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=main_eom.app),
+            base_url="http://test",
+        ) as client:
+            response = await client.post(
+                "/api/v1/eom-funnel/card-vault/public/readiness",
+                headers={"Authorization": f"Bearer {_SERVICE.token}"},
+                json={"token": token},
+            )
+            malformed = await client.post(
+                "/api/v1/eom-funnel/card-vault/public/readiness",
+                headers={"Authorization": f"Bearer {_SERVICE.token}"},
+                json={"token": {"nested": token}},
+            )
+    finally:
+        main_eom.app.dependency_overrides.clear()
+        main_eom.app.state.eom_funnel_card_vault_pool = original_pool_factory
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "cardRequired": True,
+        "cardReady": False,
+        "reason": "not_started",
+    }
+    assert malformed.status_code == 404
+    assert state.transaction_count == 0
 
 
 @pytest.mark.asyncio
