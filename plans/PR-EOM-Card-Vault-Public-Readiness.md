@@ -44,6 +44,7 @@ one read-only route, one shared projector, and one capability entry.
 
 Ownership lane: eom/card-vault-public-readiness
 Slice phase: Vertical slice
+Max files: 7
 
 1. Expose a minimal public card-readiness projection behind the existing EOM
    service token and opaque Terms bearer, with no Stripe/config/write dependency.
@@ -220,8 +221,8 @@ Parked hardening: none.
 | `atlas_brain/eom_api/card_vault.py` | 70 |
 | `atlas_brain/eom_api/funnel.py` | 4 |
 | `atlas_brain/services/eom_card_vault.py` | 261 |
-| `plans/PR-EOM-Card-Vault-Public-Readiness.md` | 227 |
+| `plans/PR-EOM-Card-Vault-Public-Readiness.md` | 228 |
 | `tests/test_eom_card_vault.py` | 243 |
 | `tests/test_eom_funnel_capability_manifest.py` | 4 |
 | `tests/test_eom_terms_acceptance.py` | 74 |
-| **Total** | **883** |
+| **Total** | **884** |
