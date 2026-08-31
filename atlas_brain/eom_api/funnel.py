@@ -1262,6 +1262,10 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
         "POST",
         "/eom-funnel/card-vault/public/session",
     ),
+    "card_vault.public.readiness": (
+        "POST",
+        "/eom-funnel/card-vault/public/readiness",
+    ),
     "card_vault.readiness.read": (
         "GET",
         "/eom-funnel/card-vault/readiness/{contact_id}",

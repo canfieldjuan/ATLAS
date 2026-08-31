@@ -39,6 +39,15 @@ router = APIRouter(
 )
 webhook_router = APIRouter(tags=["eom-card-vault"])
 _MAX_WEBHOOK_BYTES = 256 * 1024
+EOMCardVaultReadinessReason = Literal[
+    "not_required",
+    "terms_not_ready",
+    "first_clean_not_confirmed",
+    "service_commitment_required",
+    "not_started",
+    "pending",
+    "ready",
+]
 
 
 class EOMCardVaultSessionRequest(BaseModel):
@@ -95,20 +104,33 @@ class EOMCardVaultReadinessResponse(BaseModel):
     audience: Literal["residential", "commercial"]
     card_required: bool = Field(alias="cardRequired")
     card_ready: bool = Field(alias="cardReady")
-    reason: Literal[
-        "not_required",
-        "terms_not_ready",
-        "first_clean_not_confirmed",
-        "service_commitment_required",
-        "not_started",
-        "pending",
-        "ready",
-    ]
+    reason: EOMCardVaultReadinessReason
     candidate_id: UUID | None = Field(default=None, alias="candidateId")
     enrollment_id: UUID | None = Field(default=None, alias="enrollmentId")
     provider_confirmed_at: datetime | None = Field(
         default=None, alias="providerConfirmedAt"
     )
+
+
+class EOMCardVaultPublicReadinessResponse(BaseModel):
+    """Minimal token-bound projection with no internal or provider evidence."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    card_required: bool = Field(alias="cardRequired")
+    card_ready: bool = Field(alias="cardReady")
+    reason: EOMCardVaultReadinessReason
+
+    @model_validator(mode="after")
+    def _state_matches_projection(self) -> "EOMCardVaultPublicReadinessResponse":
+        expected = (
+            (False, True)
+            if self.reason == "not_required"
+            else (True, self.reason == "ready")
+        )
+        if (self.card_required, self.card_ready) != expected:
+            raise ValueError("card-vault readiness state and projection do not match")
+        return self
 
 
 class EOMCardVaultWebhookResponse(BaseModel):
@@ -165,6 +187,36 @@ def _card_vault_error(exc: EOMCardVaultError) -> HTTPException:
         status_code=exc.status_code,
         detail={"code": exc.code, "message": str(exc)},
     )
+
+
+@router.post(
+    "/public/readiness",
+    response_model=EOMCardVaultPublicReadinessResponse,
+)
+async def get_eom_public_card_vault_readiness(
+    payload: EOMCardVaultSessionRequest,
+    public_onboarding: EOMPublicOnboardingConfig = Depends(
+        require_eom_public_onboarding_config
+    ),
+    service: EOMCardVaultService = Depends(_read_service_dependency),
+) -> EOMCardVaultPublicReadinessResponse:
+    """Read card policy/state without requiring or invoking Stripe authority."""
+
+    try:
+        token = authenticate_eom_terms_token(
+            token=payload.token,
+            secret=public_onboarding.hmac_secret,
+            previous_secret=public_onboarding.previous_hmac_secret,
+        )
+        result = await service.get_public_readiness(token=token)
+    except EOMTermsAcceptanceError as exc:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except EOMCardVaultError as exc:
+        raise _card_vault_error(exc) from exc
+    return EOMCardVaultPublicReadinessResponse.model_validate(result)
 
 
 @router.post(
