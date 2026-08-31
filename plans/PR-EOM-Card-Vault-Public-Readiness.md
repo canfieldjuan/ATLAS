@@ -10,6 +10,15 @@ customer. Consequently a downstream UI cannot distinguish "card setup is not
 required" from "card setup is required but blocked/unavailable" without either
 guessing policy or attempting a provider mutation.
 
+This slice exceeds the 400-LOC target because the public boundary is not safe to
+land independently of its closure proof. The token/subject guard, shared policy
+projection, exact capability advertisement, and negative, provider-disabled,
+and real-database tests must ship together: splitting the route from those
+checks would advertise an incompletely proven customer-data boundary, while
+splitting the tests alone would not deliver a reachable behavior. Most of the
+overage is the plan and boundary-test evidence; the production change remains
+one read-only route, one shared projector, and one capability entry.
+
 ### Problem-derived contract
 
 - Root cause: Atlas owns the accepted Terms evidence, first-clean candidate,
@@ -211,8 +220,8 @@ Parked hardening: none.
 | `atlas_brain/eom_api/card_vault.py` | 70 |
 | `atlas_brain/eom_api/funnel.py` | 4 |
 | `atlas_brain/services/eom_card_vault.py` | 261 |
-| `plans/PR-EOM-Card-Vault-Public-Readiness.md` | 218 |
+| `plans/PR-EOM-Card-Vault-Public-Readiness.md` | 227 |
 | `tests/test_eom_card_vault.py` | 243 |
 | `tests/test_eom_funnel_capability_manifest.py` | 4 |
 | `tests/test_eom_terms_acceptance.py` | 74 |
-| **Total** | **874** |
+| **Total** | **883** |
