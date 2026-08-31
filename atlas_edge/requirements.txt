@@ -8,7 +8,7 @@ numpy
 # ML Models
 torch
 transformers
-nemo_toolkit[asr]==2.6.2
+nemo_toolkit[asr]==2.7.3
 
 # Audio
 webrtcvad
