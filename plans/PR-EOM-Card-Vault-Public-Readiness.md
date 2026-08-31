@@ -185,21 +185,51 @@ three-field contract. The capability remains derived from the registered router.
 - Real Stripe redirect/webhook proof remains blocked until the operator provisions
   the dedicated card-vault enable flag, Stripe secret, and webhook secret.
 
-Parked hardening: none.
+Parking predicate: this provider slice parks findings that require the Tracker
+relay, Website customer/staff UI or copy, live Stripe session/webhook execution,
+provider credential provisioning, or unrelated onboarding surfaces unless they
+show that Atlas's readiness read itself is unauthenticated, misclassified,
+writable, overexposed, or unreachable.
+
+Parked hardening: none against that predicate.
 
 ## Verification
 
 - `./ops test focused tests/test_eom_card_vault.py tests/test_eom_funnel_capability_manifest.py`
-  passed with the existing and new provider/capability behaviors.
-- The database-backed public-readiness test passed against a disposable
-  PostgreSQL 16 instance after applying migrations 395 through 399 with the
-  separate runtime and DBA roles; it exercised the exact SQL, matched the
-  internal projection, and observed zero card-vault enrollments. The disposable
-  container was removed afterward.
-- Ruff lint passed for all five changed Python files with the verified Python 3.12
-  target. Ruff range-format checks passed for every changed hunk; whole-file
-  formatting was deliberately not applied to unrelated legacy lines.
-- Python compilation and `git diff --check` passed for the changed source/tests.
+  -> `97 passed in 4.30s`.
+- `ATLAS_EOM_FIRST_CLEAN_TEST_DATABASE_URL=<redacted-disposable-runtime-url>
+  ATLAS_EOM_FIRST_CLEAN_DBA_DATABASE_URL=<redacted-disposable-dba-url> python -m
+  pytest -q
+  tests/test_eom_terms_acceptance.py::test_public_card_readiness_executes_against_the_guarded_schema`
+  -> `1 passed in 1.01s`. The credentials are intentionally redacted; the
+  disposable PostgreSQL 16 instance used separate runtime and DBA roles,
+  migrations 395 through 399, and was removed after the test.
+- `ruff check --target-version py312 atlas_brain/eom_api/card_vault.py
+  atlas_brain/eom_api/funnel.py atlas_brain/services/eom_card_vault.py
+  tests/test_eom_card_vault.py tests/test_eom_funnel_capability_manifest.py
+  tests/test_eom_terms_acceptance.py` -> exit 0.
+- `python -m compileall -q atlas_brain/eom_api/card_vault.py
+  atlas_brain/eom_api/funnel.py atlas_brain/services/eom_card_vault.py
+  tests/test_eom_card_vault.py tests/test_eom_funnel_capability_manifest.py
+  tests/test_eom_terms_acceptance.py` -> exit 0.
+- `python scripts/check_guard_class_closure.py --strict --base origin/main` ->
+  `OK: no guard-shaped change without a property test`.
+- `python scripts/sync_pr_plan.py --check
+  plans/PR-EOM-Card-Vault-Public-Readiness.md origin/main` -> plan already in
+  sync.
+- `python scripts/audit_plan_doc.py
+  plans/PR-EOM-Card-Vault-Public-Readiness.md` -> every required section OK.
+- `python scripts/audit_plan_doc_files_touched.py
+  plans/PR-EOM-Card-Vault-Public-Readiness.md origin/main` -> claimed and actual
+  files both 7; OK.
+- `python scripts/audit_plan_doc_diff_size.py
+  plans/PR-EOM-Card-Vault-Public-Readiness.md origin/main` -> estimate and actual
+  LOC matched with 0.0% drift; OK.
+- `python scripts/audit_plan_code_consistency.py --base-ref origin/main
+  plans/PR-EOM-Card-Vault-Public-Readiness.md` -> all 7 path claims resolve; OK.
+- `git diff --check` -> exit 0.
+- `bash scripts/push_pr.sh /tmp/atlas-eom-card-public-readiness-pr-body.md` ->
+  managed local PR review passed and the reviewed head was pushed.
 - boundary-probe: a correctly signed recurring bearer is admitted; commercial and
   one-time bearers take the no-card branch; an undecided residential bearer takes
   the blocked branch; malformed JSON token shapes, wrong-key fingerprints,
@@ -211,8 +241,8 @@ Parked hardening: none.
   `require_eom_card_vault_config`; the real-ASGI disabled-provider test reaches the
   new route and receives the exact minimal response while its transaction counter
   remains zero.
-- Pending before push: final plan sync/audits, mechanical local review, and cold
-  diff reconstruction.
+- Completed before publication: plan sync/audits, mechanical local review, guard
+  boundary proof, database runtime-role proof, and cold diff reconstruction.
 
 ## Estimated diff size
 
@@ -221,8 +251,8 @@ Parked hardening: none.
 | `atlas_brain/eom_api/card_vault.py` | 70 |
 | `atlas_brain/eom_api/funnel.py` | 4 |
 | `atlas_brain/services/eom_card_vault.py` | 261 |
-| `plans/PR-EOM-Card-Vault-Public-Readiness.md` | 228 |
+| `plans/PR-EOM-Card-Vault-Public-Readiness.md` | 258 |
 | `tests/test_eom_card_vault.py` | 243 |
 | `tests/test_eom_funnel_capability_manifest.py` | 4 |
 | `tests/test_eom_terms_acceptance.py` | 74 |
-| **Total** | **884** |
+| **Total** | **914** |
