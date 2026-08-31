@@ -1487,51 +1487,70 @@ async def test_public_readiness_projects_the_existing_card_policy(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "updates",
-    [
-        None,
-        {"signing_key_fingerprint": "b" * 64},
-        {"revoked_at": _NOW},
-        {"is_expired": True},
-        {"business_context_id": "another_business"},
-        {"contact_type": "lead"},
-        {"contact_status": "inactive"},
-        {"customer_type": "unknown"},
-        {"invitation_audience": "commercial"},
-        {"full_name": "Another Customer"},
-        {"email": "another@example.test"},
-    ],
-    ids=(
-        "missing",
-        "wrong-key",
-        "revoked",
-        "expired",
-        "wrong-business",
-        "not-customer",
-        "inactive",
-        "unknown-audience",
-        "audience-drift",
-        "name-drift",
-        "email-drift",
-    ),
-)
-async def test_public_readiness_rejects_every_drifted_token_subject(
-    updates: dict[str, Any] | None,
-) -> None:
-    state = _State()
-    if updates is None:
-        state.eligibility = None
-    else:
-        assert state.eligibility is not None
-        state.eligibility.update(updates)
+async def test_public_readiness_guard_closes_token_container_and_subject_families() -> (
+    None
+):
+    tokens = (
+        ("signed", _token()),
+        (
+            "wrong-key",
+            AuthenticatedEOMTermsToken(
+                invitation_id=_INVITATION_ID,
+                signing_key_fingerprint="b" * 64,
+            ),
+        ),
+        ("raw", "eomt1.not-authenticated"),
+    )
+    containers = (
+        ("scalar", lambda value: value),
+        ("mapping", lambda value: {"token": value}),
+        ("sequence", lambda value: [value]),
+        ("nested", lambda value: {"token": [value]}),
+    )
+    families = (
+        ("current", {}),
+        ("missing", None),
+        ("revoked", {"revoked_at": _NOW}),
+        ("expired", {"is_expired": True}),
+        ("wrong-business", {"business_context_id": "another_business"}),
+        ("not-customer", {"contact_type": "lead"}),
+        ("inactive", {"contact_status": "inactive"}),
+        ("unknown-audience", {"customer_type": "unknown"}),
+        ("audience-drift", {"invitation_audience": "commercial"}),
+        ("name-drift", {"full_name": "Another Customer"}),
+        ("email-drift", {"email": "another@example.test"}),
+    )
 
-    with pytest.raises(EOMCardVaultNotFoundError):
-        await EOMCardVaultService(pool=_Pool(state)).get_public_readiness(
-            token=_token()
+    for (token_class, token), (container_class, wrap), (
+        subject_class,
+        updates,
+    ) in product(tokens, containers, families):
+        state = _State()
+        if updates is None:
+            state.eligibility = None
+        else:
+            assert state.eligibility is not None
+            state.eligibility.update(updates)
+        candidate = wrap(token)
+        # Spec-derived oracle: only the signed scalar for the current subject
+        # reaches the projection; every other class takes the not-found side.
+        expected = (
+            token_class == "signed"
+            and container_class == "scalar"
+            and subject_class == "current"
         )
 
-    assert state.transaction_count == 0
+        if expected:
+            result = await EOMCardVaultService(pool=_Pool(state)).get_public_readiness(
+                token=candidate
+            )
+            assert result["reason"] == "not_started"
+        else:
+            with pytest.raises(EOMCardVaultNotFoundError):
+                await EOMCardVaultService(pool=_Pool(state)).get_public_readiness(
+                    token=candidate
+                )
+        assert state.transaction_count == 0
 
 
 @pytest.mark.asyncio
