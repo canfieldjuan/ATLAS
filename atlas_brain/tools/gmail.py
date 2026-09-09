@@ -8,6 +8,7 @@ when gmail_send_enabled is True.
 
 import base64
 import logging
+import mimetypes
 import re
 import time
 from email.mime.base import MIMEBase
@@ -39,6 +40,19 @@ _PROTECTED_HEADER_NAMES = frozenset(
         "to",
     }
 )
+
+
+def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
+    """Resolve an attachment's MIME type.
+
+    Prefers an explicit "mime_type" on the attachment, then the filename's
+    extension, and only falls back to application/octet-stream when neither
+    answers. Declaring a PDF as octet-stream causes recipient mail gateways
+    to strip or quarantine it, so the type is derived rather than assumed.
+    """
+    declared = att.get("mime_type") or mimetypes.guess_type(filename)[0]
+    maintype, _, subtype = (declared or "application/octet-stream").partition("/")
+    return maintype or "application", subtype or "octet-stream"
 
 
 class GmailDraftLookupError(RuntimeError):
@@ -285,7 +299,8 @@ class GmailTransport:
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
 
-                part = MIMEBase("application", "octet-stream")
+                maintype, subtype = _attachment_type(att, filename)
+                part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header(
                     "Content-Disposition", "attachment", filename=filename
@@ -410,7 +425,8 @@ class GmailTransport:
                 filename = att.get("filename", "attachment")
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
-                part = MIMEBase("application", "octet-stream")
+                maintype, subtype = _attachment_type(att, filename)
+                part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header("Content-Disposition", "attachment", filename=filename)
                 part.add_header("Content-Transfer-Encoding", "base64")
