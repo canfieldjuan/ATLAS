@@ -33,7 +33,7 @@ import uuid as _uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -1179,17 +1179,21 @@ async def list_pending_drafts(
 
 @mcp.tool()
 async def approve_and_send(
-    invoice_ids: Optional[str] = None,
+    invoice_ids: Optional[Union[str, list[str]]] = None,
     status_filter: str = "draft",
     dry_run: bool = False,
+    note: Optional[str] = None,
 ) -> str:
     """
     Approve draft invoices: generate PDFs, email with attachment, mark as sent.
 
-    invoice_ids: JSON array of invoice numbers or UUIDs (e.g. '["INV-2026-0014"]').
+    invoice_ids: a list of invoice numbers or UUIDs, or a JSON array string
+                 (e.g. ["INV-2026-0014"] or '["INV-2026-0014"]').
                  If omitted, processes ALL invoices matching status_filter.
     status_filter: only process invoices with this status (default: draft)
     dry_run: if true, list what would be sent without actually sending
+    note: optional line placed above the standard body, for one-off context
+          such as explaining a resend. Omitted entirely when not supplied.
 
     Returns a summary of processed invoices.
     """
@@ -1316,7 +1320,8 @@ async def approve_and_send(
                 due_date = due_date.strftime("%m/%d/%Y")
 
             email_body = (
-                f"Please find attached invoice {inv_num} for {invoice_for}.\n\n"
+                (f"{note.strip()}\n\n" if note and note.strip() else "")
+                + f"Please find attached invoice {inv_num} for {invoice_for}.\n\n"
                 f"Amount Due: {total_str}\n"
                 f"Due Date: {due_date}\n\n"
                 f"Make all checks payable to {BUSINESS_NAME}.\n\n"
@@ -1328,6 +1333,7 @@ async def approve_and_send(
 
             attachments = [{
                 "filename": pdf_filename,
+                "mime_type": "application/pdf",
                 "content": base64.b64encode(pdf_bytes).decode("ascii"),
             }]
 
