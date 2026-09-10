@@ -125,6 +125,27 @@ def pytest_collection_modifyitems(session, config, items):
 
 
 @pytest.fixture(autouse=True)
+def _restore_config_module_globals():
+    """Undo importlib.reload(atlas_brain.config) after any test, suite-wide.
+
+    Several test modules reload the config module to re-read an env var. A
+    reload rebinds `settings` (and every class) to new objects: test modules
+    that bound `from atlas_brain.config import settings` at import time keep
+    the old object, while production code that imports lazily reads the new
+    one, so a later test's monkeypatch on `settings` silently stops reaching
+    the code under test. This lives here, not in the reloading modules, so
+    every current and future reloader is covered by one enforcement point.
+    """
+    import atlas_brain.config as config_mod
+
+    before = dict(vars(config_mod))
+    yield
+    if config_mod.settings is not before["settings"]:
+        for name, value in before.items():
+            setattr(config_mod, name, value)
+
+
+@pytest.fixture(autouse=True)
 def _disable_leads_ntfy_topic(monkeypatch):
     """Repo-wide safety: keep the new-lead push OFF in EVERY test, regardless of
     the checkout's .env, so no route-level test in any module can publish fake

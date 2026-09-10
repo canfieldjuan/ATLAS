@@ -91,8 +91,11 @@ Max files: 12
    `tests/test_auth_api_keys.py` reloads `atlas_brain.config` and leaves a new
    `settings` object bound, so later tests that patch the import-time
    `settings` no longer reach code that imports it lazily (the content-ops
-   HTTP-auth tests). An autouse fixture there restores the config module's
-   globals after each of its tests.
+   HTTP-auth tests). Three modules reload it (`test_auth_api_keys.py`,
+   `test_byok_keys.py`, `test_llm_gateway_plan_tier.py`); one suite-wide
+   autouse fixture in `tests/conftest.py` restores the config module's
+   globals after any test that rebound `settings`, so every current and
+   future reloader is covered at one enforcement point.
 
 ### Review Contract
 
@@ -269,7 +272,6 @@ MIME configuration for the extensions this repo sends.
 - `atlas_brain/tools/gmail.py`
 - `plans/PR-EOM-Invoice-Attachment-MIME.md`
 - `tests/conftest.py`
-- `tests/test_auth_api_keys.py`
 - `tests/test_gmail_attachment_mime.py`
 - `tests/test_invoicing_approve_and_send_selection.py`
 - `tests/test_mcp_content_ops_marketer_verify.py`
@@ -360,11 +362,10 @@ beyond the tests' own dropped schema.
 | `atlas_brain/services/email_provider.py` | 6 |
 | `atlas_brain/tools/email.py` | 33 |
 | `atlas_brain/tools/gmail.py` | 110 |
-| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 368 |
-| `tests/conftest.py` | 13 |
-| `tests/test_auth_api_keys.py` | 20 |
+| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 373 |
+| `tests/conftest.py` | 34 |
 | `tests/test_gmail_attachment_mime.py` | 745 |
 | `tests/test_invoicing_approve_and_send_selection.py` | 272 |
 | `tests/test_mcp_content_ops_marketer_verify.py` | 30 |
 | `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1657** |
+| **Total** | **1663** |
