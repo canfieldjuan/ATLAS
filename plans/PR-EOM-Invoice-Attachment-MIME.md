@@ -143,6 +143,16 @@ Max files: 8
   and everything else -- not a subset of known-bad strings -- refuses the whole
   send or draft before any request. The declaration is never repaired, because
   a repaired header silently changes what the caller asked for.
+- Class closure (docs/GUARD_CLASS_CLOSURE.md req 3): legal names are generated
+  from the grammar and crossed with fifteen mutations that leave it, three
+  declaration families, and three container shapes handed to
+  `validate_attachment_types`; every verdict is checked against
+  `_expected_verdict`, an oracle written from this contract rather than from
+  the guard. Settled by
+  `test_every_generated_legal_pair_is_admitted_as_the_oracle_says`,
+  `test_every_generated_mutation_is_refused_and_containers_do_not_change_the_verdict`
+  and
+  `test_no_declaration_and_octet_stream_declaration_defer_to_the_filename_across_containers`.
 - An empty, absent, or `application/octet-stream` declaration is not a
   declaration (the generic type carries no information and is the blanket
   default this slice replaces): the filename extension is inferred, the inferred value passes the same recognizer, and only when
@@ -252,7 +262,7 @@ beyond the tests' own dropped schema.
 | `atlas_brain/services/email_provider.py` | 8 |
 | `atlas_brain/tools/email.py` | 14 |
 | `atlas_brain/mcp/invoicing_server.py` | 36 |
-| `tests/test_gmail_attachment_mime.py` | 410 |
+| `tests/test_gmail_attachment_mime.py` | 573 |
 | `tests/test_invoicing_approve_and_send_selection.py` | 230 |
 | `.github/workflows/atlas_invoicing_checks.yml` | 14 |
-| **Total** | **1087** |
+| **Total** | **1250** |
