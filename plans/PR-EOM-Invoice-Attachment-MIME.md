@@ -39,7 +39,7 @@ This is a delivery-correctness defect in the transport, not a document defect.
 
 Ownership lane: eom/invoice-attachment-mime
 Slice phase: production hardening
-Max files: 5
+Max files: 6
 
 1. Derive the attachment MIME type in both Gmail send paths instead of
    hardcoding octet-stream, admitting a declared type only when it is one legal
@@ -50,8 +50,9 @@ Max files: 5
    selection -- including an empty one -- from widening into "every draft", and
    add an optional `note` for one-off context above the standard body.
 4. Prove the type resolution, the selection rule, and the body through the real
-   entrypoints: the transport's posted raw message and the MCP tool against the
-   real invoice repository.
+   entrypoints: the transport's posted raw message, and the published MCP tool
+   (`mcp.call_tool` / `mcp.list_tools`) against the real invoice repository on
+   an isolated schema, enrolled in the Postgres-backed invoicing workflow.
 
 ### Review Contract
 
@@ -77,21 +78,30 @@ Max files: 5
   unresolvable filename lands on octet-stream; settled by
   `test_empty_declared_type_defers_to_the_extension` and
   `test_unresolvable_filename_falls_back_to_octet_stream`.
-- `approve_and_send` accepts both the JSON-array-string and the list form of
-  `invoice_ids`, sends exactly the named invoice, and declares the PDF; settled
-  by `test_both_selection_forms_send_exactly_the_named_invoice_as_a_declared_pdf`.
+- The published `approve_and_send` schema accepts `invoice_ids` as a string or
+  an array of strings, both optional, and an optional string `note`; settled by
+  `test_the_published_tool_schema_accepts_a_list_or_a_json_string_and_an_optional_note`
+  through `mcp.list_tools`.
+- Through `mcp.call_tool`, both the JSON-array-string and the list form of
+  `invoice_ids` send exactly the named invoice and declare the PDF; settled by
+  `test_both_selection_forms_send_exactly_the_named_invoice_as_a_declared_pdf`.
 - An explicit empty selection (`[]` or `"[]"`) sends nothing and touches no
-  invoice; only an omitted argument covers every matching draft; a selection
-  that is not a list of strings is refused without sending; settled by
-  `test_an_explicit_empty_selection_sends_nothing`,
-  `test_an_omitted_selection_still_covers_every_matching_draft` and
-  `test_a_selection_that_is_not_a_list_of_strings_is_refused_and_sends_nothing`.
+  invoice; only an omitted argument covers every matching draft; a string that
+  is not a JSON array of strings is refused by the tool without sending; a
+  value outside the schema (ints in the list, `None` in the list, a bare
+  number, an object, a JSON-object string) is refused at the boundary before
+  the tool runs; settled by `test_an_explicit_empty_selection_sends_nothing`,
+  `test_an_omitted_selection_still_covers_every_matching_draft`,
+  `test_a_string_that_is_not_a_json_array_of_strings_is_refused_and_sends_nothing`
+  and `test_the_boundary_rejects_a_selection_outside_the_schema_before_the_tool_runs`.
 - A send with no `note`, or a blank one, produces a body byte-identical to
   today's, checked against a body written out independently of the tool; a
   note is stripped and placed above it; settled by
   `test_without_a_note_the_body_is_byte_identical_to_the_standard_body`,
   `test_a_blank_note_leaves_the_body_unchanged` and
-  `test_a_note_is_placed_above_the_standard_body_and_stripped`.
+  `test_a_note_is_placed_above_the_standard_body_and_stripped`; a non-string
+  note is refused at the boundary, settled by
+  `test_a_note_outside_the_schema_is_rejected_at_the_boundary`.
 - Affected surfaces: every Gmail-delivered attachment in the repo, not only
   invoices. Risk areas: a caller that depended on receiving octet-stream, a
   caller passing a malformed `mime_type` (none exists in the repo; the only
@@ -134,6 +144,7 @@ MIME configuration for the extensions this repo sends.
 - `atlas_brain/mcp/invoicing_server.py`
 - `tests/test_gmail_attachment_mime.py`
 - `tests/test_invoicing_approve_and_send_selection.py`
+- `.github/workflows/atlas_invoicing_checks.yml`
 
 ## Mechanism
 
@@ -163,8 +174,12 @@ selection, and prepends a stripped `note` only when one is supplied.
 - `note` is omitted entirely rather than defaulted to an empty line, so the
   standard body is unchanged for every existing caller.
 - The selection tests substitute only the outbound email port with a capturing
-  provider; the repository, PDF renderer, and status transitions are real. The
-  transport tests prove the captured `mime_type` reaches Gmail's raw message.
+  provider; the repository, PDF renderer, and status transitions are real, on
+  a throwaway schema built from the invoice migrations inside the receivables
+  test database. Every case crosses the published MCP boundary, because the
+  defect lived in the annotation FastMCP validates against, not in the body.
+  The transport tests prove the captured `mime_type` reaches Gmail's raw
+  message.
 
 ## Deferred
 
@@ -184,12 +199,14 @@ maturity-sweep ratchet lanes as CI runs them, the pre-push audit, and the
 existing Gmail and invoicing suites (`test_commercial_billing_gmail_drafts.py`,
 `test_eom_scoped_gmail_credentials.py`, `test_eom_scoped_gmail_hardening.py`,
 `test_invoicing_draft_writer_mcp.py`, `test_invoicing_readonly_mcp.py`,
-`test_monthly_invoice_generation.py`). The selection tests need the local
-Postgres the existing invoicing tests already use; they create their own draft
-invoices under a unique `source_ref` and void them afterwards. Do not run the
-broad Unit Gate locally; GitHub owns its full suite. Rollback is a revert of
-the commits; the change affects message headers and the tool's selection rule
-only and touches no persistent data beyond the tests' own voided rows.
+`test_monthly_invoice_generation.py`). The selection tests are marked
+`integration`, skip unless `ATLAS_RECEIVABLES_TEST_DATABASE_URL` is set, and
+run in the Postgres-backed `atlas-invoicing-checks` job on a schema they create
+and drop; the Unit Gate (`-m "not integration and not e2e"`, no database)
+never collects them. Do not run the broad Unit Gate locally; GitHub owns its
+full suite. Rollback is a revert of the commits; the change affects message
+headers and the tool's selection rule only and touches no persistent data
+beyond the tests' own dropped schema.
 
 ## Estimated diff size
 
@@ -199,5 +216,6 @@ only and touches no persistent data beyond the tests' own voided rows.
 | `atlas_brain/tools/gmail.py` | 50 |
 | `atlas_brain/mcp/invoicing_server.py` | 36 |
 | `tests/test_gmail_attachment_mime.py` | 234 |
-| `tests/test_invoicing_approve_and_send_selection.py` | 165 |
-| **Total** | **685** |
+| `tests/test_invoicing_approve_and_send_selection.py` | 230 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 14 |
+| **Total** | **764** |

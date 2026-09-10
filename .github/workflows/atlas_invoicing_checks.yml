@@ -101,6 +101,7 @@ on:
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
       - "tests/test_invoicing_draft_writer_oauth.py"
+      - "tests/test_invoicing_approve_and_send_selection.py"
       - "tests/test_eom_render_profile.py"
       - "render.eom.yaml"
   push:
@@ -202,6 +203,7 @@ on:
       - "tests/test_invoicing_readonly_oauth.py"
       - "tests/test_invoicing_draft_writer_mcp.py"
       - "tests/test_invoicing_draft_writer_oauth.py"
+      - "tests/test_invoicing_approve_and_send_selection.py"
       - "tests/test_eom_render_profile.py"
       - "render.eom.yaml"
 
@@ -296,6 +298,16 @@ jobs:
             tests/test_invoicing_readonly_oauth.py \
             tests/test_invoicing_draft_writer_mcp.py \
             tests/test_invoicing_draft_writer_oauth.py \
+            -q
+
+      # approve_and_send selection and note behaviour through the published MCP
+      # boundary, on a throwaway schema built from the invoice migrations inside
+      # the receivables test database (the tests skip without the URL and are
+      # marked integration, so the Unit Gate never touches them).
+      - name: Run approve_and_send selection tests
+        run: |
+          python -m pytest \
+            tests/test_invoicing_approve_and_send_selection.py \
             -q
 
   legacy-monthly-writer-harness:
