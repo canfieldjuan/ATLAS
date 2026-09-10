@@ -72,7 +72,12 @@ def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
         # filename says. If nothing resolves it is the fallback anyway.
         if (maintype, subtype) != ("application", "octet-stream"):
             return maintype, subtype
-    guessed, _encoding = mimetypes.guess_type(filename)
+    guessed, encoding = mimetypes.guess_type(filename)
+    # An encoded suffix (.gz, .bz2, .Z, .xz) means the bytes are the compressed
+    # stream, not the inner type guess_type also reports; labelling gzip bytes
+    # "text/plain" is worse than the generic default. Keep octet-stream.
+    if encoding is not None:
+        return "application", "octet-stream"
     match = _MIME_TYPE.fullmatch(guessed) if guessed else None
     if match is None:
         return "application", "octet-stream"

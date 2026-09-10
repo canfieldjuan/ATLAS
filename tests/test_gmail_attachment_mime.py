@@ -54,6 +54,12 @@ def test_unresolvable_filename_falls_back_to_octet_stream(filename):
     assert _attachment_type({}, filename) == ("application", "octet-stream")
 
 
+@pytest.mark.parametrize("filename", ["report.txt.gz", "image.svgz", "data.csv.bz2", "notes.txt.Z", "invoice.pdf.gz"])
+def test_an_encoded_suffix_keeps_octet_stream_instead_of_the_inner_type(filename):
+    """guess_type reports the inner type plus an encoding; the bytes are the compressed stream."""
+    assert _attachment_type({}, filename) == ("application", "octet-stream")
+
+
 @pytest.mark.parametrize("declared", ["", None])
 def test_empty_declared_type_defers_to_the_extension(declared):
     assert _attachment_type({"mime_type": declared}, "invoice.pdf") == (
@@ -220,6 +226,53 @@ async def test_send_refuses_a_malformed_declaration_before_any_request(declared)
 
     assert excinfo.value.definitely_not_sent is True
     assert requests == [], "a refused declaration must never reach Gmail"
+
+
+@pytest.mark.asyncio
+async def test_send_refuses_a_malformed_declaration_before_decoding_malformed_content():
+    """Validation runs before base64 decoding, so a combined bad input still refuses cleanly."""
+    requests: list[httpx.Request] = []
+    transport = _transport(requests, {"id": "m-1", "threadId": "t-1"})
+    try:
+        with pytest.raises(GmailSendError) as excinfo:
+            await transport.send(
+                to=["ap@example.test"], subject="Invoice", body="Body",
+                attachments=[{"filename": "INV.pdf", "mime_type": "application/pdf\nX: y", "content": "a"}],
+            )
+    finally:
+        await transport.close()
+    assert excinfo.value.definitely_not_sent is True and requests == []
+
+
+@pytest.mark.asyncio
+async def test_create_draft_refuses_a_malformed_declaration_before_decoding_malformed_content():
+    requests: list[httpx.Request] = []
+    transport = _transport(requests, {"id": "d-1", "message": {"id": "m-1", "threadId": "t-1"}})
+    try:
+        with pytest.raises(GmailDraftCreateError) as excinfo:
+            await transport.create_draft(
+                to=["ap@example.test"], subject="Invoice", body="Body",
+                attachments=[{"filename": "INV.pdf", "mime_type": "text/plain/extra", "content": "a"}],
+            )
+    finally:
+        await transport.close()
+    assert excinfo.value.definitely_not_created is True and requests == []
+
+
+@pytest.mark.asyncio
+async def test_send_delivers_an_encoded_suffix_as_octet_stream():
+    requests: list[httpx.Request] = []
+    transport = _transport(requests, {"id": "m-1", "threadId": "t-1"})
+    try:
+        await transport.send(
+            to=["ap@example.test"], subject="Report", body="Body",
+            attachments=[{"filename": "report.txt.gz", "content": PDF_B64}],
+        )
+    finally:
+        await transport.close()
+    part = _attachment_part(json.loads(requests[0].content)["raw"])
+    assert part.get_content_type() == "application/octet-stream"
+    assert part.get_filename() == "report.txt.gz"
 
 
 @pytest.mark.asyncio
@@ -471,6 +524,7 @@ def _families():
     yield "declared", "invoice.unknownext"          # the declaration alone decides
     yield "declared-over-pdf-name", "invoice.pdf"   # a legal declaration beats the extension
     yield "declared-over-png-name", "invoice.png"
+    yield "declared-over-encoded-name", "report.txt.gz"  # inference would be octet-stream: encoded bytes
 
 
 def _containers(att, valid_neighbour):
@@ -496,6 +550,7 @@ def _expected_verdict(declared, filename):
             and all(ch in _NAME_REST for ch in part)
         )
 
+    # an encoded suffix (.gz here) carries compressed bytes: always octet-stream
     inferred = {"pdf": ("application", "pdf"), "png": ("image", "png")}.get(
         filename.rsplit(".", 1)[-1], ("application", "octet-stream")
     )

@@ -62,13 +62,7 @@ tests/test_intent_router.py::TestSemanticClassification::test_presence_routing
 tests/test_intent_router.py::TestSemanticClassification::test_reminder_routing
 tests/test_intent_router.py::TestSemanticClassification::test_security_routing
 tests/test_intent_router.py::TestStandaloneToolRoutability::test_route_to_action_tool_names_are_standalone_or_workflow_only
-tests/test_invoicing_draft_writer_mcp.py
-tests/test_invoicing_draft_writer_oauth.py
-tests/test_invoicing_readonly_mcp.py
-tests/test_invoicing_readonly_oauth.py
 tests/test_llm_gateway_router.py::test_chat_lookup_gated_by_feature_flag
-tests/test_mcp_content_ops_deflection_readonly.py
-tests/test_mcp_content_ops_marketer_verify.py
 tests/test_mcp_servers.py::TestCalendarMCPTools::test_list_calendars
 tests/test_mcp_servers.py::TestCalendarMCPTools::test_list_events
 tests/test_mcp_servers.py::TestEmailMCPTools::test_send_email_provider_error

@@ -74,6 +74,19 @@ try:
 except ModuleNotFoundError:
     pass
 
+# Same discipline for the MCP SDK. Eight b2b/content-ops test modules install a
+# MagicMock "mcp.server.fastmcp" via sys.modules.setdefault so they can run
+# without the SDK; when the SDK is installed, importing it here first makes
+# those setdefaults no-ops, so every MCP test module collected later in the
+# same process imports the real package instead of a stub that has no
+# `exceptions`, `auth`, or `custom_route`.
+try:
+    import mcp.server.auth.provider  # noqa: F401
+    import mcp.server.fastmcp  # noqa: F401
+    import mcp.server.fastmcp.exceptions  # noqa: F401
+except ModuleNotFoundError:
+    pass
+
 
 _SELF_POOL_LIVE_FILES = {
     "test_b2b_challenger_claims_api_live.py",

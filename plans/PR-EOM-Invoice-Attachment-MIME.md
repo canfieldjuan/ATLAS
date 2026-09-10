@@ -19,6 +19,18 @@ and looks correct in the sender's own mailbox and in the Gmail API's own
 
 This is a delivery-correctness defect in the transport, not a document defect.
 
+This slice is over the 400-LOC target and is not split, on purpose. The
+runtime change is small (the transport, the fallback classification in the
+composite provider and the email tool, and the MCP tool's selection rule);
+the overage is the proof. A guard on a caller-declared value that lands in a
+raw MIME header must ship with its grammar-derived class-closure test, its
+transport-level proof through the posted raw message, its production-
+entrypoint proof that a refusal never falls back to Resend, and, for the
+money-path selection rule, its MCP-boundary proof on the real repository.
+Landing the guard first and the proofs later would merge an unverified guard
+on customer mail; landing the proofs first would test code that does not
+exist. The plan doc itself is a further part of the overage.
+
 ### Problem-derived contract
 
 - Root cause: the Gmail transport assumes a single attachment type rather than
@@ -43,7 +55,7 @@ This is a delivery-correctness defect in the transport, not a document defect.
 
 Ownership lane: eom/invoice-attachment-mime
 Slice phase: production hardening
-Max files: 8
+Max files: 11
 
 1. Derive the attachment MIME type in both Gmail send paths instead of
    hardcoding octet-stream, admitting a declared type only when it is one legal
@@ -60,6 +72,18 @@ Max files: 8
    entrypoints: the transport's posted raw message, and the published MCP tool
    (`mcp.call_tool` / `mcp.list_tools`) against the real invoice repository on
    an isolated schema, enrolled in the Postgres-backed invoicing workflow.
+5. Stop the unit gate's MCP stub leak at its source. Eight b2b/content-ops test
+   modules install a `MagicMock` as `mcp.server.fastmcp` via
+   `sys.modules.setdefault` at import time, so in the gate's single full-suite
+   process every MCP test module collected after them fails to import; the
+   repository had baselined six such files as permanent collection errors, and
+   the new selection test became the seventh. `tests/conftest.py` now
+   pre-imports the real SDK before collection -- the same guard it already
+   applies to `asyncpg` -- which makes those `setdefault` calls no-ops, and
+   `tests/unit_gate_baseline.txt` shrinks by those six file entries. The two
+   tests in `test_mcp_content_ops_marketer_verify.py` that genuinely failed
+   once the file ran are fixed in place, because the gate accepts no baseline
+   additions.
 
 ### Review Contract
 
@@ -122,6 +146,12 @@ Max files: 8
   `test_a_note_is_placed_above_the_standard_body_and_stripped`; a non-string
   note is refused at the boundary, settled by
   `test_a_note_outside_the_schema_is_rejected_at_the_boundary`.
+- The unit gate collects every MCP test module in one process: the full-suite
+  collection under the gate's own shape (`-m "not integration and not e2e"`,
+  no database) reports no `mcp` stub errors, and `scripts/check_unit_gate.py`
+  itself passes against the shrunken baseline; settled by running that script
+  locally under the gate's shape and pins, recorded in the PR body's
+  mechanical verification.
 - Affected surfaces: every Gmail-delivered attachment in the repo, not only
   invoices. Risk areas: a caller that depended on receiving octet-stream, a
   caller passing a malformed `mime_type` (none exists in the repo; the only
@@ -176,14 +206,17 @@ MIME configuration for the extensions this repo sends.
 
 ### Files touched
 
-- `plans/PR-EOM-Invoice-Attachment-MIME.md`
-- `atlas_brain/tools/gmail.py`
+- `.github/workflows/atlas_invoicing_checks.yml`
+- `atlas_brain/mcp/invoicing_server.py`
 - `atlas_brain/services/email_provider.py`
 - `atlas_brain/tools/email.py`
-- `atlas_brain/mcp/invoicing_server.py`
+- `atlas_brain/tools/gmail.py`
+- `plans/PR-EOM-Invoice-Attachment-MIME.md`
+- `tests/conftest.py`
 - `tests/test_gmail_attachment_mime.py`
 - `tests/test_invoicing_approve_and_send_selection.py`
-- `.github/workflows/atlas_invoicing_checks.yml`
+- `tests/test_mcp_content_ops_marketer_verify.py`
+- `tests/unit_gate_baseline.txt`
 
 ## Mechanism
 
@@ -262,12 +295,15 @@ beyond the tests' own dropped schema.
 
 | File | LOC |
 |---|---:|
-| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 200 |
-| `atlas_brain/tools/gmail.py` | 98 |
+| `.github/workflows/atlas_invoicing_checks.yml` | 12 |
+| `atlas_brain/mcp/invoicing_server.py` | 36 |
 | `atlas_brain/services/email_provider.py` | 6 |
 | `atlas_brain/tools/email.py` | 16 |
-| `atlas_brain/mcp/invoicing_server.py` | 36 |
-| `tests/test_gmail_attachment_mime.py` | 573 |
-| `tests/test_invoicing_approve_and_send_selection.py` | 230 |
-| `.github/workflows/atlas_invoicing_checks.yml` | 14 |
-| **Total** | **1276** |
+| `atlas_brain/tools/gmail.py` | 103 |
+| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 307 |
+| `tests/conftest.py` | 13 |
+| `tests/test_gmail_attachment_mime.py` | 634 |
+| `tests/test_invoicing_approve_and_send_selection.py` | 271 |
+| `tests/test_mcp_content_ops_marketer_verify.py` | 30 |
+| `tests/unit_gate_baseline.txt` | 6 |
+| **Total** | **1434** |
