@@ -8,6 +8,7 @@ when gmail_send_enabled is True.
 
 import base64
 import logging
+import mimetypes
 import re
 import time
 from email.mime.base import MIMEBase
@@ -41,6 +42,70 @@ _PROTECTED_HEADER_NAMES = frozenset(
 )
 
 
+# RFC 6838 restricted-name: one alphanumeric, then up to 126 name characters.
+# Anything else (whitespace, CR/LF, parameters, a second slash, an empty side)
+# is not a media type and must never reach a Content-Type header.
+_MIME_NAME = r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}"
+_MIME_TYPE = re.compile(rf"({_MIME_NAME})/({_MIME_NAME})")
+# This builder emits leaf parts: a MIMEBase with a base64 payload. A structured
+# major type (message/*, multipart/*) declares a container the email parser
+# will try to parse, so the bytes would no longer come back as an attachment.
+# Such types are carried as the generic default, which the previous code sent.
+_STRUCTURED_MAJOR_TYPES = frozenset({"message", "multipart"})
+
+
+def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
+    """Resolve an attachment's MIME type as a validated (maintype, subtype) pair.
+
+    An explicit, non-empty "mime_type" must be one legal type/subtype pair or
+    the attachment is refused with ValueError; a declaration is caller input
+    that lands in a raw MIME header, so it is admitted only on recognition,
+    never repaired. With no declaration the filename extension is inferred,
+    and only when that resolves to nothing does the pair fall back to
+    application/octet-stream. Declaring a PDF as octet-stream causes recipient
+    mail gateways to strip or quarantine it, so the type is derived rather
+    than assumed.
+    """
+    declared = att.get("mime_type")
+    if declared is not None and declared != "":
+        match = _MIME_TYPE.fullmatch(declared) if isinstance(declared, str) else None
+        if match is None:
+            raise ValueError("Gmail attachment mime_type is invalid")
+        maintype, subtype = match.group(1).lower(), match.group(2).lower()
+        if maintype in _STRUCTURED_MAJOR_TYPES:
+            return "application", "octet-stream"
+        # An explicit octet-stream carries no information: it is the blanket
+        # default this resolution replaces, so it cannot defeat what the
+        # filename says. If nothing resolves it is the fallback anyway.
+        if (maintype, subtype) != ("application", "octet-stream"):
+            return maintype, subtype
+    guessed, encoding = mimetypes.guess_type(filename)
+    # An encoded suffix (.gz, .bz2, .Z, .xz) means the bytes are the compressed
+    # stream, not the inner type guess_type also reports; labelling gzip bytes
+    # "text/plain" is worse than the generic default. Keep octet-stream.
+    if encoding is not None:
+        return "application", "octet-stream"
+    match = _MIME_TYPE.fullmatch(guessed) if guessed else None
+    if match is None or match.group(1).lower() in _STRUCTURED_MAJOR_TYPES:
+        return "application", "octet-stream"
+    return match.group(1).lower(), match.group(2).lower()
+
+
+def validate_attachment_types(attachments: Any) -> None:
+    """Refuse a malformed attachment declaration before any part is built.
+
+    Called once by send() and create_draft() over the whole list, so a bad
+    declaration anywhere in it stops the message before construction starts.
+    """
+    if not attachments:
+        return
+    for att in attachments:
+        if not isinstance(att, Mapping):
+            raise ValueError("Gmail attachment must be a mapping")
+        filename = att.get("filename", "attachment")
+        _attachment_type(att, filename if isinstance(filename, str) else "attachment")
+
+
 class GmailDraftLookupError(RuntimeError):
     """A Gmail draft lookup cannot safely name one external draft."""
 
@@ -61,12 +126,35 @@ class GmailDraftCreateError(RuntimeError):
         self.definitely_not_created = definitely_not_created
 
 
+class GmailInvalidInput(Exception):
+    """Marker: the caller's input was refused; nothing was attempted.
+
+    Invalid headers or attachment declarations are the caller's error, not a
+    Gmail outage. Fallback paths (the composite provider, the email tool) must
+    not retry them through another provider with the same input.
+    """
+
+
 class GmailSendError(RuntimeError):
     """A Gmail send failed with known or uncertain acceptance state."""
 
     def __init__(self, message: str, *, definitely_not_sent: bool) -> None:
         super().__init__(message)
         self.definitely_not_sent = definitely_not_sent
+
+
+class GmailSendInputError(GmailSendError, GmailInvalidInput):
+    """send() refused the caller's input before any request."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, definitely_not_sent=True)
+
+
+class GmailDraftInputError(GmailDraftCreateError, GmailInvalidInput):
+    """create_draft() refused the caller's input before any request."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, definitely_not_created=True)
 
 
 def _is_definitely_not_sent_http_status(status_code: int) -> bool:
@@ -244,9 +332,11 @@ class GmailTransport:
         try:
             validated_headers = _extra_headers(headers)
         except ValueError as exc:
-            raise GmailSendError(
-                "Gmail send headers are invalid", definitely_not_sent=True
-            ) from exc
+            raise GmailSendInputError("Gmail send headers are invalid") from exc
+        try:
+            validate_attachment_types(attachments)
+        except ValueError as exc:
+            raise GmailSendInputError("Gmail attachment mime_type is invalid") from exc
 
         # Build MIME message
         if attachments:
@@ -285,7 +375,8 @@ class GmailTransport:
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
 
-                part = MIMEBase("application", "octet-stream")
+                maintype, subtype = _attachment_type(att, filename)
+                part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header(
                     "Content-Disposition", "attachment", filename=filename
@@ -379,9 +470,11 @@ class GmailTransport:
         try:
             validated_headers = _extra_headers(headers)
         except ValueError as exc:
-            raise GmailDraftCreateError(
-                "Gmail draft headers are invalid", definitely_not_created=True
-            ) from exc
+            raise GmailDraftInputError("Gmail draft headers are invalid") from exc
+        try:
+            validate_attachment_types(attachments)
+        except ValueError as exc:
+            raise GmailDraftInputError("Gmail attachment mime_type is invalid") from exc
 
         if attachments:
             msg = MIMEMultipart("mixed")
@@ -410,7 +503,8 @@ class GmailTransport:
                 filename = att.get("filename", "attachment")
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
-                part = MIMEBase("application", "octet-stream")
+                maintype, subtype = _attachment_type(att, filename)
+                part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header("Content-Disposition", "attachment", filename=filename)
                 part.add_header("Content-Transfer-Encoding", "base64")

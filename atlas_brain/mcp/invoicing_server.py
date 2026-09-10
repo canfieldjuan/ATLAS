@@ -33,7 +33,7 @@ import uuid as _uuid
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Annotated, Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
@@ -1177,19 +1177,35 @@ async def list_pending_drafts(
 # Tool: approve_and_send
 # ---------------------------------------------------------------------------
 
+# The largest explicit selection one call will resolve; the omitted-argument
+# path already stops at this many drafts, so a selection cannot do more work
+# than "every draft" does. Checked before any repository lookup.
+APPROVE_AND_SEND_MAX_SELECTION = 200
+
+
 @mcp.tool()
 async def approve_and_send(
-    invoice_ids: Optional[str] = None,
+    # Deliberately not Optional: the published schema then has no null branch,
+    # so an explicit JSON null is rejected at the MCP boundary and only a
+    # genuinely omitted argument reaches the "every matching draft" path.
+    invoice_ids: Union[str, list[str]] = None,  # type: ignore[assignment]
     status_filter: str = "draft",
     dry_run: bool = False,
+    note: Optional[str] = None,
 ) -> str:
     """
     Approve draft invoices: generate PDFs, email with attachment, mark as sent.
 
-    invoice_ids: JSON array of invoice numbers or UUIDs (e.g. '["INV-2026-0014"]').
-                 If omitted, processes ALL invoices matching status_filter.
+    invoice_ids: a list of invoice numbers or UUIDs, or a JSON array string
+                 (e.g. ["INV-2026-0014"] or '["INV-2026-0014"]').
+                 If omitted, processes ALL invoices matching status_filter;
+                 an explicit null is rejected. At most 200 references per
+                 call; the same invoice given twice (by number and by UUID)
+                 is sent once.
     status_filter: only process invoices with this status (default: draft)
     dry_run: if true, list what would be sent without actually sending
+    note: optional line placed above the standard body, for one-off context
+          such as explaining a resend. Omitted entirely when not supplied.
 
     Returns a summary of processed invoices.
     """
@@ -1198,27 +1214,55 @@ async def approve_and_send(
     # Resolve which invoices to process
     invoices_to_send: list[dict] = []
 
-    if invoice_ids:
-        try:
-            ids = json.loads(invoice_ids) if isinstance(invoice_ids, str) else invoice_ids
-        except json.JSONDecodeError:
-            return json.dumps({"success": False, "error": "Invalid invoice_ids JSON"})
+    # An explicit selection -- including an empty one -- never widens into
+    # "every invoice matching status_filter"; only an omitted argument does.
+    if invoice_ids is not None:
+        if isinstance(invoice_ids, str):
+            try:
+                ids = json.loads(invoice_ids)
+            except json.JSONDecodeError:
+                return json.dumps({"success": False, "error": "Invalid invoice_ids JSON"})
+        else:
+            ids = invoice_ids
+        if not isinstance(ids, list) or not all(isinstance(ref, str) for ref in ids):
+            return json.dumps({
+                "success": False,
+                "error": "invoice_ids must be a list of invoice numbers or UUIDs",
+            })
+        if not ids:
+            return json.dumps({"success": True, "message": "No invoices selected", "processed": 0})
+        if len(ids) > APPROVE_AND_SEND_MAX_SELECTION:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"invoice_ids has {len(ids)} entries; at most "
+                    f"{APPROVE_AND_SEND_MAX_SELECTION} per call"
+                ),
+            })
 
-        seen_ids: set[str] = set()
+        seen_refs: set[str] = set()
+        seen_invoice_ids: set[str] = set()
         for inv_ref in ids:
             inv_ref = str(inv_ref).strip()
-            if inv_ref in seen_ids:
+            if inv_ref in seen_refs:
                 logger.warning("approve_and_send: duplicate invoice %s, skipping", inv_ref)
                 continue
-            seen_ids.add(inv_ref)
+            seen_refs.add(inv_ref)
             if _is_uuid(inv_ref):
                 inv = await repo.get_by_id(_uuid.UUID(inv_ref))
             else:
                 inv = await repo.get_by_number(inv_ref)
-            if inv:
-                invoices_to_send.append(inv)
-            else:
+            if not inv:
                 logger.warning("approve_and_send: invoice %s not found, skipping", inv_ref)
+                continue
+            # The same invoice can be named twice through different valid
+            # references (its number and its UUID); send it once.
+            resolved_id = str(inv["id"])
+            if resolved_id in seen_invoice_ids:
+                logger.warning("approve_and_send: %s resolves to an already selected invoice, skipping", inv_ref)
+                continue
+            seen_invoice_ids.add(resolved_id)
+            invoices_to_send.append(inv)
     else:
         invoices_to_send = await repo.search(status=status_filter, limit=200)
 
@@ -1316,7 +1360,8 @@ async def approve_and_send(
                 due_date = due_date.strftime("%m/%d/%Y")
 
             email_body = (
-                f"Please find attached invoice {inv_num} for {invoice_for}.\n\n"
+                (f"{note.strip()}\n\n" if note and note.strip() else "")
+                + f"Please find attached invoice {inv_num} for {invoice_for}.\n\n"
                 f"Amount Due: {total_str}\n"
                 f"Due Date: {due_date}\n\n"
                 f"Make all checks payable to {BUSINESS_NAME}.\n\n"
@@ -1328,6 +1373,7 @@ async def approve_and_send(
 
             attachments = [{
                 "filename": pdf_filename,
+                "mime_type": "application/pdf",
                 "content": base64.b64encode(pdf_bytes).decode("ascii"),
             }]
 

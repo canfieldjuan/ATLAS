@@ -42,6 +42,21 @@ def is_path_in_whitelist(file_path: str) -> bool:
     return False
 
 
+def _resend_attachment(att: dict[str, Any]) -> dict[str, str]:
+    """Translate the email port's attachment shape into Resend's fields.
+
+    The port carries {"filename", "content", optional "mime_type"}; Resend's
+    attachment object is {"filename", "content", optional "content_type"}.
+    Forwarding the port dict unchanged would send Resend an unknown
+    "mime_type" property on every Gmail fallback.
+    """
+    out = {"filename": att["filename"], "content": att["content"]}
+    declared = att.get("mime_type") or att.get("content_type")
+    if isinstance(declared, str) and declared:
+        out["content_type"] = declared
+    return out
+
+
 def load_attachment(file_path: str) -> dict[str, str] | None:
     """
     Load and validate a file for email attachment.
@@ -327,7 +342,7 @@ class EmailTool:
         if params.get("reply_to"):
             payload["reply_to"] = params["reply_to"]
         if loaded_attachments:
-            payload["attachments"] = loaded_attachments
+            payload["attachments"] = [_resend_attachment(att) for att in loaded_attachments]
 
         try:
             result = await self._send_email(payload)
@@ -396,10 +411,16 @@ class EmailTool:
         params: dict[str, Any],
         attachments: list[dict[str, Any]],
     ) -> ToolResult | None:
-        """Attempt to send via Gmail. Returns None to fall back to Resend."""
+        """Attempt to send via Gmail. Returns None to fall back to Resend.
+
+        A refusal of the caller's input is returned as a failed result, not
+        None: Resend would be handed the same input, so there is nothing to
+        fall back to.
+        """
+        from .gmail import GmailInvalidInput, get_gmail_transport
+
         try:
             from ..services.google_oauth import get_google_token_store
-            from .gmail import get_gmail_transport
 
             store = get_google_token_store()
             if not store.get_credentials("gmail"):
@@ -435,6 +456,12 @@ class EmailTool:
                 success=True,
                 data=response_data,
                 message=f"Email sent to {', '.join(to_list)}",
+            )
+        except GmailInvalidInput as e:
+            return ToolResult(
+                success=False,
+                error="INVALID_PARAMETER",
+                message=f"Email was not sent: {e}",
             )
         except Exception as e:
             logger.warning("Gmail send failed, falling back to Resend: %s", e)

@@ -112,6 +112,32 @@ from atlas_brain.config import settings
 from atlas_brain.mcp import content_ops_marketer_verify_chatgpt_adapter_server as adapter
 from atlas_brain.mcp import content_ops_marketer_verify_server as verify
 from atlas_brain.mcp.auth import BearerAuthMiddleware
+
+# When the real SDK is installed the stub above is a no-op (conftest pre-imports
+# it), so the provider raises the SDK's own TokenError; resolve the expected
+# class from whatever module is actually loaded.
+_TokenError = sys.modules["mcp.server.auth.provider"].TokenError
+
+
+def _lifespan_passed_to(server):
+    """The lifespan a FastMCP was constructed with.
+
+    The real SDK wraps it into the low-level server's `lifespan` closure; the
+    stub above keeps it as a plain attribute.
+    """
+    low = getattr(server, "_mcp_server", None)
+    wrapper = getattr(low, "lifespan", None) if low is not None else getattr(server, "lifespan", None)
+    found: list = []
+
+    def walk(obj, depth: int) -> None:
+        found.append(obj)
+        if depth == 4:
+            return
+        for cell in getattr(obj, "__closure__", None) or ():
+            walk(cell.cell_contents, depth + 1)
+
+    walk(wrapper, 0)
+    return found
 from atlas_brain.mcp.content_ops_marketer_verify_oauth import (
     ContentOpsMarketerVerifyOAuthProvider,
     DEFAULT_CONTENT_OPS_VERIFY_SCOPE,
@@ -307,7 +333,7 @@ def test_chatgpt_adapter_exposes_exact_search_fetch_surface() -> None:
 
 
 def test_chatgpt_adapter_reuses_verifier_database_lifespan() -> None:
-    assert adapter.mcp.lifespan is verify._lifespan
+    assert any(candidate is verify._lifespan for candidate in _lifespan_passed_to(adapter.mcp))
 
 
 @pytest.mark.asyncio
@@ -800,7 +826,7 @@ async def test_content_ops_marketer_oauth_provider_rejects_unbound_tokens() -> N
     code = next(iter(provider._authorization_codes))
     authorization_code = await provider.load_authorization_code(client, code)
 
-    with pytest.raises(_OAuthException, match="tenant-bound"):
+    with pytest.raises(_TokenError, match="tenant-bound"):
         await provider.exchange_authorization_code(client, authorization_code)
 
 

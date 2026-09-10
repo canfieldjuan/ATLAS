@@ -74,6 +74,19 @@ try:
 except ModuleNotFoundError:
     pass
 
+# Same discipline for the MCP SDK. Eight b2b/content-ops test modules install a
+# MagicMock "mcp.server.fastmcp" via sys.modules.setdefault so they can run
+# without the SDK; when the SDK is installed, importing it here first makes
+# those setdefaults no-ops, so every MCP test module collected later in the
+# same process imports the real package instead of a stub that has no
+# `exceptions`, `auth`, or `custom_route`.
+try:
+    import mcp.server.auth.provider  # noqa: F401
+    import mcp.server.fastmcp  # noqa: F401
+    import mcp.server.fastmcp.exceptions  # noqa: F401
+except ModuleNotFoundError:
+    pass
+
 
 _SELF_POOL_LIVE_FILES = {
     "test_b2b_challenger_claims_api_live.py",
@@ -109,6 +122,33 @@ def pytest_collection_modifyitems(session, config, items):
             or Path(str(item.fspath)).name in _SELF_POOL_LIVE_FILES
         ):
             item.add_marker(integration)
+
+
+@pytest.fixture(autouse=True)
+def _restore_config_module_globals():
+    """Undo importlib.reload(atlas_brain.config) after any test, suite-wide.
+
+    Several test modules reload the config module to re-read an env var. A
+    reload rebinds `settings` (and every class) to new objects: test modules
+    that bound `from atlas_brain.config import settings` at import time keep
+    the old object, while production code that imports lazily reads the new
+    one, so a later test's monkeypatch on `settings` silently stops reaching
+    the code under test. This lives here, not in the reloading modules, so
+    every current and future reloader is covered by one enforcement point.
+    """
+    try:
+        import atlas_brain.config as config_mod
+    except ModuleNotFoundError:
+        # Dependency-free jobs (e.g. the contact-write-boundary self-check)
+        # run a few pure tests without the app's requirements installed.
+        yield
+        return
+
+    before = dict(vars(config_mod))
+    yield
+    if config_mod.settings is not before["settings"]:
+        for name, value in before.items():
+            setattr(config_mod, name, value)
 
 
 @pytest.fixture(autouse=True)

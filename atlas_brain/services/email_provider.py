@@ -828,11 +828,17 @@ class CompositeEmailProvider:
         # the verified domain sender via Resend instead of the Gmail account.
         # provider is a named param, so it is never forwarded in **kwargs to
         # the underlying providers.
+        from ..tools.gmail import GmailInvalidInput
+
         if provider == "resend":
             return await self._resend.send(to=to, subject=subject, body=body, **kwargs)
         if await self._gmail.is_available():
             try:
                 return await self._gmail.send(to=to, subject=subject, body=body, **kwargs)
+            except GmailInvalidInput:
+                # The caller's input was refused; Resend would be handed the
+                # same input. That is not an outage and must not fall back.
+                raise
             except Exception as exc:
                 logger.warning("Gmail send failed, trying Resend: %s", exc)
         return await self._resend.send(to=to, subject=subject, body=body, **kwargs)
