@@ -55,7 +55,7 @@ exist. The plan doc itself is a further part of the overage.
 
 Ownership lane: eom/invoice-attachment-mime
 Slice phase: production hardening
-Max files: 11
+Max files: 12
 
 1. Derive the attachment MIME type in both Gmail send paths instead of
    hardcoding octet-stream, admitting a declared type only when it is one legal
@@ -87,6 +87,12 @@ Max files: 11
    tests in `test_mcp_content_ops_marketer_verify.py` that genuinely failed
    once the file ran are fixed in place, because the gate accepts no baseline
    additions.
+   A second leak surfaced once those files ran in the full process:
+   `tests/test_auth_api_keys.py` reloads `atlas_brain.config` and leaves a new
+   `settings` object bound, so later tests that patch the import-time
+   `settings` no longer reach code that imports it lazily (the content-ops
+   HTTP-auth tests). An autouse fixture there restores the config module's
+   globals after each of its tests.
 
 ### Review Contract
 
@@ -263,6 +269,7 @@ MIME configuration for the extensions this repo sends.
 - `atlas_brain/tools/gmail.py`
 - `plans/PR-EOM-Invoice-Attachment-MIME.md`
 - `tests/conftest.py`
+- `tests/test_auth_api_keys.py`
 - `tests/test_gmail_attachment_mime.py`
 - `tests/test_invoicing_approve_and_send_selection.py`
 - `tests/test_mcp_content_ops_marketer_verify.py`
@@ -353,10 +360,11 @@ beyond the tests' own dropped schema.
 | `atlas_brain/services/email_provider.py` | 6 |
 | `atlas_brain/tools/email.py` | 33 |
 | `atlas_brain/tools/gmail.py` | 110 |
-| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 362 |
+| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 368 |
 | `tests/conftest.py` | 13 |
+| `tests/test_auth_api_keys.py` | 20 |
 | `tests/test_gmail_attachment_mime.py` | 745 |
 | `tests/test_invoicing_approve_and_send_selection.py` | 272 |
 | `tests/test_mcp_content_ops_marketer_verify.py` | 30 |
 | `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1631** |
+| **Total** | **1657** |

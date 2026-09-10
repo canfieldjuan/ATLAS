@@ -57,6 +57,26 @@ def test_generated_keys_are_unique_across_calls():
     assert len(keys) == 50
 
 
+@pytest.fixture(autouse=True)
+def _restore_config_module_globals():
+    """Undo importlib.reload(atlas_brain.config) after each test here.
+
+    Reloading rebinds `settings` (and every class) to new objects. Test modules
+    that bound `from atlas_brain.config import settings` at import time keep the
+    old object, while production code that imports lazily reads the new one, so
+    a later test's monkeypatch on `settings` silently stops reaching the code
+    under test (this broke the content-ops MCP HTTP-auth tests in the full
+    unit-gate run). Restore every pre-existing global so identity is stable
+    across the session.
+    """
+    import atlas_brain.config as config_mod
+
+    before = dict(vars(config_mod))
+    yield
+    for name, value in before.items():
+        setattr(config_mod, name, value)
+
+
 # ---- Hashing one-wayness + determinism -----------------------------------
 
 
