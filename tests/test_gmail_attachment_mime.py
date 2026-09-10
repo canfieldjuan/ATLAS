@@ -61,6 +61,13 @@ def test_empty_declared_type_defers_to_the_extension(declared):
     )
 
 
+@pytest.mark.parametrize("declared", ["application/octet-stream", "Application/Octet-Stream"])
+def test_an_explicit_octet_stream_declaration_does_not_defeat_pdf_inference(declared):
+    """The generic default carries no information, so the filename still decides."""
+    assert _attachment_type({"mime_type": declared}, "invoice.pdf") == ("application", "pdf")
+    assert _attachment_type({"mime_type": declared}, "blob.unknownext") == ("application", "octet-stream")
+
+
 # The admitted class is RFC 6838 restricted-name "/" restricted-name and nothing
 # else. The oracle below is derived from that grammar, not from the helper:
 # every legal pair admits (case-folded), every mutation that leaves the grammar
@@ -232,3 +239,177 @@ async def test_create_draft_refuses_a_malformed_declaration_before_any_request(d
 
     assert excinfo.value.definitely_not_created is True
     assert requests == []
+
+
+# --- through the production entrypoints ------------------------------------------
+#
+# A refusal raised inside the Gmail transport is an exception the composite
+# provider and the email tool treat as an outage and fall back from, to Resend,
+# with the same attachment. These tests drive the real CompositeEmailProvider
+# and the real EmailTool with fakes only at the two external edges (the Gmail
+# HTTP transport and the Resend HTTP client) and prove the refusal happens
+# before either edge is touched.
+
+
+class _RecordingResend:
+    """Stand-in for the Resend provider at the composite's port."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def send(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"id": "resend-1", "transport": "resend"}
+
+
+class _Credentialed:
+    def get_credentials(self, _name):
+        return "cred"
+
+
+@pytest.fixture
+def gmail_edge(monkeypatch):
+    """The real Gmail transport singleton, with its HTTP edge replaced and restored."""
+    from atlas_brain.services import google_oauth
+    from atlas_brain.tools import gmail as gmail_mod
+
+    monkeypatch.setattr(google_oauth, "get_google_token_store", lambda: _Credentialed())
+    transport = gmail_mod.get_gmail_transport()
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"id": "m-1", "threadId": "t-1"})
+
+    saved = (transport._client, transport._access_token, transport._token_expires)
+    transport._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    transport._access_token = "token"
+    transport._token_expires = time.time() + 600
+    try:
+        yield requests
+    finally:
+        transport._client, transport._access_token, transport._token_expires = saved
+
+
+@pytest.mark.asyncio
+async def test_composite_provider_refuses_a_malformed_declaration_before_choosing_a_provider(gmail_edge):
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+
+    composite = CompositeEmailProvider()
+    resend = _RecordingResend()
+    composite._resend = resend
+
+    with pytest.raises(ValueError, match="mime_type is invalid"):
+        await composite.send(
+            to=["ap@example.test"],
+            subject="Invoice",
+            body="Body",
+            attachments=[{"filename": "INV.pdf", "mime_type": "application/pdf\nX: y", "content": PDF_B64}],
+        )
+
+    assert gmail_edge == [], "Gmail must not have been asked"
+    assert resend.calls == [], "a refused declaration must never fall back to Resend"
+
+
+@pytest.mark.asyncio
+async def test_composite_provider_refuses_a_malformed_declaration_even_when_resend_is_forced(gmail_edge):
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+
+    composite = CompositeEmailProvider()
+    resend = _RecordingResend()
+    composite._resend = resend
+
+    with pytest.raises(ValueError, match="mime_type is invalid"):
+        await composite.send(
+            to=["ap@example.test"],
+            subject="Invoice",
+            body="Body",
+            provider="resend",
+            attachments=[{"filename": "INV.pdf", "mime_type": "text/plain/extra", "content": PDF_B64}],
+        )
+
+    assert resend.calls == [] and gmail_edge == []
+
+
+@pytest.mark.asyncio
+async def test_composite_provider_delivers_a_declared_pdf_through_the_real_gmail_transport(gmail_edge):
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+
+    composite = CompositeEmailProvider()
+    resend = _RecordingResend()
+    composite._resend = resend
+
+    await composite.send(
+        to=["ap@example.test"],
+        subject="Invoice",
+        body="Body",
+        attachments=[{"filename": "INV-2026-0456.pdf", "mime_type": "application/pdf", "content": PDF_B64}],
+    )
+
+    assert resend.calls == []
+    assert len(gmail_edge) == 1
+    part = _attachment_part(json.loads(gmail_edge[0].content)["raw"])
+    assert part.get_content_type() == "application/pdf"
+
+
+class _RecordingResendClient:
+    """Stand-in for httpx.AsyncClient -- the email tool's external Resend edge."""
+
+    def __init__(self) -> None:
+        self.posted: list = []
+
+    async def post(self, url, json=None, headers=None):
+        self.posted.append(json)
+        return httpx.Response(200, json={"id": "resend-1"}, request=httpx.Request("POST", url))
+
+    async def aclose(self):
+        return None
+
+
+def _email_tool():
+    from atlas_brain.tools.email import EmailTool
+
+    tool = EmailTool()
+    tool._config = tool._config.model_copy(
+        update={"enabled": True, "api_key": "re_test_key", "gmail_send_enabled": True}
+    )
+    tool._client = _RecordingResendClient()
+    return tool
+
+
+@pytest.mark.asyncio
+async def test_email_tool_refuses_a_malformed_declaration_without_trying_either_transport(gmail_edge):
+    tool = _email_tool()
+
+    result = await tool.execute({
+        "action": "send",
+        "from_email": "billing@example.test",
+        "to": "ap@example.test",
+        "subject": "Invoice",
+        "body": "Body",
+        "attachments": [{"filename": "INV.pdf", "mime_type": "application/pdf; charset=x", "content": PDF_B64}],
+    })
+
+    assert result.success is False and result.error == "INVALID_PARAMETER"
+    assert gmail_edge == []
+    assert tool._client.posted == [], "a refused declaration must never fall back to Resend"
+
+
+@pytest.mark.asyncio
+async def test_email_tool_delivers_a_declared_pdf_through_the_real_gmail_transport(gmail_edge):
+    tool = _email_tool()
+
+    result = await tool.execute({
+        "action": "send",
+        "from_email": "billing@example.test",
+        "to": "ap@example.test",
+        "subject": "Invoice",
+        "body": "Body",
+        "attachments": [{"filename": "INV-2026-0456.pdf", "mime_type": "application/pdf", "content": PDF_B64}],
+    })
+
+    assert result.success is True, result
+    assert tool._client.posted == []
+    assert len(gmail_edge) == 1
+    part = _attachment_part(json.loads(gmail_edge[0].content)["raw"])
+    assert part.get_content_type() == "application/pdf"

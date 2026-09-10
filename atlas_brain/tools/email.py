@@ -301,6 +301,19 @@ class EmailTool:
 
         if loaded_attachments:
             logger.info("Adding %d attachment(s) to email", len(loaded_attachments))
+            # Refuse a malformed declaration before either transport is tried;
+            # a refusal inside the Gmail attempt would otherwise fall back to
+            # Resend with the same attachment.
+            from .gmail import validate_attachment_types
+
+            try:
+                validate_attachment_types(loaded_attachments)
+            except ValueError as exc:
+                return ToolResult(
+                    success=False,
+                    error="INVALID_PARAMETER",
+                    message=f"Attachment was not sent: {exc}",
+                )
 
         # Try Gmail first when configured, unless the caller forced Resend
         # (e.g. a transactional send that must originate from the verified

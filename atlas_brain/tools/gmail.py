@@ -66,12 +66,35 @@ def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
         match = _MIME_TYPE.fullmatch(declared) if isinstance(declared, str) else None
         if match is None:
             raise ValueError("Gmail attachment mime_type is invalid")
-        return match.group(1).lower(), match.group(2).lower()
+        maintype, subtype = match.group(1).lower(), match.group(2).lower()
+        # An explicit octet-stream carries no information: it is the blanket
+        # default this resolution replaces, so it cannot defeat what the
+        # filename says. If nothing resolves it is the fallback anyway.
+        if (maintype, subtype) != ("application", "octet-stream"):
+            return maintype, subtype
     guessed, _encoding = mimetypes.guess_type(filename)
     match = _MIME_TYPE.fullmatch(guessed) if guessed else None
     if match is None:
         return "application", "octet-stream"
     return match.group(1).lower(), match.group(2).lower()
+
+
+def validate_attachment_types(attachments: Any) -> None:
+    """Refuse a malformed attachment declaration before any provider is chosen.
+
+    The transport refuses it too, but a refusal raised inside one transport is
+    an exception the composite provider treats as an outage and falls back
+    from -- to Resend, with the same attachment. Validation at the port, before
+    provider selection, is what makes "refused before any request" true
+    through the production entrypoints.
+    """
+    if not attachments:
+        return
+    for att in attachments:
+        if not isinstance(att, Mapping):
+            raise ValueError("Gmail attachment must be a mapping")
+        filename = att.get("filename", "attachment")
+        _attachment_type(att, filename if isinstance(filename, str) else "attachment")
 
 
 class GmailDraftLookupError(RuntimeError):

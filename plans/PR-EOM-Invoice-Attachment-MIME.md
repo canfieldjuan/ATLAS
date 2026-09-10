@@ -30,7 +30,11 @@ This is a delivery-correctness defect in the transport, not a document defect.
   invoice. Because the explicit value is caller input that lands in a raw MIME
   header, it is admitted only when it is one legal `type/subtype` pair; anything
   else refuses the send before any request, the same way this transport already
-  treats caller-supplied headers.
+  treats caller-supplied headers. That refusal has to happen at the email port,
+  before a provider is chosen: the composite provider and the email tool treat
+  any exception from the Gmail attempt as an outage and fall back to Resend
+  with the same attachment, so a refusal raised only inside the transport
+  would not hold through the production entrypoints.
 - Must not change: OAuth handling, the send/draft request shapes, header
   validation and the protected-header allowlist, retry and ambiguous-status
   handling, or the body text of any message that does not opt into a note.
@@ -39,11 +43,14 @@ This is a delivery-correctness defect in the transport, not a document defect.
 
 Ownership lane: eom/invoice-attachment-mime
 Slice phase: production hardening
-Max files: 6
+Max files: 8
 
 1. Derive the attachment MIME type in both Gmail send paths instead of
    hardcoding octet-stream, admitting a declared type only when it is one legal
-   pair.
+   pair, treating an explicit `application/octet-stream` as no declaration, and
+   refusing a malformed declaration at the email port (composite provider and
+   email tool) before any provider is chosen, so it can never fall back to
+   Resend.
 2. Declare `application/pdf` explicitly on the invoice attachment, so the
    correct type does not depend on extension inference alone.
 3. Widen `approve_and_send`'s `invoice_ids` to accept a list, keep an explicit
@@ -56,10 +63,12 @@ Max files: 6
 
 ### Review Contract
 
-- A `.pdf` attachment is never delivered as `application/octet-stream`; settled
-  by `test_send_infers_the_pdf_from_the_filename_when_nothing_is_declared`
-  (decodes the raw message posted to Gmail) and
-  `test_pdf_extension_is_inferred_when_no_type_is_declared`.
+- A `.pdf` attachment is never delivered as `application/octet-stream`, not
+  even when a caller declares that generic type explicitly; settled by
+  `test_send_infers_the_pdf_from_the_filename_when_nothing_is_declared`
+  (decodes the raw message posted to Gmail),
+  `test_pdf_extension_is_inferred_when_no_type_is_declared` and
+  `test_an_explicit_octet_stream_declaration_does_not_defeat_pdf_inference`.
 - An explicit `mime_type` overrides a misleading extension and reaches the raw
   message on both paths; settled by
   `test_explicit_mime_type_wins_over_the_extension`,
@@ -74,6 +83,17 @@ Max files: 6
   `test_a_non_string_declaration_is_refused`,
   `test_send_refuses_a_malformed_declaration_before_any_request` and
   `test_create_draft_refuses_a_malformed_declaration_before_any_request`.
+- The refusal holds through the production entrypoints: the real
+  `CompositeEmailProvider.send` raises before choosing a provider (also with
+  `provider="resend"` forced) and the real `EmailTool` returns
+  `INVALID_PARAMETER`, in both cases with no request to the Gmail edge and no
+  fallback to Resend, while a well-declared PDF still reaches Gmail's raw
+  message through both; settled by
+  `test_composite_provider_refuses_a_malformed_declaration_before_choosing_a_provider`,
+  `test_composite_provider_refuses_a_malformed_declaration_even_when_resend_is_forced`,
+  `test_composite_provider_delivers_a_declared_pdf_through_the_real_gmail_transport`,
+  `test_email_tool_refuses_a_malformed_declaration_without_trying_either_transport`
+  and `test_email_tool_delivers_a_declared_pdf_through_the_real_gmail_transport`.
 - An empty or absent declared type defers to the extension, and an
   unresolvable filename lands on octet-stream; settled by
   `test_empty_declared_type_defers_to_the_extension` and
@@ -112,7 +132,10 @@ Max files: 6
 ### Boundary-change enumeration and closure declaration
 
 - Decision seam: `_attachment_type` is the only place an attachment's declared
-  type is chosen; both send paths call it.
+  type is chosen; both send paths call it, and `validate_attachment_types`
+  runs the same recognizer at the email port -- `CompositeEmailProvider.send`
+  before provider selection and `EmailTool` before its Gmail attempt -- so a
+  refusal is never an exception that a fallback path can swallow.
 - Inputs are OPEN: caller-supplied `mime_type` and caller-supplied filenames.
   The safety decision is allowlist-shaped and CLOSED: a non-empty declaration
   is admitted only on `fullmatch` of the RFC 6838 restricted-name grammar
@@ -120,8 +143,9 @@ Max files: 6
   and everything else -- not a subset of known-bad strings -- refuses the whole
   send or draft before any request. The declaration is never repaired, because
   a repaired header silently changes what the caller asked for.
-- An empty or absent declaration is not a declaration: the filename extension
-  is inferred, the inferred value passes the same recognizer, and only when
+- An empty, absent, or `application/octet-stream` declaration is not a
+  declaration (the generic type carries no information and is the blanket
+  default this slice replaces): the filename extension is inferred, the inferred value passes the same recognizer, and only when
   nothing resolves does the pair fall back to `application/octet-stream`. So an
   unknown attachment is unchanged, and everything that resolves is newly
   DECLARED rather than defaulted.
@@ -141,6 +165,8 @@ MIME configuration for the extensions this repo sends.
 
 - `plans/PR-EOM-Invoice-Attachment-MIME.md`
 - `atlas_brain/tools/gmail.py`
+- `atlas_brain/services/email_provider.py`
+- `atlas_brain/tools/email.py`
 - `atlas_brain/mcp/invoicing_server.py`
 - `tests/test_gmail_attachment_mime.py`
 - `tests/test_invoicing_approve_and_send_selection.py`
@@ -150,7 +176,13 @@ MIME configuration for the extensions this repo sends.
 
 `_attachment_type` takes the attachment mapping and its filename and returns a
 `(maintype, subtype)` pair for `MIMEBase`, raising `ValueError` for a
-declaration outside the pair grammar. Both send paths call it in place of the
+declaration outside the pair grammar and treating an explicit
+`application/octet-stream` as no declaration. `validate_attachment_types`
+runs it over a whole attachment list and is called by
+`CompositeEmailProvider.send` before any provider is selected and by
+`EmailTool` before its Gmail attempt, so a caller error surfaces as a
+`ValueError` / `INVALID_PARAMETER` result rather than as a Gmail failure that
+the Resend fallback would retry. Both send paths call it in place of the
 hardcoded constructor and convert that `ValueError` into `GmailSendError`
 (`definitely_not_sent=True`) or `GmailDraftCreateError`
 (`definitely_not_created=True`), mirroring how invalid extra headers are
@@ -188,8 +220,11 @@ failure is parked rather than changed speculatively.
 
 Parked hardening: the Resend path's attachment typing was not inspected as
 part of this diff; `send_invoice`'s inline-HTML path renders a tax row with a
-hardcoded `Tax:` label while `invoice_pdf.py` honors `metadata.tax_label`.
-Both are recorded here rather than folded in.
+hardcoded `Tax:` label while `invoice_pdf.py` honors `metadata.tax_label`; and
+the same fallback-after-refusal shape exists, pre-existing and untouched here,
+for caller-supplied `headers` (`_extra_headers` raises inside the transport and
+the composite falls back to Resend). All three are recorded here rather than
+folded in.
 
 ## Verification
 
@@ -213,9 +248,11 @@ beyond the tests' own dropped schema.
 | File | LOC |
 |---|---:|
 | `plans/PR-EOM-Invoice-Attachment-MIME.md` | 200 |
-| `atlas_brain/tools/gmail.py` | 50 |
+| `atlas_brain/tools/gmail.py` | 75 |
+| `atlas_brain/services/email_provider.py` | 8 |
+| `atlas_brain/tools/email.py` | 14 |
 | `atlas_brain/mcp/invoicing_server.py` | 36 |
-| `tests/test_gmail_attachment_mime.py` | 234 |
+| `tests/test_gmail_attachment_mime.py` | 410 |
 | `tests/test_invoicing_approve_and_send_selection.py` | 230 |
 | `.github/workflows/atlas_invoicing_checks.yml` | 14 |
-| **Total** | **764** |
+| **Total** | **1087** |

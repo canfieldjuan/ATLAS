@@ -828,6 +828,13 @@ class CompositeEmailProvider:
         # the verified domain sender via Resend instead of the Gmail account.
         # provider is a named param, so it is never forwarded in **kwargs to
         # the underlying providers.
+        #
+        # A malformed attachment declaration is a caller error, not a provider
+        # outage: validate it here, before any provider is chosen, so it can
+        # never be "retried" through Resend with the same attachment.
+        from ..tools.gmail import validate_attachment_types
+
+        validate_attachment_types(kwargs.get("attachments"))
         if provider == "resend":
             return await self._resend.send(to=to, subject=subject, body=body, **kwargs)
         if await self._gmail.is_available():
