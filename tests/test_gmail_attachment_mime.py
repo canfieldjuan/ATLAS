@@ -413,3 +413,161 @@ async def test_email_tool_delivers_a_declared_pdf_through_the_real_gmail_transpo
     assert len(gmail_edge) == 1
     part = _attachment_part(json.loads(gmail_edge[0].content)["raw"])
     assert part.get_content_type() == "application/pdf"
+
+
+# --- class closure: the whole grammar, not the reported strings ----------------------
+#
+# docs/GUARD_CLASS_CLOSURE.md req 3. The inputs below are GENERATED from the
+# RFC 6838 restricted-name grammar and its mutations, crossed with the
+# declaration families the port accepts and the container shapes it is handed,
+# and every verdict is checked against an oracle written from the contract,
+# not against `_attachment_type` itself. Two layers: the oracle anchors
+# correctness at the scalar, and the container product proves that wrapping a
+# declaration in an attachment list, alone or beside a valid neighbour, never
+# changes the verdict of `validate_attachment_types`.
+
+import itertools
+import string
+
+from atlas_brain.tools.gmail import validate_attachment_types
+
+_NAME_FIRST = string.ascii_letters + string.digits
+_NAME_REST = _NAME_FIRST + "!#$&^_.+-"
+
+
+def _legal_name_tokens():
+    """Names the grammar admits: first character alphanumeric, then up to 126 of the name alphabet."""
+    for first, length in itertools.product(_NAME_FIRST[::9], (1, 2, 9, 127)):
+        yield (first + (_NAME_REST * 3))[:length]
+
+
+def _mutations():
+    """Ways of leaving the grammar, each applied to a legal pair."""
+    yield "append-lf", lambda pair: pair + "\nX-Injected: 1"
+    yield "append-crlf", lambda pair: pair + "\r\nX-Injected: 1"
+    yield "parameters", lambda pair: pair + "; charset=utf-8"
+    yield "second-slash", lambda pair: pair + "/extra"
+    yield "no-slash", lambda pair: pair.replace("/", "")
+    yield "empty-subtype", lambda pair: pair.split("/")[0] + "/"
+    yield "empty-type", lambda pair: "/" + pair.split("/")[1]
+    yield "leading-space", lambda pair: " " + pair
+    yield "trailing-space", lambda pair: pair + " "
+    yield "inner-space", lambda pair: pair.replace("/", " /")
+    yield "nul", lambda pair: pair + "\x00"
+    yield "non-ascii", lambda pair: pair + "\u00e9"
+    yield "bad-first-char", lambda pair: "-" + pair
+    yield "over-length", lambda pair: pair.split("/")[0] + "/" + "a" * 128
+    yield "not-a-string", lambda pair: pair.encode("ascii")
+
+
+def _families():
+    """How a caller can express the type: the declaration key, or only the filename."""
+    yield "declared", "invoice.unknownext"          # the declaration alone decides
+    yield "declared-over-pdf-name", "invoice.pdf"   # a legal declaration beats the extension
+    yield "declared-over-png-name", "invoice.png"
+
+
+def _containers(att, valid_neighbour):
+    """The shapes validate_attachment_types is handed: alone, wrapped, and mixed."""
+    yield "single", [att]
+    yield "after-valid", [valid_neighbour, att]
+    yield "before-valid", [att, valid_neighbour]
+
+
+def _expected_verdict(declared, filename):
+    """Spec-derived oracle, written from the contract rather than from the code.
+
+    A non-empty declaration is admitted only if it is name "/" name with each
+    name one alphanumeric then up to 126 name characters; anything else is
+    refused. An admitted octet-stream, an empty declaration, or no declaration
+    defers to the filename extension, and an extension that resolves to nothing
+    lands on octet-stream.
+    """
+    def is_name(part):
+        return (
+            1 <= len(part) <= 127
+            and part[0] in _NAME_FIRST
+            and all(ch in _NAME_REST for ch in part)
+        )
+
+    inferred = {"pdf": ("application", "pdf"), "png": ("image", "png")}.get(
+        filename.rsplit(".", 1)[-1], ("application", "octet-stream")
+    )
+    if declared is None or declared == "":
+        return "admit", inferred
+    if not isinstance(declared, str) or declared.count("/") != 1:
+        return "refuse", None
+    maintype, subtype = declared.split("/")
+    if not (is_name(maintype) and is_name(subtype)):
+        return "refuse", None
+    pair = (maintype.lower(), subtype.lower())
+    if pair == ("application", "octet-stream"):
+        return "admit", inferred
+    return "admit", pair
+
+
+def _verdict(att, filename):
+    try:
+        return "admit", _attachment_type(att, filename)
+    except ValueError:
+        return "refuse", None
+
+
+def _list_verdict(attachments):
+    try:
+        validate_attachment_types(attachments)
+    except ValueError:
+        return "refuse"
+    return "admit"
+
+
+def test_every_generated_legal_pair_is_admitted_as_the_oracle_says():
+    tokens = list(_legal_name_tokens())
+    families = list(_families())
+    checked = 0
+    for (maintype, subtype), (family, filename) in itertools.product(
+        itertools.product(tokens, tokens[::2]), families
+    ):
+        declared = f"{maintype}/{subtype}"
+        att = {"mime_type": declared, "filename": filename, "content": PDF_B64}
+        expected = _expected_verdict(declared, filename)
+        assert _verdict(att, filename) == expected, (family, declared)
+        checked += 1
+    assert checked > 100
+
+
+def test_every_generated_mutation_is_refused_and_containers_do_not_change_the_verdict():
+    tokens = list(_legal_name_tokens())
+    families = list(_families())
+    valid_neighbour = {"mime_type": "application/pdf", "filename": "ok.pdf", "content": PDF_B64}
+    refused = 0
+    for (maintype, subtype), (mutation, mutate), (family, filename) in itertools.product(
+        itertools.product(tokens[::3], tokens[1::5]), _mutations(), families
+    ):
+        declared = mutate(f"{maintype}/{subtype}")
+        att = {"mime_type": declared, "filename": filename, "content": PDF_B64}
+        expected = _expected_verdict(declared, filename)
+        assert expected[0] == "refuse", (mutation, declared)
+        assert _verdict(att, filename) == expected, (mutation, family, declared)
+        # representation parity: alone, after a valid neighbour, before one
+        for container, attachments in _containers(att, valid_neighbour):
+            assert _list_verdict(attachments) == "refuse", (mutation, family, container)
+        refused += 1
+    assert refused > 100
+
+
+def test_no_declaration_and_octet_stream_declaration_defer_to_the_filename_across_containers():
+    families = list(_families())
+    valid_neighbour = {"mime_type": "application/pdf", "filename": "ok.pdf", "content": PDF_B64}
+    for (declared, key_present), (family, filename) in itertools.product(
+        ((None, True), ("", True), (None, False), ("application/octet-stream", True), ("Application/OCTET-stream", True)),
+        families,
+    ):
+        att = {"filename": filename, "content": PDF_B64}
+        if key_present:
+            att["mime_type"] = declared
+        expected = _expected_verdict(declared, filename)
+        assert expected[0] == "admit"
+        assert _verdict(att, filename) == expected, (declared, family)
+        for container, attachments in _containers(att, valid_neighbour):
+            assert _list_verdict(attachments) == "admit", (declared, family, container)
