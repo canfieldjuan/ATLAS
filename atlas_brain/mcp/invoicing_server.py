@@ -1202,11 +1202,23 @@ async def approve_and_send(
     # Resolve which invoices to process
     invoices_to_send: list[dict] = []
 
-    if invoice_ids:
-        try:
-            ids = json.loads(invoice_ids) if isinstance(invoice_ids, str) else invoice_ids
-        except json.JSONDecodeError:
-            return json.dumps({"success": False, "error": "Invalid invoice_ids JSON"})
+    # An explicit selection -- including an empty one -- never widens into
+    # "every invoice matching status_filter"; only an omitted argument does.
+    if invoice_ids is not None:
+        if isinstance(invoice_ids, str):
+            try:
+                ids = json.loads(invoice_ids)
+            except json.JSONDecodeError:
+                return json.dumps({"success": False, "error": "Invalid invoice_ids JSON"})
+        else:
+            ids = invoice_ids
+        if not isinstance(ids, list) or not all(isinstance(ref, str) for ref in ids):
+            return json.dumps({
+                "success": False,
+                "error": "invoice_ids must be a list of invoice numbers or UUIDs",
+            })
+        if not ids:
+            return json.dumps({"success": True, "message": "No invoices selected", "processed": 0})
 
         seen_ids: set[str] = set()
         for inv_ref in ids:

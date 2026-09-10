@@ -42,17 +42,36 @@ _PROTECTED_HEADER_NAMES = frozenset(
 )
 
 
-def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
-    """Resolve an attachment's MIME type.
+# RFC 6838 restricted-name: one alphanumeric, then up to 126 name characters.
+# Anything else (whitespace, CR/LF, parameters, a second slash, an empty side)
+# is not a media type and must never reach a Content-Type header.
+_MIME_NAME = r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}"
+_MIME_TYPE = re.compile(rf"({_MIME_NAME})/({_MIME_NAME})")
 
-    Prefers an explicit "mime_type" on the attachment, then the filename's
-    extension, and only falls back to application/octet-stream when neither
-    answers. Declaring a PDF as octet-stream causes recipient mail gateways
-    to strip or quarantine it, so the type is derived rather than assumed.
+
+def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
+    """Resolve an attachment's MIME type as a validated (maintype, subtype) pair.
+
+    An explicit, non-empty "mime_type" must be one legal type/subtype pair or
+    the attachment is refused with ValueError; a declaration is caller input
+    that lands in a raw MIME header, so it is admitted only on recognition,
+    never repaired. With no declaration the filename extension is inferred,
+    and only when that resolves to nothing does the pair fall back to
+    application/octet-stream. Declaring a PDF as octet-stream causes recipient
+    mail gateways to strip or quarantine it, so the type is derived rather
+    than assumed.
     """
-    declared = att.get("mime_type") or mimetypes.guess_type(filename)[0]
-    maintype, _, subtype = (declared or "application/octet-stream").partition("/")
-    return maintype or "application", subtype or "octet-stream"
+    declared = att.get("mime_type")
+    if declared is not None and declared != "":
+        match = _MIME_TYPE.fullmatch(declared) if isinstance(declared, str) else None
+        if match is None:
+            raise ValueError("Gmail attachment mime_type is invalid")
+        return match.group(1).lower(), match.group(2).lower()
+    guessed, _encoding = mimetypes.guess_type(filename)
+    match = _MIME_TYPE.fullmatch(guessed) if guessed else None
+    if match is None:
+        return "application", "octet-stream"
+    return match.group(1).lower(), match.group(2).lower()
 
 
 class GmailDraftLookupError(RuntimeError):
@@ -299,7 +318,12 @@ class GmailTransport:
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
 
-                maintype, subtype = _attachment_type(att, filename)
+                try:
+                    maintype, subtype = _attachment_type(att, filename)
+                except ValueError as exc:
+                    raise GmailSendError(
+                        "Gmail attachment mime_type is invalid", definitely_not_sent=True
+                    ) from exc
                 part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header(
@@ -425,7 +449,12 @@ class GmailTransport:
                 filename = att.get("filename", "attachment")
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
-                maintype, subtype = _attachment_type(att, filename)
+                try:
+                    maintype, subtype = _attachment_type(att, filename)
+                except ValueError as exc:
+                    raise GmailDraftCreateError(
+                        "Gmail attachment mime_type is invalid", definitely_not_created=True
+                    ) from exc
                 part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header("Content-Disposition", "attachment", filename=filename)
