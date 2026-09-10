@@ -1179,7 +1179,10 @@ async def list_pending_drafts(
 
 @mcp.tool()
 async def approve_and_send(
-    invoice_ids: Optional[Union[str, list[str]]] = None,
+    # Deliberately not Optional: the published schema then has no null branch,
+    # so an explicit JSON null is rejected at the MCP boundary and only a
+    # genuinely omitted argument reaches the "every matching draft" path.
+    invoice_ids: Union[str, list[str]] = None,  # type: ignore[assignment]
     status_filter: str = "draft",
     dry_run: bool = False,
     note: Optional[str] = None,
@@ -1189,7 +1192,8 @@ async def approve_and_send(
 
     invoice_ids: a list of invoice numbers or UUIDs, or a JSON array string
                  (e.g. ["INV-2026-0014"] or '["INV-2026-0014"]').
-                 If omitted, processes ALL invoices matching status_filter.
+                 If omitted, processes ALL invoices matching status_filter;
+                 an explicit null is rejected.
     status_filter: only process invoices with this status (default: draft)
     dry_run: if true, list what would be sent without actually sending
     note: optional line placed above the standard body, for one-off context

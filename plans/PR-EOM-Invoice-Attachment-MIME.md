@@ -66,8 +66,11 @@ Max files: 11
 2. Declare `application/pdf` explicitly on the invoice attachment, so the
    correct type does not depend on extension inference alone.
 3. Widen `approve_and_send`'s `invoice_ids` to accept a list, keep an explicit
-   selection -- including an empty one -- from widening into "every draft", and
-   add an optional `note` for one-off context above the standard body.
+   selection -- including an empty one -- from widening into "every draft",
+   reject an explicit JSON `null` at the MCP boundary (the annotation is
+   deliberately not `Optional`, so only a genuinely omitted argument means
+   "every matching draft"), and add an optional `note` for one-off context
+   above the standard body.
 4. Prove the type resolution, the selection rule, and the body through the real
    entrypoints: the transport's posted raw message, and the published MCP tool
    (`mcp.call_tool` / `mcp.list_tools`) against the real invoice repository on
@@ -132,9 +135,10 @@ Max files: 11
 - An explicit empty selection (`[]` or `"[]"`) sends nothing and touches no
   invoice; only an omitted argument covers every matching draft; a string that
   is not a JSON array of strings is refused by the tool without sending; a
-  value outside the schema (ints in the list, `None` in the list, a bare
-  number, an object, a JSON-object string) is refused at the boundary before
-  the tool runs; settled by `test_an_explicit_empty_selection_sends_nothing`,
+  value outside the schema (an explicit `null`, ints in the list, `None` in
+  the list, a bare number, an object, a JSON-object string) is refused at the
+  boundary before the tool runs, and the published schema carries no null
+  branch; settled by `test_an_explicit_empty_selection_sends_nothing`,
   `test_an_omitted_selection_still_covers_every_matching_draft`,
   `test_a_string_that_is_not_a_json_array_of_strings_is_refused_and_sends_nothing`
   and `test_the_boundary_rejects_a_selection_outside_the_schema_before_the_tool_runs`.
@@ -152,6 +156,14 @@ Max files: 11
   itself passes against the shrunken baseline; settled by running that script
   locally under the gate's shape and pins, recorded in the PR body's
   mechanical verification.
+- The Resend route never receives the port's Gmail-side `mime_type`: the real
+  `EmailTool` translates each attachment into Resend's `{filename, content,
+  content_type}` shape, through the tool directly (Gmail unavailable) and
+  through the real composite-to-Resend route (`provider="resend"`), and omits
+  `content_type` when nothing was declared; settled by
+  `test_email_tool_translates_mime_type_into_resend_content_type`,
+  `test_composite_forced_resend_reaches_resend_with_content_type_not_mime_type`
+  and `test_resend_route_omits_content_type_when_nothing_was_declared`.
 - Affected surfaces: every Gmail-delivered attachment in the repo, not only
   invoices. Risk areas: a caller that depended on receiving octet-stream, a
   caller passing a malformed `mime_type` (none exists in the repo; the only
@@ -230,7 +242,10 @@ existing header validation, and raise `GmailSendInputError` /
 `definitely_not_sent` / `definitely_not_created`, and of the `GmailInvalidInput`
 marker. `CompositeEmailProvider.send` re-raises `GmailInvalidInput` before its
 generic outage fallback; `EmailTool._try_gmail_send` returns an
-`INVALID_PARAMETER` result on it instead of `None` (which means "fall back"). Both send paths call it in place of the
+`INVALID_PARAMETER` result on it instead of `None` (which means "fall back").
+On the Resend path, `EmailTool._resend_attachment` maps the port's
+`mime_type` to Resend's `content_type` and drops nothing else, so a Gmail
+fallback never forwards a property Resend does not define. Both send paths call it in place of the
 hardcoded constructor and convert that `ValueError` into `GmailSendError`
 (`definitely_not_sent=True`) or `GmailDraftCreateError`
 (`definitely_not_created=True`), mirroring how invalid extra headers are
@@ -296,14 +311,14 @@ beyond the tests' own dropped schema.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 12 |
-| `atlas_brain/mcp/invoicing_server.py` | 36 |
+| `atlas_brain/mcp/invoicing_server.py` | 42 |
 | `atlas_brain/services/email_provider.py` | 6 |
-| `atlas_brain/tools/email.py` | 16 |
+| `atlas_brain/tools/email.py` | 33 |
 | `atlas_brain/tools/gmail.py` | 103 |
-| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 307 |
+| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 324 |
 | `tests/conftest.py` | 13 |
-| `tests/test_gmail_attachment_mime.py` | 634 |
-| `tests/test_invoicing_approve_and_send_selection.py` | 271 |
+| `tests/test_gmail_attachment_mime.py` | 714 |
+| `tests/test_invoicing_approve_and_send_selection.py` | 272 |
 | `tests/test_mcp_content_ops_marketer_verify.py` | 30 |
 | `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1434** |
+| **Total** | **1555** |

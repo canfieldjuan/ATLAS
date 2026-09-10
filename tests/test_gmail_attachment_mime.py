@@ -632,3 +632,83 @@ def test_no_declaration_and_octet_stream_declaration_defer_to_the_filename_acros
         assert _verdict(att, filename) == expected, (declared, family)
         for container, attachments in _containers(att, valid_neighbour):
             assert _list_verdict(attachments) == "admit", (declared, family, container)
+
+
+# --- the Resend route ---------------------------------------------------------------
+#
+# The port's attachment dict carries a Gmail-side "mime_type". When the composite
+# falls back to Resend (Gmail unavailable), or a caller forces Resend, the real
+# EmailTool must translate that into Resend's own "content_type" rather than
+# forward an unknown property. Only the Resend HTTP client is faked.
+
+
+class _NoCredentials:
+    def get_credentials(self, _name):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_email_tool_translates_mime_type_into_resend_content_type(monkeypatch):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(google_oauth, "get_google_token_store", lambda: _NoCredentials())
+    tool = _email_tool()
+
+    result = await tool.execute({
+        "action": "send",
+        "from_email": "billing@example.test",
+        "to": "ap@example.test",
+        "subject": "Invoice",
+        "body": "Body",
+        "attachments": [{"filename": "INV-2026-0456.pdf", "mime_type": "application/pdf", "content": PDF_B64}],
+    })
+
+    assert result.success is True and result.data["transport"] == "resend", result
+    (posted,) = tool._client.posted
+    assert posted["attachments"] == [
+        {"filename": "INV-2026-0456.pdf", "content": PDF_B64, "content_type": "application/pdf"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_composite_forced_resend_reaches_resend_with_content_type_not_mime_type(monkeypatch):
+    """The real CompositeEmailProvider -> ResendEmailProvider -> EmailTool route."""
+    from atlas_brain.services import google_oauth
+    from atlas_brain.services.email_provider import CompositeEmailProvider
+    from atlas_brain.tools import email as email_mod
+
+    monkeypatch.setattr(google_oauth, "get_google_token_store", lambda: _NoCredentials())
+    tool = _email_tool()
+    previous = email_mod.email_tool
+    email_mod.email_tool = tool  # ResendEmailProvider re-imports the module attribute
+    try:
+        result = await CompositeEmailProvider().send(
+            to=["ap@example.test"],
+            subject="Invoice",
+            body="Body",
+            from_email="billing@example.test",
+            provider="resend",
+            attachments=[{"filename": "INV-2026-0456.pdf", "mime_type": "application/pdf", "content": PDF_B64}],
+        )
+    finally:
+        email_mod.email_tool = previous
+
+    assert result["transport"] == "resend"
+    (posted,) = tool._client.posted
+    assert "mime_type" not in posted["attachments"][0]
+    assert posted["attachments"][0]["content_type"] == "application/pdf"
+
+
+@pytest.mark.asyncio
+async def test_resend_route_omits_content_type_when_nothing_was_declared(monkeypatch):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(google_oauth, "get_google_token_store", lambda: _NoCredentials())
+    tool = _email_tool()
+    await tool.execute({
+        "action": "send", "from_email": "billing@example.test", "to": "ap@example.test",
+        "subject": "Report", "body": "Body",
+        "attachments": [{"filename": "report.bin", "content": PDF_B64}],
+    })
+    (posted,) = tool._client.posted
+    assert posted["attachments"] == [{"filename": "report.bin", "content": PDF_B64}]

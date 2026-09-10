@@ -148,6 +148,7 @@ async def test_the_published_tool_schema_accepts_a_list_or_a_json_string_and_an_
     assert json.dumps({"type": "string"}, sort_keys=True) in branches
     assert json.dumps({"type": "array", "items": {"type": "string"}}, sort_keys=True) in branches
     assert "invoice_ids" not in tool.inputSchema.get("required", [])
+    assert json.dumps({"type": "null"}, sort_keys=True) not in branches, "an explicit null must not be admitted"
     assert "note" in properties and "note" not in tool.inputSchema.get("required", [])
     assert json.dumps({"type": "string"}, sort_keys=True) in {
         json.dumps(b, sort_keys=True) for b in properties["note"]["anyOf"]
@@ -216,8 +217,8 @@ async def test_a_string_that_is_not_a_json_array_of_strings_is_refused_and_sends
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "bad",
-    [[1, 2], ["INV-2026-0456", None], 42, {"a": 1}, '{"a": 1}'],
-    ids=["list-of-ints", "list-with-none", "bare-number", "object", "json-object-string"],
+    [None, [1, 2], ["INV-2026-0456", None], 42, {"a": 1}, '{"a": 1}'],
+    ids=["explicit-null", "list-of-ints", "list-with-none", "bare-number", "object", "json-object-string"],
 )
 async def test_the_boundary_rejects_a_selection_outside_the_schema_before_the_tool_runs(ledger, bad):
     # FastMCP pre-parses a string argument that decodes to a JSON object or array
