@@ -30,11 +30,11 @@ This is a delivery-correctness defect in the transport, not a document defect.
   invoice. Because the explicit value is caller input that lands in a raw MIME
   header, it is admitted only when it is one legal `type/subtype` pair; anything
   else refuses the send before any request, the same way this transport already
-  treats caller-supplied headers. That refusal has to happen at the email port,
-  before a provider is chosen: the composite provider and the email tool treat
-  any exception from the Gmail attempt as an outage and fall back to Resend
-  with the same attachment, so a refusal raised only inside the transport
-  would not hold through the production entrypoints.
+  treats caller-supplied headers. The composite provider and the email tool
+  caught every exception from the Gmail attempt as an outage and retried
+  through Resend with the same input; that fallback is the defect that would
+  have swallowed the refusal, so the refusal is classified once at its source
+  (a `GmailInvalidInput` error) and the fallback paths do not fall back on it.
 - Must not change: OAuth handling, the send/draft request shapes, header
   validation and the protected-header allowlist, retry and ambiguous-status
   handling, or the body text of any message that does not opt into a note.
@@ -48,8 +48,8 @@ Max files: 8
 1. Derive the attachment MIME type in both Gmail send paths instead of
    hardcoding octet-stream, admitting a declared type only when it is one legal
    pair, treating an explicit `application/octet-stream` as no declaration, and
-   refusing a malformed declaration at the email port (composite provider and
-   email tool) before any provider is chosen, so it can never fall back to
+   raising a distinct input error that the composite provider and the email
+   tool never fall back from, so a refused input can never be retried through
    Resend.
 2. Declare `application/pdf` explicitly on the invoice attachment, so the
    correct type does not depend on extension inference alone.
@@ -84,13 +84,13 @@ Max files: 8
   `test_send_refuses_a_malformed_declaration_before_any_request` and
   `test_create_draft_refuses_a_malformed_declaration_before_any_request`.
 - The refusal holds through the production entrypoints: the real
-  `CompositeEmailProvider.send` raises before choosing a provider (also with
-  `provider="resend"` forced) and the real `EmailTool` returns
-  `INVALID_PARAMETER`, in both cases with no request to the Gmail edge and no
-  fallback to Resend, while a well-declared PDF still reaches Gmail's raw
-  message through both; settled by
+  `CompositeEmailProvider.send` re-raises the Gmail input error instead of
+  falling back, the real `EmailTool` returns `INVALID_PARAMETER`, in both
+  cases with no request to the Gmail edge and no fallback to Resend, a forced
+  Resend send still goes only to Resend, and a well-declared PDF still reaches
+  Gmail's raw message through both; settled by
   `test_composite_provider_refuses_a_malformed_declaration_before_choosing_a_provider`,
-  `test_composite_provider_refuses_a_malformed_declaration_even_when_resend_is_forced`,
+  `test_composite_provider_forced_resend_still_goes_to_resend_only`,
   `test_composite_provider_delivers_a_declared_pdf_through_the_real_gmail_transport`,
   `test_email_tool_refuses_a_malformed_declaration_without_trying_either_transport`
   and `test_email_tool_delivers_a_declared_pdf_through_the_real_gmail_transport`.
@@ -132,10 +132,13 @@ Max files: 8
 ### Boundary-change enumeration and closure declaration
 
 - Decision seam: `_attachment_type` is the only place an attachment's declared
-  type is chosen; both send paths call it, and `validate_attachment_types`
-  runs the same recognizer at the email port -- `CompositeEmailProvider.send`
-  before provider selection and `EmailTool` before its Gmail attempt -- so a
-  refusal is never an exception that a fallback path can swallow.
+  type is chosen; `validate_attachment_types` runs it over the whole list once
+  at the top of `send` and `create_draft`. A refusal is raised as
+  `GmailSendInputError` / `GmailDraftInputError` (both `GmailInvalidInput`),
+  the same class as invalid caller headers, and the two fallback paths
+  (`CompositeEmailProvider.send`, `EmailTool._try_gmail_send`) re-raise or
+  return a failed result on that class instead of retrying through Resend.
+  There is one decision point and one classification; no layer re-validates.
 - Inputs are OPEN: caller-supplied `mime_type` and caller-supplied filenames.
   The safety decision is allowlist-shaped and CLOSED: a non-empty declaration
   is admitted only on `fullmatch` of the RFC 6838 restricted-name grammar
@@ -187,12 +190,14 @@ MIME configuration for the extensions this repo sends.
 `_attachment_type` takes the attachment mapping and its filename and returns a
 `(maintype, subtype)` pair for `MIMEBase`, raising `ValueError` for a
 declaration outside the pair grammar and treating an explicit
-`application/octet-stream` as no declaration. `validate_attachment_types`
-runs it over a whole attachment list and is called by
-`CompositeEmailProvider.send` before any provider is selected and by
-`EmailTool` before its Gmail attempt, so a caller error surfaces as a
-`ValueError` / `INVALID_PARAMETER` result rather than as a Gmail failure that
-the Resend fallback would retry. Both send paths call it in place of the
+`application/octet-stream` as no declaration. `send` and `create_draft` run
+`validate_attachment_types` over the whole list up front, next to the
+existing header validation, and raise `GmailSendInputError` /
+`GmailDraftInputError` -- subclasses of the existing errors carrying
+`definitely_not_sent` / `definitely_not_created`, and of the `GmailInvalidInput`
+marker. `CompositeEmailProvider.send` re-raises `GmailInvalidInput` before its
+generic outage fallback; `EmailTool._try_gmail_send` returns an
+`INVALID_PARAMETER` result on it instead of `None` (which means "fall back"). Both send paths call it in place of the
 hardcoded constructor and convert that `ValueError` into `GmailSendError`
 (`definitely_not_sent=True`) or `GmailDraftCreateError`
 (`definitely_not_created=True`), mirroring how invalid extra headers are
@@ -231,10 +236,10 @@ failure is parked rather than changed speculatively.
 Parked hardening: the Resend path's attachment typing was not inspected as
 part of this diff; `send_invoice`'s inline-HTML path renders a tax row with a
 hardcoded `Tax:` label while `invoice_pdf.py` honors `metadata.tax_label`; and
-the same fallback-after-refusal shape exists, pre-existing and untouched here,
-for caller-supplied `headers` (`_extra_headers` raises inside the transport and
-the composite falls back to Resend). All three are recorded here rather than
-folded in.
+`GmailEmailProvider.send` does not forward caller `headers`, so a composite
+caller passing them gets a `TypeError` that the generic fallback still retries
+through Resend (headers are a direct-transport feature today). All three are
+recorded here rather than folded in.
 
 ## Verification
 
@@ -258,11 +263,11 @@ beyond the tests' own dropped schema.
 | File | LOC |
 |---|---:|
 | `plans/PR-EOM-Invoice-Attachment-MIME.md` | 200 |
-| `atlas_brain/tools/gmail.py` | 75 |
-| `atlas_brain/services/email_provider.py` | 8 |
-| `atlas_brain/tools/email.py` | 14 |
+| `atlas_brain/tools/gmail.py` | 98 |
+| `atlas_brain/services/email_provider.py` | 6 |
+| `atlas_brain/tools/email.py` | 16 |
 | `atlas_brain/mcp/invoicing_server.py` | 36 |
 | `tests/test_gmail_attachment_mime.py` | 573 |
 | `tests/test_invoicing_approve_and_send_selection.py` | 230 |
 | `.github/workflows/atlas_invoicing_checks.yml` | 14 |
-| **Total** | **1250** |
+| **Total** | **1276** |
