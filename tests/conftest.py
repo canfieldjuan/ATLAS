@@ -136,7 +136,13 @@ def _restore_config_module_globals():
     the code under test. This lives here, not in the reloading modules, so
     every current and future reloader is covered by one enforcement point.
     """
-    import atlas_brain.config as config_mod
+    try:
+        import atlas_brain.config as config_mod
+    except ModuleNotFoundError:
+        # Dependency-free jobs (e.g. the contact-write-boundary self-check)
+        # run a few pure tests without the app's requirements installed.
+        yield
+        return
 
     before = dict(vars(config_mod))
     yield

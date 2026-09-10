@@ -99,14 +99,17 @@ Max files: 12
 
 ### Review Contract
 
-- A `.pdf` attachment is never delivered as `application/octet-stream`, not
-  even when a caller declares that generic type explicitly; settled by
+- A `.pdf` attachment is never delivered as `application/octet-stream` when
+  nothing is declared or the generic type is declared explicitly; the one
+  exception is a declared structured major type (`message/*`, `multipart/*`),
+  which this leaf builder cannot represent and which keeps octet-stream (the
+  next bullet but one); settled by
   `test_send_infers_the_pdf_from_the_filename_when_nothing_is_declared`
   (decodes the raw message posted to Gmail),
   `test_pdf_extension_is_inferred_when_no_type_is_declared` and
   `test_an_explicit_octet_stream_declaration_does_not_defeat_pdf_inference`.
-- An explicit `mime_type` overrides a misleading extension and reaches the raw
-  message on both paths; settled by
+- An explicit, representable (leaf) `mime_type` overrides a misleading
+  extension and reaches the raw message on both paths; settled by
   `test_explicit_mime_type_wins_over_the_extension`,
   `test_send_declares_the_pdf_in_the_raw_message_gmail_receives` and
   `test_create_draft_declares_the_pdf_in_the_raw_message_gmail_receives`.
@@ -185,7 +188,16 @@ Max files: 12
   `test_a_structured_major_type_keeps_octet_stream_because_a_leaf_part_cannot_carry_it`
   and `test_send_delivers_an_eml_attachment_whose_bytes_come_back_intact`
   (decodes the posted raw message and compares the payload bytes).
-- Reviewer rules triggered: R1, R2, R3, R5, R8, R10, R13, R14.
+- An explicit selection is bounded and deduplicated on the resolved invoice,
+  not the reference string: more than `APPROVE_AND_SEND_MAX_SELECTION` (200,
+  the omitted-argument path's own limit) references are refused before any
+  repository lookup, and the same invoice named by number and by UUID is sent
+  once; settled through `mcp.call_tool` by
+  `test_a_selection_over_the_cap_is_refused_before_any_lookup` and
+  `test_the_same_invoice_named_by_number_and_by_uuid_is_sent_once`.
+- Reviewer rules triggered: R1, R2, R3, R5, R7, R8, R10, R13, R14.
+  - R7 (resource bounds): the newly admitted array is capped at 200 entries
+    before the first lookup, matching the existing search limit.
   - R3 (security, input trust): the declared `mime_type` is caller input that
     lands in a raw MIME header; it is admitted only on recognition of the
     pair grammar and refused otherwise, with CR/LF/NUL injection in the
@@ -358,14 +370,14 @@ beyond the tests' own dropped schema.
 | File | LOC |
 |---|---:|
 | `.github/workflows/atlas_invoicing_checks.yml` | 12 |
-| `atlas_brain/mcp/invoicing_server.py` | 42 |
+| `atlas_brain/mcp/invoicing_server.py` | 78 |
 | `atlas_brain/services/email_provider.py` | 6 |
 | `atlas_brain/tools/email.py` | 33 |
 | `atlas_brain/tools/gmail.py` | 110 |
-| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 373 |
-| `tests/conftest.py` | 34 |
+| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 383 |
+| `tests/conftest.py` | 40 |
 | `tests/test_gmail_attachment_mime.py` | 745 |
-| `tests/test_invoicing_approve_and_send_selection.py` | 272 |
+| `tests/test_invoicing_approve_and_send_selection.py` | 300 |
 | `tests/test_mcp_content_ops_marketer_verify.py` | 30 |
 | `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1663** |
+| **Total** | **1743** |

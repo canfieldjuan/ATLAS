@@ -1177,6 +1177,12 @@ async def list_pending_drafts(
 # Tool: approve_and_send
 # ---------------------------------------------------------------------------
 
+# The largest explicit selection one call will resolve; the omitted-argument
+# path already stops at this many drafts, so a selection cannot do more work
+# than "every draft" does. Checked before any repository lookup.
+APPROVE_AND_SEND_MAX_SELECTION = 200
+
+
 @mcp.tool()
 async def approve_and_send(
     # Deliberately not Optional: the published schema then has no null branch,
@@ -1193,7 +1199,9 @@ async def approve_and_send(
     invoice_ids: a list of invoice numbers or UUIDs, or a JSON array string
                  (e.g. ["INV-2026-0014"] or '["INV-2026-0014"]').
                  If omitted, processes ALL invoices matching status_filter;
-                 an explicit null is rejected.
+                 an explicit null is rejected. At most 200 references per
+                 call; the same invoice given twice (by number and by UUID)
+                 is sent once.
     status_filter: only process invoices with this status (default: draft)
     dry_run: if true, list what would be sent without actually sending
     note: optional line placed above the standard body, for one-off context
@@ -1223,22 +1231,38 @@ async def approve_and_send(
             })
         if not ids:
             return json.dumps({"success": True, "message": "No invoices selected", "processed": 0})
+        if len(ids) > APPROVE_AND_SEND_MAX_SELECTION:
+            return json.dumps({
+                "success": False,
+                "error": (
+                    f"invoice_ids has {len(ids)} entries; at most "
+                    f"{APPROVE_AND_SEND_MAX_SELECTION} per call"
+                ),
+            })
 
-        seen_ids: set[str] = set()
+        seen_refs: set[str] = set()
+        seen_invoice_ids: set[str] = set()
         for inv_ref in ids:
             inv_ref = str(inv_ref).strip()
-            if inv_ref in seen_ids:
+            if inv_ref in seen_refs:
                 logger.warning("approve_and_send: duplicate invoice %s, skipping", inv_ref)
                 continue
-            seen_ids.add(inv_ref)
+            seen_refs.add(inv_ref)
             if _is_uuid(inv_ref):
                 inv = await repo.get_by_id(_uuid.UUID(inv_ref))
             else:
                 inv = await repo.get_by_number(inv_ref)
-            if inv:
-                invoices_to_send.append(inv)
-            else:
+            if not inv:
                 logger.warning("approve_and_send: invoice %s not found, skipping", inv_ref)
+                continue
+            # The same invoice can be named twice through different valid
+            # references (its number and its UUID); send it once.
+            resolved_id = str(inv["id"])
+            if resolved_id in seen_invoice_ids:
+                logger.warning("approve_and_send: %s resolves to an already selected invoice, skipping", inv_ref)
+                continue
+            seen_invoice_ids.add(resolved_id)
+            invoices_to_send.append(inv)
     else:
         invoices_to_send = await repo.search(status=status_filter, limit=200)
 

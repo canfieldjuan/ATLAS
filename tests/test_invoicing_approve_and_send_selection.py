@@ -232,6 +232,34 @@ async def test_the_boundary_rejects_a_selection_outside_the_schema_before_the_to
         assert await _status(ledger["repo"], inv) == "draft"
 
 
+@pytest.mark.asyncio
+async def test_the_same_invoice_named_by_number_and_by_uuid_is_sent_once(ledger):
+    first, second = ledger["invoices"]
+    result = await _call({"invoice_ids": [first["invoice_number"], str(first["id"])], "dry_run": False})
+
+    assert result["sent"] == 1 and result["processed"] == 1
+    assert len(ledger["provider"].sent) == 1
+    assert await _status(ledger["repo"], first) == "sent"
+    assert await _status(ledger["repo"], second) == "draft"
+
+
+@pytest.mark.asyncio
+async def test_a_selection_over_the_cap_is_refused_before_any_lookup(ledger):
+    from atlas_brain.mcp.invoicing_server import APPROVE_AND_SEND_MAX_SELECTION
+
+    number = ledger["invoices"][0]["invoice_number"]
+    too_many = [number] + [f"INV-0000-{n:06d}" for n in range(APPROVE_AND_SEND_MAX_SELECTION)]
+    result = await _call({"invoice_ids": too_many, "dry_run": False})
+
+    assert result["success"] is False and "at most" in result["error"]
+    assert ledger["provider"].sent == []
+    assert await _status(ledger["repo"], ledger["invoices"][0]) == "draft"
+
+    exactly = [number] + [f"INV-0000-{n:06d}" for n in range(APPROVE_AND_SEND_MAX_SELECTION - 1)]
+    result = await _call({"invoice_ids": exactly, "dry_run": True})
+    assert result["processed"] == 1
+
+
 # --- the body --------------------------------------------------------------------------
 
 
