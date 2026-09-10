@@ -80,13 +80,10 @@ def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
 
 
 def validate_attachment_types(attachments: Any) -> None:
-    """Refuse a malformed attachment declaration before any provider is chosen.
+    """Refuse a malformed attachment declaration before any part is built.
 
-    The transport refuses it too, but a refusal raised inside one transport is
-    an exception the composite provider treats as an outage and falls back
-    from -- to Resend, with the same attachment. Validation at the port, before
-    provider selection, is what makes "refused before any request" true
-    through the production entrypoints.
+    Called once by send() and create_draft() over the whole list, so a bad
+    declaration anywhere in it stops the message before construction starts.
     """
     if not attachments:
         return
@@ -117,12 +114,35 @@ class GmailDraftCreateError(RuntimeError):
         self.definitely_not_created = definitely_not_created
 
 
+class GmailInvalidInput(Exception):
+    """Marker: the caller's input was refused; nothing was attempted.
+
+    Invalid headers or attachment declarations are the caller's error, not a
+    Gmail outage. Fallback paths (the composite provider, the email tool) must
+    not retry them through another provider with the same input.
+    """
+
+
 class GmailSendError(RuntimeError):
     """A Gmail send failed with known or uncertain acceptance state."""
 
     def __init__(self, message: str, *, definitely_not_sent: bool) -> None:
         super().__init__(message)
         self.definitely_not_sent = definitely_not_sent
+
+
+class GmailSendInputError(GmailSendError, GmailInvalidInput):
+    """send() refused the caller's input before any request."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, definitely_not_sent=True)
+
+
+class GmailDraftInputError(GmailDraftCreateError, GmailInvalidInput):
+    """create_draft() refused the caller's input before any request."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, definitely_not_created=True)
 
 
 def _is_definitely_not_sent_http_status(status_code: int) -> bool:
@@ -300,9 +320,11 @@ class GmailTransport:
         try:
             validated_headers = _extra_headers(headers)
         except ValueError as exc:
-            raise GmailSendError(
-                "Gmail send headers are invalid", definitely_not_sent=True
-            ) from exc
+            raise GmailSendInputError("Gmail send headers are invalid") from exc
+        try:
+            validate_attachment_types(attachments)
+        except ValueError as exc:
+            raise GmailSendInputError("Gmail attachment mime_type is invalid") from exc
 
         # Build MIME message
         if attachments:
@@ -341,12 +363,7 @@ class GmailTransport:
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
 
-                try:
-                    maintype, subtype = _attachment_type(att, filename)
-                except ValueError as exc:
-                    raise GmailSendError(
-                        "Gmail attachment mime_type is invalid", definitely_not_sent=True
-                    ) from exc
+                maintype, subtype = _attachment_type(att, filename)
                 part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header(
@@ -441,9 +458,11 @@ class GmailTransport:
         try:
             validated_headers = _extra_headers(headers)
         except ValueError as exc:
-            raise GmailDraftCreateError(
-                "Gmail draft headers are invalid", definitely_not_created=True
-            ) from exc
+            raise GmailDraftInputError("Gmail draft headers are invalid") from exc
+        try:
+            validate_attachment_types(attachments)
+        except ValueError as exc:
+            raise GmailDraftInputError("Gmail attachment mime_type is invalid") from exc
 
         if attachments:
             msg = MIMEMultipart("mixed")
@@ -472,12 +491,7 @@ class GmailTransport:
                 filename = att.get("filename", "attachment")
                 content_b64 = att.get("content", "")
                 content_bytes = base64.b64decode(content_b64)
-                try:
-                    maintype, subtype = _attachment_type(att, filename)
-                except ValueError as exc:
-                    raise GmailDraftCreateError(
-                        "Gmail attachment mime_type is invalid", definitely_not_created=True
-                    ) from exc
+                maintype, subtype = _attachment_type(att, filename)
                 part = MIMEBase(maintype, subtype)
                 part.set_payload(content_bytes)
                 part.add_header("Content-Disposition", "attachment", filename=filename)

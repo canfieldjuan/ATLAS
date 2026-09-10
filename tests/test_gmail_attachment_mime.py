@@ -26,6 +26,7 @@ import pytest
 from atlas_brain.tools.gmail import (
     GmailDraftCreateError,
     GmailSendError,
+    GmailSendInputError,
     GmailTransport,
     _attachment_type,
 )
@@ -243,12 +244,14 @@ async def test_create_draft_refuses_a_malformed_declaration_before_any_request(d
 
 # --- through the production entrypoints ------------------------------------------
 #
-# A refusal raised inside the Gmail transport is an exception the composite
-# provider and the email tool treat as an outage and fall back from, to Resend,
-# with the same attachment. These tests drive the real CompositeEmailProvider
-# and the real EmailTool with fakes only at the two external edges (the Gmail
-# HTTP transport and the Resend HTTP client) and prove the refusal happens
-# before either edge is touched.
+# The composite provider and the email tool fall back to Resend when Gmail
+# fails. A refusal of the caller's input is not a Gmail failure: Resend would be
+# handed the same input. These tests drive the real CompositeEmailProvider and
+# the real EmailTool with fakes only at the two external edges (the Gmail HTTP
+# transport and the Resend HTTP client) and prove that a refused declaration
+# never reaches either edge. (Invalid caller headers are the same class and
+# raise the same input error at the transport; they are a direct-transport
+# feature the composite does not forward, so they are proven there.)
 
 
 class _RecordingResend:
@@ -299,7 +302,7 @@ async def test_composite_provider_refuses_a_malformed_declaration_before_choosin
     resend = _RecordingResend()
     composite._resend = resend
 
-    with pytest.raises(ValueError, match="mime_type is invalid"):
+    with pytest.raises(GmailSendInputError, match="mime_type is invalid") as excinfo:
         await composite.send(
             to=["ap@example.test"],
             subject="Invoice",
@@ -307,28 +310,31 @@ async def test_composite_provider_refuses_a_malformed_declaration_before_choosin
             attachments=[{"filename": "INV.pdf", "mime_type": "application/pdf\nX: y", "content": PDF_B64}],
         )
 
+    assert excinfo.value.definitely_not_sent is True
     assert gmail_edge == [], "Gmail must not have been asked"
     assert resend.calls == [], "a refused declaration must never fall back to Resend"
 
 
 @pytest.mark.asyncio
-async def test_composite_provider_refuses_a_malformed_declaration_even_when_resend_is_forced(gmail_edge):
+async def test_composite_provider_forced_resend_still_goes_to_resend_only(gmail_edge):
     from atlas_brain.services.email_provider import CompositeEmailProvider
 
     composite = CompositeEmailProvider()
     resend = _RecordingResend()
     composite._resend = resend
 
-    with pytest.raises(ValueError, match="mime_type is invalid"):
-        await composite.send(
-            to=["ap@example.test"],
-            subject="Invoice",
-            body="Body",
-            provider="resend",
-            attachments=[{"filename": "INV.pdf", "mime_type": "text/plain/extra", "content": PDF_B64}],
-        )
+    # A forced Resend send never touches Gmail; Resend receives the attachment
+    # as given (its own API validates it). What this slice guarantees is that
+    # a Gmail refusal is never *converted* into a Resend send.
+    await composite.send(
+        to=["ap@example.test"],
+        subject="Invoice",
+        body="Body",
+        provider="resend",
+        attachments=[{"filename": "INV.pdf", "mime_type": "application/pdf", "content": PDF_B64}],
+    )
 
-    assert resend.calls == [] and gmail_edge == []
+    assert len(resend.calls) == 1 and gmail_edge == []
 
 
 @pytest.mark.asyncio

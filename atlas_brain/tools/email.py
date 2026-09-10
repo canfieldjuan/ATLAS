@@ -301,19 +301,6 @@ class EmailTool:
 
         if loaded_attachments:
             logger.info("Adding %d attachment(s) to email", len(loaded_attachments))
-            # Refuse a malformed declaration before either transport is tried;
-            # a refusal inside the Gmail attempt would otherwise fall back to
-            # Resend with the same attachment.
-            from .gmail import validate_attachment_types
-
-            try:
-                validate_attachment_types(loaded_attachments)
-            except ValueError as exc:
-                return ToolResult(
-                    success=False,
-                    error="INVALID_PARAMETER",
-                    message=f"Attachment was not sent: {exc}",
-                )
 
         # Try Gmail first when configured, unless the caller forced Resend
         # (e.g. a transactional send that must originate from the verified
@@ -409,10 +396,16 @@ class EmailTool:
         params: dict[str, Any],
         attachments: list[dict[str, Any]],
     ) -> ToolResult | None:
-        """Attempt to send via Gmail. Returns None to fall back to Resend."""
+        """Attempt to send via Gmail. Returns None to fall back to Resend.
+
+        A refusal of the caller's input is returned as a failed result, not
+        None: Resend would be handed the same input, so there is nothing to
+        fall back to.
+        """
+        from .gmail import GmailInvalidInput, get_gmail_transport
+
         try:
             from ..services.google_oauth import get_google_token_store
-            from .gmail import get_gmail_transport
 
             store = get_google_token_store()
             if not store.get_credentials("gmail"):
@@ -448,6 +441,12 @@ class EmailTool:
                 success=True,
                 data=response_data,
                 message=f"Email sent to {', '.join(to_list)}",
+            )
+        except GmailInvalidInput as e:
+            return ToolResult(
+                success=False,
+                error="INVALID_PARAMETER",
+                message=f"Email was not sent: {e}",
             )
         except Exception as e:
             logger.warning("Gmail send failed, falling back to Resend: %s", e)
