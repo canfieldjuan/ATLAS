@@ -54,6 +54,15 @@ def test_unresolvable_filename_falls_back_to_octet_stream(filename):
     assert _attachment_type({}, filename) == ("application", "octet-stream")
 
 
+@pytest.mark.parametrize(
+    "att,filename",
+    [({}, "mail.eml"), ({}, "digest.mht"), ({"mime_type": "message/rfc822"}, "x.bin"),
+     ({"mime_type": "multipart/mixed"}, "x.bin"), ({"mime_type": "Message/Partial"}, "x.pdf")],
+)
+def test_a_structured_major_type_keeps_octet_stream_because_a_leaf_part_cannot_carry_it(att, filename):
+    assert _attachment_type(att, filename) == ("application", "octet-stream")
+
+
 @pytest.mark.parametrize("filename", ["report.txt.gz", "image.svgz", "data.csv.bz2", "notes.txt.Z", "invoice.pdf.gz"])
 def test_an_encoded_suffix_keeps_octet_stream_instead_of_the_inner_type(filename):
     """guess_type reports the inner type plus an encoding; the bytes are the compressed stream."""
@@ -257,6 +266,25 @@ async def test_create_draft_refuses_a_malformed_declaration_before_decoding_malf
     finally:
         await transport.close()
     assert excinfo.value.definitely_not_created is True and requests == []
+
+
+@pytest.mark.asyncio
+async def test_send_delivers_an_eml_attachment_whose_bytes_come_back_intact():
+    """message/rfc822 would make the parser nest a message; octet-stream keeps the bytes an attachment."""
+    requests: list[httpx.Request] = []
+    transport = _transport(requests, {"id": "m-1", "threadId": "t-1"})
+    eml = b"From: a@example.test\r\nSubject: inner\r\n\r\nhello\r\n"
+    try:
+        await transport.send(
+            to=["ap@example.test"], subject="Forwarded", body="Body",
+            attachments=[{"filename": "mail.eml", "content": base64.b64encode(eml).decode("ascii")}],
+        )
+    finally:
+        await transport.close()
+    part = _attachment_part(json.loads(requests[0].content)["raw"])
+    assert part.get_content_type() == "application/octet-stream"
+    assert part.get_filename() == "mail.eml"
+    assert part.get_payload(decode=True) == eml
 
 
 @pytest.mark.asyncio
@@ -525,6 +553,7 @@ def _families():
     yield "declared-over-pdf-name", "invoice.pdf"   # a legal declaration beats the extension
     yield "declared-over-png-name", "invoice.png"
     yield "declared-over-encoded-name", "report.txt.gz"  # inference would be octet-stream: encoded bytes
+    yield "declared-over-eml-name", "mail.eml"           # inference would be octet-stream: structured type
 
 
 def _containers(att, valid_neighbour):
@@ -564,6 +593,8 @@ def _expected_verdict(declared, filename):
     pair = (maintype.lower(), subtype.lower())
     if pair == ("application", "octet-stream"):
         return "admit", inferred
+    if pair[0] in ("message", "multipart"):
+        return "admit", ("application", "octet-stream")
     return "admit", pair
 
 

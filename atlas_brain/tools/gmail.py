@@ -47,6 +47,11 @@ _PROTECTED_HEADER_NAMES = frozenset(
 # is not a media type and must never reach a Content-Type header.
 _MIME_NAME = r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,126}"
 _MIME_TYPE = re.compile(rf"({_MIME_NAME})/({_MIME_NAME})")
+# This builder emits leaf parts: a MIMEBase with a base64 payload. A structured
+# major type (message/*, multipart/*) declares a container the email parser
+# will try to parse, so the bytes would no longer come back as an attachment.
+# Such types are carried as the generic default, which the previous code sent.
+_STRUCTURED_MAJOR_TYPES = frozenset({"message", "multipart"})
 
 
 def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
@@ -67,6 +72,8 @@ def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
         if match is None:
             raise ValueError("Gmail attachment mime_type is invalid")
         maintype, subtype = match.group(1).lower(), match.group(2).lower()
+        if maintype in _STRUCTURED_MAJOR_TYPES:
+            return "application", "octet-stream"
         # An explicit octet-stream carries no information: it is the blanket
         # default this resolution replaces, so it cannot defeat what the
         # filename says. If nothing resolves it is the fallback anyway.
@@ -79,7 +86,7 @@ def _attachment_type(att: Mapping[str, Any], filename: str) -> tuple[str, str]:
     if encoding is not None:
         return "application", "octet-stream"
     match = _MIME_TYPE.fullmatch(guessed) if guessed else None
-    if match is None:
+    if match is None or match.group(1).lower() in _STRUCTURED_MAJOR_TYPES:
         return "application", "octet-stream"
     return match.group(1).lower(), match.group(2).lower()
 

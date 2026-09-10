@@ -169,7 +169,45 @@ Max files: 11
   caller passing a malformed `mime_type` (none exists in the repo; the only
   caller passes the constant `application/pdf`), and filename extensions that
   resolve to an unexpected type.
-- Reviewer rules triggered: R1, R2, R5, R10.
+- A structured major type (`message/*`, `multipart/*`), declared or inferred
+  (`.eml`, `.mht`), keeps `application/octet-stream`, because this builder emits
+  leaf `MIMEBase` parts and a container type would make the recipient's parser
+  nest a message instead of returning the bytes; settled by
+  `test_a_structured_major_type_keeps_octet_stream_because_a_leaf_part_cannot_carry_it`
+  and `test_send_delivers_an_eml_attachment_whose_bytes_come_back_intact`
+  (decodes the posted raw message and compares the payload bytes).
+- Reviewer rules triggered: R1, R2, R3, R5, R8, R10, R13, R14.
+  - R3 (security, input trust): the declared `mime_type` is caller input that
+    lands in a raw MIME header; it is admitted only on recognition of the
+    pair grammar and refused otherwise, with CR/LF/NUL injection in the
+    refused set, before any request and before any base64 decoding; the
+    refusal is classified so no fallback retries it through Resend. The MCP
+    `invoice_ids` argument is validated at the FastMCP boundary (no null
+    branch, list of strings only). No secret, token, or credential path
+    changes.
+  - R8 (idempotency, double-send): `approve_and_send` still sends one message
+    per draft and marks it `sent` in the same iteration, so a retry of the
+    tool call finds `status != draft` and skips; an empty or refused
+    selection performs no write; the Gmail-then-Resend fallback cannot send
+    the same message through both providers on a refused input because the
+    refusal is not eligible for fallback, and a Gmail outage still falls
+    back exactly once as before. Settled by
+    `test_both_selection_forms_send_exactly_the_named_invoice_as_a_declared_pdf`
+    (the untouched draft stays `draft`) and the composite tests.
+  - R13 (class, not example): every Codex example is covered by a generated
+    class, not a fixture: the grammar-derived closure tests generate legal
+    names and fifteen mutations across families and containers; the
+    encoded-suffix and structured-major rules are tested on suffixes and
+    types the review did not name (`.svgz`, `.bz2`, `.Z`, `.mht`,
+    `Message/Partial`, `multipart/mixed`).
+  - R14 (boundary probe, both directions): admitted side, generated legal
+    pairs and every inferred family; refused side, generated mutations
+    including empty type, empty subtype, over-length, non-string, and the
+    combined bad-declaration-plus-bad-base64 case; representation parity
+    across single, mixed-before, and mixed-after containers. The selection
+    guard is probed with `[]`, `"[]"`, `null`, ints, `None` in a list, a
+    bare number, an object, and a JSON-object string, plus the omitted case
+    that must still cover every draft.
 
 ### Boundary-change enumeration and closure declaration
 
@@ -314,11 +352,11 @@ beyond the tests' own dropped schema.
 | `atlas_brain/mcp/invoicing_server.py` | 42 |
 | `atlas_brain/services/email_provider.py` | 6 |
 | `atlas_brain/tools/email.py` | 33 |
-| `atlas_brain/tools/gmail.py` | 103 |
-| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 324 |
+| `atlas_brain/tools/gmail.py` | 110 |
+| `plans/PR-EOM-Invoice-Attachment-MIME.md` | 362 |
 | `tests/conftest.py` | 13 |
-| `tests/test_gmail_attachment_mime.py` | 714 |
+| `tests/test_gmail_attachment_mime.py` | 745 |
 | `tests/test_invoicing_approve_and_send_selection.py` | 272 |
 | `tests/test_mcp_content_ops_marketer_verify.py` | 30 |
 | `tests/unit_gate_baseline.txt` | 6 |
-| **Total** | **1555** |
+| **Total** | **1631** |
