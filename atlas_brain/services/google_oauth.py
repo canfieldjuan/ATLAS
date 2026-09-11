@@ -110,7 +110,21 @@ def resolve_token_file_path(token_file_path: str) -> Path:
     living outside the repo entirely; this function's job is only to honour
     absolute and `~` paths verbatim so that default works.
     """
-    path = Path(token_file_path).expanduser()
+    # A blank setting names no file. `Path("")` is `.`, which resolves to the
+    # repo ROOT DIRECTORY, so the service would try to read a directory. Blank
+    # falls back to the stable default here so callers always get a usable
+    # Path; whether a blank value is ACCEPTABLE is a separate question answered
+    # by `configured_token_path_problem()`, which fails closed for an operator
+    # who explicitly set it to empty.
+    #
+    # `.strip()` is used ONLY to detect blankness. A nonblank value is passed to
+    # `Path()` verbatim, because a POSIX filename may legitimately begin or end
+    # with whitespace and silently trimming it would redirect the configured
+    # path -- possibly onto a different account's credential.
+    raw = token_file_path if isinstance(token_file_path, str) else ""
+    if not raw.strip():
+        raw = DEFAULT_TOKEN_FILE
+    path = Path(raw).expanduser()
     if path.is_absolute():
         return path
     return _REPO_ROOT / path
@@ -127,6 +141,11 @@ def token_path_was_explicitly_configured() -> bool:
     supplied in `model_fields_set`, which is the actual provenance signal.
     """
     try:
+        # A set-but-BLANK value is still an explicit override. Reclassifying it
+        # as unconfigured would re-admit legacy discovery exactly when a secret
+        # mount or deployment substitution has failed, potentially loading a
+        # stale, unrelated Google account. Blank is handled as INVALID by
+        # `configured_token_path_problem()`, not as absent.
         return "google_token_file" in settings.tools.model_fields_set
     except Exception:  # pragma: no cover - defensive: never block auth on this
         return False
@@ -154,6 +173,42 @@ def describe_credential_remedy(creds: Optional["GoogleCredentials"], path: Path)
         "Re-run: python scripts/setup_google_oauth.py, then RESTART the "
         "service -- the credential is cached for the life of the process."
     )
+
+
+def configured_token_path_problem(token_file_path: str) -> Optional[str]:
+    """Return why the configured credential path is unusable, or None.
+
+    Two unusable shapes, both of which must FAIL CLOSED -- no credential at all
+    -- rather than silently resolving to something else. Loading the wrong
+    Google account is worse than loading none: a wrong account is a silent,
+    cross-tenant data problem, while no account is a loud outage.
+
+    1. EXPLICITLY SET BUT BLANK. This is what a failed secret mount or
+       deployment substitution looks like. Treating it as "unconfigured" would
+       re-admit legacy discovery precisely when the operator's intent is
+       unknown (Codex #2360 R3/R11).
+    2. RESOLVES TO AN EXISTING DIRECTORY. Checked on the filesystem rather than
+       by spelling, because `""`, `.`, `./`, `sub/..` and any absolute
+       directory are the same defect wearing different names (Codex #2360
+       R1/R2/R13). Enumerating spellings fixes examples; checking the type
+       fixes the class.
+    """
+    raw = token_file_path if isinstance(token_file_path, str) else ""
+    if not raw.strip() and token_path_was_explicitly_configured():
+        return (
+            "ATLAS_TOOLS_GOOGLE_TOKEN_FILE is set but EMPTY. Refusing to guess "
+            "a credential path: an empty override usually means a secret mount "
+            "or deployment substitution failed, and falling back could "
+            "authenticate as a different Google account. Set it to a real "
+            "path, or remove it entirely to use the default."
+        )
+    resolved = resolve_token_file_path(token_file_path)
+    if resolved.is_dir():
+        return (
+            f"the configured credential path resolves to a DIRECTORY "
+            f"({resolved}). A credential path must name a file."
+        )
+    return None
 
 
 def locate_token_file(token_file_path: str, *, explicit: bool | None = None) -> Path:
@@ -186,7 +241,10 @@ def locate_token_file(token_file_path: str, *, explicit: bool | None = None) -> 
         return primary
 
     for legacy in LEGACY_TOKEN_FILES:
-        if legacy == primary or not legacy.exists():
+        # `is_file()`, not `exists()`: a legacy candidate that is a DIRECTORY
+        # must never be SELECTED, or the path actually read differs from the
+        # path validated and the .env fallback re-opens (Codex #2360 R1/R3/R13).
+        if legacy == primary or not legacy.is_file():
             continue
         logger.warning(
             "Google token file found at the LEGACY in-repo path %s, not at the "
@@ -224,21 +282,73 @@ class GoogleTokenStore:
     """
 
     def __init__(self, token_file_path: str) -> None:
+        self._configured = token_file_path
         self._path = locate_token_file(token_file_path)
         self._data: dict = {}
         self._lock = threading.Lock()
         self._loaded = False
         self._file_present = False
 
+    def _current_path_problem(self) -> Optional[str]:
+        """Re-check validity on EVERY use, never from a constructor snapshot.
+
+        The store is a process-lifetime singleton but the filesystem is not
+        frozen: a secret-volume remount or an operator repair can replace the
+        target between construction and first use. Caching the verdict meant a
+        path that was merely absent at startup, and later became a DIRECTORY,
+        kept `_path_problem = None` -- `_load()` swallowed the
+        `IsADirectoryError`, `_data` emptied, and `get_credentials()` fell
+        through to the `.env` token, authenticating as a different account in
+        exactly the case the no-fallback invariant exists to prevent
+        (Codex #2360 R1/R3).
+
+        Cheap: one `stat` per credential request, against a network round trip.
+        """
+        problem = configured_token_path_problem(self._configured)
+        if problem is not None:
+            return problem
+        # Legacy discovery can make the SELECTED path differ from the
+        # configured one, so validating only the configured value leaves the
+        # path actually read unchecked.
+        if self._path.is_dir():
+            return (
+                f"the selected credential path resolves to a DIRECTORY "
+                f"({self._path}). A credential path must name a file."
+            )
+        return None
+
+
     @property
     def token_file_path(self) -> Path:
         """The resolved absolute path this store reads and writes."""
         return self._path
 
-    def _load(self) -> None:
-        """Load tokens from file if it exists."""
+    def _load(self) -> Optional[str]:
+        """Load tokens from file, refusing an unusable path.
+
+        THE single enforcement point. Validity used to be checked in each
+        public method, which is why the same defect kept reappearing through a
+        new door each review round: the path VALIDATED was not always the path
+        USED, and `persist_refresh_token` reached this method with no check at
+        all. Enforcing here means every caller -- present and future -- is
+        covered by construction rather than by remembering.
+
+        Returns the problem string when the path is unusable (caller must fail
+        closed), else None. Deliberately checked BEFORE the `_loaded` short
+        circuit, so a path that turns bad after a successful load is still
+        caught.
+        """
+        problem = self._current_path_problem()
+        if problem is not None:
+            # Never cache a bad state: the operator may repair the path, and a
+            # cached verdict would keep serving the failure after the fix.
+            self._data = {}
+            self._loaded = False
+            self._file_present = False
+            return problem
+
         if self._loaded:
-            return
+            return None
         if self._path.exists():
             try:
                 with open(self._path) as f:
@@ -253,19 +363,39 @@ class GoogleTokenStore:
             # cause of a Google auth failure in this deployment, and saying so
             # here is what distinguishes "the file is missing" from "Google
             # rejected the credential" -- two problems with opposite fixes.
-            logger.warning(
-                "Google token file not found at %s; falling back to .env "
-                "config fields. If Google auth fails, the .env fallback is "
-                "what is being used, not this file. The stable default is %s, "
-                "outside any git worktree. Legacy locations searched: %s. "
-                "RESTART the service after any fix: this store caches its "
-                "loaded state and the settings object has already captured the "
-                ".env values, so restoring the file or editing .env has no "
-                "effect on a running process.",
-                self._path,
-                DEFAULT_TOKEN_FILE,
-                ", ".join(str(p) for p in LEGACY_TOKEN_FILES) or "(none)",
-            )
+            # The remedy MUST match what this process will actually read.
+            # Under an explicit override, legacy discovery does not run and the
+            # stable default is irrelevant -- naming it would send the operator
+            # to a file the service ignores, prolonging the outage.
+            if token_path_was_explicitly_configured():
+                logger.warning(
+                    "Google token file not found at %s; falling back to .env "
+                    "config fields. If Google auth fails, the .env fallback is "
+                    "what is being used, not this file. This path is an "
+                    "EXPLICIT ATLAS_TOOLS_GOOGLE_TOKEN_FILE override, so "
+                    "legacy locations are deliberately NOT searched and the "
+                    "stable default is not consulted -- restore the credential "
+                    "at this exact path, or change the override. RESTART the "
+                    "service after any fix: this store caches its loaded state "
+                    "and the settings object has already captured the .env "
+                    "values, so restoring the file or editing .env has no "
+                    "effect on a running process.",
+                    self._path,
+                )
+            else:
+                logger.warning(
+                    "Google token file not found at %s; falling back to .env "
+                    "config fields. If Google auth fails, the .env fallback is "
+                    "what is being used, not this file. The stable default is "
+                    "%s, outside any git worktree. Legacy locations searched: "
+                    "%s. RESTART the service after any fix: this store caches "
+                    "its loaded state and the settings object has already "
+                    "captured the .env values, so restoring the file or "
+                    "editing .env has no effect on a running process.",
+                    self._path,
+                    DEFAULT_TOKEN_FILE,
+                    ", ".join(str(p) for p in LEGACY_TOKEN_FILES) or "(none)",
+                )
         self._loaded = True
 
 
@@ -294,7 +424,19 @@ class GoogleTokenStore:
             GoogleCredentials or None if not configured.
         """
         with self._lock:
-            self._load()
+            path_problem = self._load()
+            if path_problem is not None:
+                # FAIL CLOSED. No token file, no .env fallback -- an unusable
+                # path means the operator's intent is unknown, and guessing
+                # risks authenticating as the wrong Google account.
+                logger.error(
+                    "Google credentials unavailable for %s: %s RESTART the "
+                    "service after fixing the configuration -- it is read once "
+                    "at startup.",
+                    service,
+                    path_problem,
+                )
+                return None
             cfg = settings.tools
 
             # Try token file first
@@ -354,7 +496,19 @@ class GoogleTokenStore:
         an access token refresh.
         """
         with self._lock:
-            self._load()
+            path_problem = self._load()
+            if path_problem is not None:
+                # The write path was the one caller with no validation at all.
+                # Rotating into an unusable path meant _save() hit an OSError,
+                # logged it, and the freshly rotated Google token was silently
+                # lost -- the next restart came back on the old one.
+                logger.error(
+                    "Refusing to persist a rotated %s refresh token: %s "
+                    "The rotation is NOT saved; fix the path and re-authorise.",
+                    service,
+                    path_problem,
+                )
+                return
 
             if "services" not in self._data:
                 self._data["services"] = {}
@@ -381,7 +535,22 @@ class GoogleTokenStore:
         Returns dict with per-service status.
         """
         with self._lock:
-            self._load()
+            path_problem = self._load()
+            if path_problem is not None:
+                # Health MUST agree with behaviour. get_credentials() fails
+                # closed on an unusable configured path, so reporting
+                # `configured: true` here -- which it did while an .env token
+                # remained populated -- would tell monitoring that Google OAuth
+                # is fine while every operational request returns None
+                # (Codex #2360 R1/R2/R6).
+                return {
+                    "token_file": str(self._path),
+                    "file_exists": False,
+                    "path_problem": path_problem,
+                    "calendar": {"configured": False, "source": None},
+                    "gmail": {"configured": False, "source": None},
+                }
+
             result = {"token_file": str(self._path), "file_exists": self._path.exists()}
 
             for svc in ("calendar", "gmail"):

@@ -562,6 +562,9 @@ def test_provenance_comes_from_pydantic_fields_set(monkeypatch):
     class _Tools:
         def __init__(self, fields):
             self.model_fields_set = fields
+            # Provenance now requires a non-blank value as well as the field
+            # being set, so the stub must carry one (ATLAS #2359 slice 1).
+            self.google_token_file = "/srv/creds/google_tokens.json"
 
     class _Settings:
         def __init__(self, fields):
@@ -663,3 +666,462 @@ def test_every_recovery_message_requires_a_restart(tmp_path, caplog, monkeypatch
             tmp_path / "tokens.json",
         )
         assert "RESTART" in remedy, source
+
+
+# --- ATLAS #2359 slice 1: configured-path validation ----------------------
+
+
+# --- ATLAS #2359 slice 1: the remedy must match what is actually read -----
+
+
+def test_explicit_override_recovery_names_that_path_not_the_default(
+    tmp_path, caplog, monkeypatch
+):
+    """Under an override the remedy must not send the operator elsewhere.
+
+    Legacy discovery does not run and the stable default is not consulted, so
+    naming either would point at a file this process will never read —
+    prolonging the outage the message exists to shorten.
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    explicit = tmp_path / "account-b" / "google_tokens.json"
+    store = GoogleTokenStore(str(explicit))
+
+    with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
+        store.get_credentials("calendar")
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert str(explicit) in joined
+    assert "EXPLICIT" in joined
+    # must NOT claim a search that did not happen, nor name an ignored file
+    assert "Legacy locations searched" not in joined
+    assert DEFAULT_TOKEN_FILE not in joined
+    assert "RESTART" in joined
+
+
+def test_default_path_recovery_still_names_default_and_legacy(tmp_path, caplog):
+    """The unconfigured branch is unchanged."""
+    store = GoogleTokenStore(str(tmp_path / "gone" / "google_tokens.json"))
+
+    with caplog.at_level(logging.WARNING, logger="atlas.services.google_oauth"):
+        store.get_credentials("calendar")
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert DEFAULT_TOKEN_FILE in joined
+    assert "Legacy locations searched" in joined
+    assert "EXPLICIT" not in joined
+    assert "RESTART" in joined
+
+
+# --- ATLAS #2359 slice 1: an unusable configured path fails CLOSED -------
+#
+# One invariant, checked on the FILESYSTEM rather than by spelling: if the
+# configured credential path is unusable, there is no credential at all. Wrong
+# account is worse than no account -- a wrong account is a silent cross-tenant
+# data problem, no account is a loud outage.
+
+
+# NOTE: no "data/.." here. `data/` has zero tracked files, so on a clean
+# checkout the missing intermediate component makes exists() and is_dir()
+# both False and the case proves nothing. The traversal shape is covered
+# hermetically by test_a_traversal_alias_through_an_existing_dir_is_caught,
+# which builds its own directory under tmp_path (Codex #2360 R2/R12).
+@pytest.mark.parametrize("alias", [".", "./"])
+def test_relative_directory_aliases_yield_no_credential(alias, monkeypatch, caplog):
+    """The CLASS, not the blank spelling.
+
+    A guard that only recognised `""` fixed one alias while `.`, `./` and
+    `sub/..` reproduced the same attempted-directory read (Codex #2360
+    R1/R2/R13).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    store = GoogleTokenStore(alias)
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        assert store.get_credentials("calendar") is None
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "DIRECTORY" in joined
+    assert "RESTART" in joined
+
+
+def test_absolute_directory_yields_no_credential(tmp_path, monkeypatch, caplog):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    a_dir = tmp_path / "creds-dir"
+    a_dir.mkdir()
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        assert GoogleTokenStore(str(a_dir)).get_credentials("calendar") is None
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+
+
+def test_explicitly_blank_override_fails_closed(monkeypatch, caplog, tmp_path):
+    """A failed secret mount must not re-admit legacy discovery.
+
+    An empty env var is what a failed substitution looks like. Reclassifying it
+    as "unconfigured" would let a legacy credential load and authenticate as a
+    stale, unrelated Google account (Codex #2360 R3/R11).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    legacy = tmp_path / "checkout" / "data" / "google_tokens.json"
+    _write_token_file(legacy, calendar="stale-other-account")
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy,))
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_id", "cid")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_secret", "sec")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_refresh_token", "envtok")
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        creds = GoogleTokenStore("").get_credentials("calendar")
+
+    # neither the legacy credential NOR the .env fallback may be used
+    assert creds is None
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "set but EMPTY" in joined
+    assert "different Google account" in joined
+
+
+def test_blank_is_acceptable_when_NOT_explicitly_configured(monkeypatch):
+    """An unconfigured blank is just "use the default" -- not an error."""
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: False
+    )
+    assert google_oauth.configured_token_path_problem("") is None
+    assert resolve_token_file_path("") == resolve_token_file_path(DEFAULT_TOKEN_FILE)
+
+
+def test_trailing_whitespace_in_an_absolute_path_is_preserved():
+    """A POSIX filename may legitimately end with whitespace.
+
+    Trimming it silently redirects the configured path — possibly onto a
+    different account's credential (Codex #2360 R1/R5).
+    """
+    raw = "/srv/creds/google_tokens.json "
+    assert str(resolve_token_file_path(raw)) == raw
+
+
+def test_whitespace_bearing_paths_are_not_silently_trimmed():
+    """Whatever the anchoring, the value must not be quietly normalised."""
+    for raw in ("/srv/creds/google_tokens.json ", " /srv/creds/google_tokens.json"):
+        assert resolve_token_file_path(raw) != resolve_token_file_path(raw.strip()), raw
+
+
+def test_a_traversal_alias_through_an_existing_dir_is_caught(
+    tmp_path, monkeypatch, caplog
+):
+    """`<dir>/sub/..` is the same defect wearing a different name.
+
+    Only caught because the check asks the FILESYSTEM whether the resolved
+    target is a directory, rather than matching spellings.
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    (tmp_path / "sub").mkdir()
+    alias = str(tmp_path / "sub" / "..")
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        assert GoogleTokenStore(alias).get_credentials("calendar") is None
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.real_provenance
+def test_a_blank_setting_is_still_explicit_provenance(monkeypatch):
+    """Blank must NOT be reclassified as unconfigured; it is invalid instead."""
+    from atlas_brain.services import google_oauth
+
+    class _Tools:
+        model_fields_set = {"google_token_file"}
+        google_token_file = ""
+
+    class _Settings:
+        tools = _Tools()
+
+    monkeypatch.setattr(google_oauth, "settings", _Settings())
+    assert google_oauth.token_path_was_explicitly_configured() is True
+
+
+def test_a_valid_configured_path_reports_no_problem(tmp_path, monkeypatch):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    good = tmp_path / "google_tokens.json"
+    _write_token_file(good, calendar="tok")
+
+    assert google_oauth.configured_token_path_problem(str(good)) is None
+    assert GoogleTokenStore(str(good)).get_credentials("calendar") is not None
+
+
+def test_health_status_reports_unconfigured_when_the_path_is_invalid(
+    tmp_path, monkeypatch
+):
+    """Health must agree with behaviour.
+
+    `get_credentials()` fails closed on an unusable path, but `get_status()` --
+    which `atlas_brain/api/health.py` calls directly -- read the `.env` fallback
+    and reported `configured: true`. Monitoring would say Google OAuth is fine
+    while every operational request returned None (Codex #2360 R1/R2/R6).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_refresh_token", "envtok")
+    monkeypatch.setattr(google_oauth.settings.tools, "gmail_refresh_token", "envtok")
+
+    a_dir = tmp_path / "creds-dir"
+    a_dir.mkdir()
+    store = GoogleTokenStore(str(a_dir))
+
+    status = store.get_status()
+
+    assert status["calendar"]["configured"] is False
+    assert status["gmail"]["configured"] is False
+    assert status["file_exists"] is False
+    assert "DIRECTORY" in status["path_problem"]
+    # and the behaviour it is reporting on
+    assert store.get_credentials("calendar") is None
+
+
+def test_health_status_is_unchanged_for_a_valid_path(tmp_path, monkeypatch):
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    good = tmp_path / "google_tokens.json"
+    _write_token_file(good, calendar="tok", gmail="tok")
+
+    status = GoogleTokenStore(str(good)).get_status()
+
+    assert status["calendar"]["configured"] is True
+    assert status["calendar"]["source"] == "file"
+    assert "path_problem" not in status
+
+
+def test_path_validity_is_rechecked_at_point_of_use(tmp_path, monkeypatch, caplog):
+    """A constructor snapshot goes stale under a long-lived singleton.
+
+    The store lives for the process, the filesystem does not: a secret-volume
+    remount or an operator repair can replace the target between construction
+    and first use. When validity was cached, a path that was merely ABSENT at
+    startup and later became a DIRECTORY kept `problem = None`, `_load()`
+    swallowed the `IsADirectoryError`, and `get_credentials()` fell through to
+    the `.env` token — authenticating as a DIFFERENT account in exactly the case
+    the no-fallback invariant exists to prevent (Codex #2360 R1/R3).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_id", "cid")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_secret", "sec")
+    monkeypatch.setattr(
+        google_oauth.settings.tools, "calendar_refresh_token", "other-account-token"
+    )
+
+    target = tmp_path / "creds" / "google_tokens.json"
+    target.parent.mkdir(parents=True)
+    store = GoogleTokenStore(str(target))  # absent at construction: not yet a problem
+
+    target.mkdir()  # ...then becomes a directory
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        creds = store.get_credentials("calendar")
+
+    assert creds is None, "fell through to the .env token for a directory path"
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+    assert store.get_status()["calendar"]["configured"] is False
+
+
+def test_a_path_repaired_after_construction_is_honoured(tmp_path, monkeypatch):
+    """Revalidation cuts both ways: a repaired path must start working.
+
+    (The credential CONTENTS are still cached for the process — that is what
+    the RESTART guidance covers — but validity must not stay stuck at
+    'broken'.)
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    target = tmp_path / "google_tokens.json"
+    target.mkdir()                                   # starts as a directory
+    store = GoogleTokenStore(str(target))
+    assert store.get_credentials("calendar") is None
+
+    target.rmdir()                                   # operator repairs it
+    _write_token_file(target, calendar="repaired-token")
+
+    creds = store.get_credentials("calendar")
+    assert creds is not None and creds.refresh_token == "repaired-token"
+
+
+def test_a_legacy_directory_candidate_is_never_selected(tmp_path, monkeypatch):
+    """Legacy discovery must require a FILE, not merely an existing path.
+
+    `exists()` accepted a directory, so the path SELECTED differed from the
+    path validated: `configured_token_path_problem` looked at the configured
+    value (fine), `_load()` swallowed the directory-read error, and the `.env`
+    fallback re-opened (Codex #2360 R1/R3/R13).
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: False
+    )
+    primary = tmp_path / "config" / "google_tokens.json"
+    legacy_dir = tmp_path / "checkout" / "data" / "google_tokens.json"
+    legacy_dir.parent.mkdir(parents=True)
+    legacy_dir.mkdir()
+    monkeypatch.setattr(google_oauth, "DEFAULT_TOKEN_FILE", str(primary))
+    monkeypatch.setattr(google_oauth, "LEGACY_TOKEN_FILES", (legacy_dir,))
+
+    store = GoogleTokenStore(str(primary))
+
+    assert store.token_file_path != legacy_dir
+    assert store.token_file_path == primary
+
+
+def test_a_legacy_file_candidate_is_still_selected(tmp_path, monkeypatch):
+    """The tightened check must not break real legacy discovery."""
+    primary, legacy = _default_with_legacy(monkeypatch, tmp_path)
+
+    store = GoogleTokenStore(str(primary))
+
+    assert store.token_file_path == legacy
+    assert store.get_credentials("calendar").refresh_token == "legacy-token"
+
+
+def test_the_selected_path_is_revalidated_not_just_the_configured_one(
+    tmp_path, monkeypatch, caplog
+):
+    """Defence in depth: the path READ is the path that must be valid.
+
+    A legacy file selected at construction can be replaced by a directory
+    before first use, so validating only the configured value would leave the
+    path actually read unchecked.
+    """
+    from atlas_brain.services import google_oauth
+
+    primary, legacy = _default_with_legacy(monkeypatch, tmp_path)
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_id", "cid")
+    monkeypatch.setattr(google_oauth.settings.tools, "calendar_client_secret", "sec")
+    monkeypatch.setattr(
+        google_oauth.settings.tools, "calendar_refresh_token", "other-account-token"
+    )
+    store = GoogleTokenStore(str(primary))
+    assert store.token_file_path == legacy
+
+    legacy.unlink()
+    legacy.mkdir()  # the selected path becomes a directory
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        creds = store.get_credentials("calendar")
+
+    assert creds is None, "fell through to the .env token for a directory path"
+    assert "DIRECTORY" in " ".join(r.getMessage() for r in caplog.records)
+
+
+# --- the guard lives at ONE point, so every caller is covered --------------
+
+
+def test_rotation_refuses_to_persist_through_an_unusable_path(
+    tmp_path, monkeypatch, caplog
+):
+    """`persist_refresh_token` was the caller with NO validation at all.
+
+    It reached `_load()` unguarded, so rotating into a directory path meant
+    `_save()` hit an OSError, logged it, and the freshly rotated Google token
+    was silently lost — the next restart came back on the old one. This is the
+    write-path door of the same class the read paths kept re-opening.
+    """
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    target = tmp_path / "creds" / "google_tokens.json"
+    target.parent.mkdir(parents=True)
+    _write_token_file(target, calendar="original")
+    store = GoogleTokenStore(str(target))
+    store.get_credentials("calendar")
+
+    target.unlink()
+    target.mkdir()  # path becomes unusable before the rotation lands
+
+    with caplog.at_level(logging.ERROR, logger="atlas.services.google_oauth"):
+        store.persist_refresh_token("calendar", "rotated-token")
+
+    joined = " ".join(r.getMessage() for r in caplog.records)
+    assert "Refusing to persist" in joined
+    assert "NOT saved" in joined
+    assert target.is_dir(), "the directory was clobbered by the write"
+
+
+def test_every_load_call_site_is_guarded():
+    """Structural: the check lives in `_load`, not in each caller.
+
+    The class recurred because validity was enforced per-caller and one caller
+    was missed. If a future method calls `_load()` and ignores its return, this
+    test still holds — but the guard has already run, so the credential cannot
+    be read through an unusable path.
+    """
+    import inspect
+
+    from atlas_brain.services import google_oauth
+
+    source = inspect.getsource(google_oauth.GoogleTokenStore)
+    # every _load() call binds the verdict rather than discarding it
+    for line in source.splitlines():
+        stripped = line.strip()
+        if "self._load()" in stripped:
+            assert "=" in stripped, f"_load() result discarded: {stripped}"
+    # and the enforcement itself is inside _load
+    load_src = inspect.getsource(google_oauth.GoogleTokenStore._load)
+    assert "_current_path_problem()" in load_src
+
+
+def test_repaired_path_recovers_after_a_refusal(tmp_path, monkeypatch):
+    """A bad verdict must never be cached, or a repair would not take effect."""
+    from atlas_brain.services import google_oauth
+
+    monkeypatch.setattr(
+        google_oauth, "token_path_was_explicitly_configured", lambda: True
+    )
+    target = tmp_path / "google_tokens.json"
+    target.mkdir()
+    store = GoogleTokenStore(str(target))
+    assert store.get_credentials("calendar") is None
+
+    target.rmdir()
+    _write_token_file(target, calendar="repaired")
+
+    store.persist_refresh_token("calendar", "rotated-after-repair")
+    assert (
+        store.get_credentials("calendar").refresh_token == "rotated-after-repair"
+    )
