@@ -16,7 +16,7 @@ anyio>=3.0.0
 
 # Computer vision
 opencv-python-headless>=5.0.0.93
-numpy>=1.24.0
+numpy>=2.5.2
 
 # Discovery
 zeroconf>=0.150.0
