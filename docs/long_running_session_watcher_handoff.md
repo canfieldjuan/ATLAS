@@ -146,8 +146,9 @@ Wake-source rules:
   `scheduled-ready` only when the snapshot carries a version-1 readiness proof
   for the same open, non-draft head: at least one required check, all required
   checks complete/green, complete Codex review pagination with at least one
-  exact-head Codex attestation, complete review-thread pagination, zero
-  unresolved non-outdated Codex connector threads, and a clean merge state.
+  exact-head Codex attestation and no exact-head change request, complete
+  review-thread pagination, zero unresolved non-outdated Codex connector
+  threads, and a clean merge state.
   Missing or contradictory proof becomes
   `attention` and lists its blockers. `scheduled-ready` is still only
   permission to run the AGENTS merge guards; the resumed builder also needs
@@ -173,6 +174,7 @@ The version-1 snapshot proof is:
     "codex_reviews_complete": true,
     "codex_review_pages_fetched": 2,
     "codex_head_review_count": 1,
+    "codex_changes_requested": false,
     "review_decision": "<same as pr.reviewDecision>",
     "merge_state_status": "CLEAN"
   }

@@ -45,6 +45,7 @@ def _write_state(
             "codex_reviews_complete": True,
             "codex_review_pages_fetched": 1,
             "codex_head_review_count": 1,
+            "codex_changes_requested": False,
             "review_decision": "",
             "merge_state_status": "CLEAN",
         },

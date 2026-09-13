@@ -14,6 +14,9 @@ requires. The shell watcher also reads final threads before final review
 attestations, so a review created between those reads can contribute a positive
 attestation while its new thread is absent from the readiness decision. Both
 watcher classifiers let a missing review hide an already-known merge conflict.
+A later exact-head review then exposed the same precedence split in the shell's
+final-read path and showed that both producers discard an exact-head
+`CHANGES_REQUESTED` review state when the aggregate PR decision is empty.
 The corrected plan-required body then exposed a pre-push deadlock:
 `--current-pr-body-file` validates the intended body but the session-drift audit
 also validates the stale GitHub body for the same branch, while `open_pr.sh`
@@ -40,8 +43,10 @@ that cannot pass its own admission checks.
   session-drift audit also treats its explicit local current-body override and
   the same branch's stale GitHub body as simultaneous authorities. Finally, the
   shell final-read order does not bind review evidence to a later thread
-  snapshot, and both classifiers prioritize pending review evidence over a
-  definite negative merge state.
+  snapshot, both classifiers prioritize pending review evidence over a definite
+  negative merge state, the final shell read still prioritizes missing review
+  over its other actionable facts, and both review paginators collapse
+  `CHANGES_REQUESTED` into the same zero-attestation result as no review.
 - Correct fix must touch/change: make every mandatory session instruction use
   subscription/external wake plus one snapshot per model activation; require the
   activation source to satisfy the recorded merge authorization; make the shell
@@ -50,9 +55,11 @@ that cannot pass its own admission checks.
   document every required version-1 review-proof field; collect final review
   evidence before the final thread snapshot; surface definite merge conflicts
   before review-pending state; prove the positive and negative sides in focused
-  watcher, bridge, and reporter tests; and make the explicit local current-body
-  override authoritative only for the current PR while preserving GitHub
-  peer-overlap discovery.
+  watcher, bridge, and reporter tests; make final-read actionable facts precede
+  review-pending; preserve exact-head change-request state through both
+  producers and the versioned readiness proof; and make the explicit local
+  current-body override authoritative only for the current PR while preserving
+  GitHub peer-overlap discovery.
 - Must not change: watcher infrastructure remains read-only and never gains
   merge authority; external non-model timers may still collect state; required
   CI, thread pagination, ownership, mergeability, and reconciliation gates stay
@@ -77,6 +84,9 @@ Max files: 14
 5. Make the handoff's canonical version-1 example match the enforced proof
    schema, bind final shell review evidence to a later thread snapshot, and
    surface definite merge conflicts before missing-review pending state.
+6. Surface every final-read actionable fact before review-pending and propagate
+   exact-head Codex `CHANGES_REQUESTED` states through both producers and the
+   shared readiness proof.
 
 ### Review Contract
 
@@ -115,6 +125,12 @@ Max files: 14
   10. `tests/test_watch_owned_pr.py` and `tests/test_pr_watcher.py` prove a
       definite dirty/conflicting merge state is actionable/attention even when
       no exact-head Codex review exists.
+  11. `tests/test_watch_owned_pr.py` proves an unresolved final-read thread is
+      actionable even when the final exact-head attestation disappears.
+  12. `tests/test_watch_owned_pr.py`, `tests/test_pr_watcher.py`, and
+      `tests/test_codex_wake_bridge.py` prove an exact-head Codex
+      `CHANGES_REQUESTED` review is actionable and blocks readiness even when
+      aggregate `reviewDecision` is empty.
 - Reachability proof: the real shell/Python watcher entrypoints consume mocked
   GitHub snapshots in their existing focused test suites; observable output is
   `MERGE-READY` versus pending/actionable and ready versus pending/attention
@@ -122,9 +138,9 @@ Max files: 14
 - Affected surfaces: builder instructions, session-state handoff, shell watcher,
   Python watcher, wake-bridge readiness validation, reporter classification, and
   their focused tests, and the pre-push cross-session drift audit.
-- Risk areas: premature merge readiness, stale/incomplete review evidence,
-  mismatched wake authorization, accidental model polling, and watcher merge
-  authority.
+- Risk areas: premature merge readiness, suppressed actionable review/check/
+  conflict evidence, stale/incomplete review evidence, mismatched wake
+  authorization, accidental model polling, and watcher merge authority.
 - Reviewer rules triggered: R1, R2, R5, R6, R8, R10, R12, R13, R14.
 
 ### Boundary-change enumeration
@@ -140,9 +156,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   from ready/diagnostic to pending or attention; valid complete evidence remains
   ready; scheduled-ready-only authorization remains unavailable to other wakes.
 - Guard-relevant fields: `codex_reviews_complete`,
-  `codex_review_pages_fetched`, `codex_head_review_count`, `reviewDecision`, and
-  activation source, plus the ordering of review and thread snapshots and the
-  priority of a definite negative merge state.
+  `codex_review_pages_fetched`, `codex_head_review_count`,
+  `codex_changes_requested`, `reviewDecision`, and activation source, plus the
+  ordering of review and thread snapshots and the priority of every actionable
+  final-read fact over missing-review pending state.
 - Caller x input shape: shell watcher GraphQL pages, Python watcher version-1
   readiness dict, wake bridge, reporter, and active-builder instruction flow.
 - Boundary path/seam: explicit local current-body file -> current-PR body
@@ -204,7 +221,11 @@ The shell watcher's final readiness pass collects the complete review
 attestation first and then reads review threads, review decision, and merge
 state. That ordering prevents a newly submitted review from being accepted
 without observing the threads created with it. Definite negative merge states
-are classified before missing-review pending states in both watcher paths.
+and all other final-read actionable facts are classified before missing-review
+pending states. Both review paginators preserve an exact-head Codex
+`CHANGES_REQUESTED` signal independently of the aggregate PR decision; the
+producers classify it as actionable/attention and the versioned proof validator
+rejects any snapshot carrying it.
 
 The instruction set distinguishes active model turns from external state
 collectors: external timers/webhooks may wake a session, but the session takes
@@ -218,8 +239,8 @@ and lane overlap.
 
 ## Intentional
 
-- A missing Codex review is pending, not actionable: there is nothing for the
-  builder to fix until review evidence exists.
+- A missing Codex review is pending only when the same snapshot carries no
+  actionable failure, conflict, unresolved thread, or exact-head change request.
 - Incomplete review API data or an open changes-requested decision is attention,
   because treating uncertainty as ready would weaken the merge gate.
 - Local non-model watchers may continue polling GitHub; this slice removes model
@@ -239,6 +260,13 @@ Parked hardening: none.
   before implementation (`4 failed`).
 - Fail-first: the final-read interleaving and both conflict-precedence probes
   failed before this review-round implementation (`3 failed`).
+- Fail-first: the final-read actionable precedence, exact-head change-request
+  propagation, and proof-validation probes failed before this implementation
+  (`6 failed, 31 passed`).
+- Focused regressions for those two root classes - `38 passed`.
+- `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py
+  tests/test_codex_wake_bridge.py tests/test_report_pr_watcher_state.py` -
+  `176 passed`.
 - `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py` -
   `104 passed`.
 - `uv run pytest -q tests/test_codex_wake_bridge.py
@@ -255,8 +283,8 @@ Parked hardening: none.
 - `python scripts/check_guard_class_closure.py --base origin/main --strict` -
   OK; no guard-shaped change without a property test.
 - Targeted mandatory-doc audit - `stale model polling directives: 0`.
-- Canonical handoff review-proof audit - all three enforced review-attestation
-  fields documented (`3/3`).
+- Canonical handoff review-proof audit - all four enforced review-attestation
+  fields documented (`4/4`).
 - `git diff --check` - exit 0.
 - `uv run pytest -q tests/test_audit_pr_session_drift.py` - `50 passed`.
 - `uv run ruff check scripts/audit_pr_session_drift.py
@@ -271,15 +299,15 @@ Parked hardening: none.
 | `AGENTS.md` | 86 |
 | `CLAUDE.md` | 18 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 14 |
-| `docs/long_running_session_watcher_handoff.md` | 85 |
-| `plans/PR-Agent-Efficiency-Rules.md` | 285 |
+| `docs/long_running_session_watcher_handoff.md` | 87 |
+| `plans/PR-Agent-Efficiency-Rules.md` | 313 |
 | `scripts/audit_pr_session_drift.py` | 27 |
-| `scripts/codex_wake_bridge.py` | 11 |
-| `scripts/pr_watcher.py` | 5 |
-| `scripts/watch_owned_pr.sh` | 60 |
+| `scripts/codex_wake_bridge.py` | 17 |
+| `scripts/pr_watcher.py` | 76 |
+| `scripts/watch_owned_pr.sh` | 66 |
 | `tests/test_audit_pr_session_drift.py` | 58 |
-| `tests/test_codex_wake_bridge.py` | 20 |
-| `tests/test_pr_watcher.py` | 77 |
-| `tests/test_report_pr_watcher_state.py` | 18 |
-| `tests/test_watch_owned_pr.py` | 102 |
-| **Total** | **866** |
+| `tests/test_codex_wake_bridge.py` | 24 |
+| `tests/test_pr_watcher.py` | 83 |
+| `tests/test_report_pr_watcher_state.py` | 19 |
+| `tests/test_watch_owned_pr.py` | 114 |
+| **Total** | **1002** |

@@ -96,6 +96,7 @@ def _write_fixture(
             "codex_reviews_complete": True,
             "codex_review_pages_fetched": 1,
             "codex_head_review_count": 1,
+            "codex_changes_requested": False,
             "docs_only_reconciliation_exemption": False,
             "review_decision": "",
             "merge_state_status": "CLEAN",
@@ -284,6 +285,8 @@ def test_github_read_errors_override_scheduled_ready(
         ({"codex_review_pages_fetched": "1"}, {}, "Codex review pages fetched must be at least 1"),
         ({"codex_head_review_count": 0}, {}, "exact-head Codex review count must be at least 1"),
         ({"codex_head_review_count": "1"}, {}, "exact-head Codex review count must be at least 1"),
+        ({"codex_changes_requested": True}, {}, "exact-head Codex review requests changes"),
+        ({"codex_changes_requested": "false"}, {}, "exact-head Codex change-request evidence must be boolean"),
         (
             {"review_decision": "APPROVED"},
             {},
@@ -368,6 +371,7 @@ def test_malformed_readiness_objects_fail_closed(
         ("readiness", "codex_reviews_complete", "Codex review pagination is incomplete"),
         ("readiness", "codex_review_pages_fetched", "Codex review pages fetched must be at least 1"),
         ("readiness", "codex_head_review_count", "exact-head Codex review count must be at least 1"),
+        ("readiness", "codex_changes_requested", "exact-head Codex change-request evidence is missing"),
     ],
 )
 def test_missing_readiness_evidence_fails_closed(

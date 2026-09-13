@@ -154,6 +154,12 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
     review_count = proof.get("codex_head_review_count")
     if not _non_negative_int(review_count) or review_count < 1:
         blockers.append("exact-head Codex review count must be at least 1")
+    if "codex_changes_requested" not in proof:
+        blockers.append("exact-head Codex change-request evidence is missing")
+    elif proof.get("codex_changes_requested") is True:
+        blockers.append("exact-head Codex review requests changes")
+    elif proof.get("codex_changes_requested") is not False:
+        blockers.append("exact-head Codex change-request evidence must be boolean")
 
     if "review_decision" not in proof or "reviewDecision" not in pr:
         blockers.append("review decision evidence is missing")

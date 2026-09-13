@@ -208,6 +208,7 @@ for i in $(seq 0 "$CYCLES"); do
     [ -n "$COMMENT_CURSOR" ] || { REVIEWS_COMPLETE=false; break; }
   done
   CODEX_FORMAL_REVIEWS=$(echo "$REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
+  CODEX_CHANGE_REQUESTS=$(echo "$REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") == "CHANGES_REQUESTED"))] | length')
   CODEX_CLEAN_COMMENTS=$(echo "$COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
   CODEX_HEAD_REVIEWS=$((CODEX_FORMAL_REVIEWS + CODEX_CLEAN_COMMENTS))
   # --paginate + re-wrap: required contexts beyond the first 100 runs stay visible
@@ -224,13 +225,13 @@ for i in $(seq 0 "$CYCLES"); do
   # completed one; ANY not-completed run of a required name (across all runs,
   # not just the latest-pick) blocks readiness until it settles.
   REQUNSETTLED=$(echo "$CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
-  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-attestations=$CODEX_HEAD_REVIEWS attestation-pages=$REVIEW_PAGES attestations-complete=$REVIEWS_COMPLETE threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
+  echo "cycle $i $(date +%H:%M): state=$STATE req-green=$REQGREEN/$REQ_TOTAL req-red=$REQRED req-unsettled=$REQUNSETTLED pending=$PEND codex-head-attestations=$CODEX_HEAD_REVIEWS codex-change-requests=$CODEX_CHANGE_REQUESTS attestation-pages=$REVIEW_PAGES attestations-complete=$REVIEWS_COMPLETE threads=$UNRES decision=$DECISION mergeable=$MERGEABLE merge-state=$MSTATE"
   case "$STATE" in MERGED/merged|CLOSED) echo "TERMINAL: PR $STATE"; exit 0;; esac
   # Definite negatives are actionable on ANY cycle, including the first.
   if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ]; then
     echo "ACTIONABLE: req-red=$REQRED codex-head-attestations=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
   fi
-  if [ "$DECISION" = "CHANGES_REQUESTED" ]; then
+  if [ "$DECISION" = "CHANGES_REQUESTED" ] || [ "$CODEX_CHANGE_REQUESTS" -gt 0 ]; then
     echo "ACTIONABLE: exact-head review requests changes -> reconcile/fix, push, re-arm"; exit 0
   fi
   if [ "$MERGEABLE" = "CONFLICTING" ] || [ "$MSTATE" = "DIRTY" ]; then
@@ -313,6 +314,7 @@ for i in $(seq 0 "$CYCLES"); do
       [ -n "$FINAL_COMMENT_CURSOR" ] || { FINAL_REVIEWS_COMPLETE=false; break; }
     done
     FINAL_CODEX_FORMAL_REVIEWS=$(echo "$FINAL_REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
+    FINAL_CODEX_CHANGE_REQUESTS=$(echo "$FINAL_REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") == "CHANGES_REQUESTED"))] | length')
     FINAL_CODEX_CLEAN_COMMENTS=$(echo "$FINAL_COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
     FINAL_CODEX_HEAD_REVIEWS=$((FINAL_CODEX_FORMAL_REVIEWS + FINAL_CODEX_CLEAN_COMMENTS))
     # Read threads after review attestations so a newly submitted review cannot
@@ -340,17 +342,17 @@ for i in $(seq 0 "$CYCLES"); do
     FINAL_REQRED=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")))]|length')
     FINAL_REQGREEN=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("success","neutral","skipped")))]|length')
     FINAL_REQUNSETTLED=$(echo "$FINAL_CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
-    if [ "$FINAL_DECISION" = "CHANGES_REQUESTED" ]; then
+    if [ "$FINAL_DECISION" = "CHANGES_REQUESTED" ] || [ "$FINAL_CODEX_CHANGE_REQUESTS" -gt 0 ]; then
       echo "ACTIONABLE: final-read exact-head review requests changes -> reconcile/fix, push, re-arm"; exit 0
-    fi
-    if [ "$FINAL_REVIEWS_COMPLETE" != "true" ] || [ "$FINAL_CODEX_HEAD_REVIEWS" -lt 1 ]; then
-      echo "REVIEW-PENDING: final-read complete exact-head Codex review evidence is not available"
-      continue
     fi
     if [ "$FINAL_UNRES" != "0" ] || [ "$FINAL_MERGEABLE" != "MERGEABLE" ] \
        || { [ "$FINAL_MSTATE" != "CLEAN" ] && [ "$FINAL_MSTATE" != "UNSTABLE" ]; } \
        || [ "$FINAL_REQRED" -gt 0 ] || [ "$FINAL_REQGREEN" -ne "$REQ_TOTAL" ] || [ "$FINAL_REQUNSETTLED" -ne 0 ]; then
-      echo "ACTIONABLE: final-read req-green=$FINAL_REQGREEN/$REQ_TOTAL req-red=$FINAL_REQRED req-unsettled=$FINAL_REQUNSETTLED codex-head-attestations=$FINAL_CODEX_HEAD_REVIEWS attestation-pages=$FINAL_REVIEW_PAGES attestations-complete=$FINAL_REVIEWS_COMPLETE threads=$FINAL_UNRES decision=$FINAL_DECISION mergeable=$FINAL_MERGEABLE merge-state=$FINAL_MSTATE -> reconcile/fix, push, re-arm"; exit 0
+      echo "ACTIONABLE: final-read req-green=$FINAL_REQGREEN/$REQ_TOTAL req-red=$FINAL_REQRED req-unsettled=$FINAL_REQUNSETTLED codex-head-attestations=$FINAL_CODEX_HEAD_REVIEWS codex-change-requests=$FINAL_CODEX_CHANGE_REQUESTS attestation-pages=$FINAL_REVIEW_PAGES attestations-complete=$FINAL_REVIEWS_COMPLETE threads=$FINAL_UNRES decision=$FINAL_DECISION mergeable=$FINAL_MERGEABLE merge-state=$FINAL_MSTATE -> reconcile/fix, push, re-arm"; exit 0
+    fi
+    if [ "$FINAL_REVIEWS_COMPLETE" != "true" ] || [ "$FINAL_CODEX_HEAD_REVIEWS" -lt 1 ]; then
+      echo "REVIEW-PENDING: final-read complete exact-head Codex review evidence is not available"
+      continue
     fi
     echo "MERGE-READY: all $REQ_TOTAL required contexts green + Codex threads clear + merge-state $MSTATE."
     echo "-> pre-merge checklist first (clean tree, local==remote, re-verify threads=0), then merge + alert."

@@ -339,6 +339,7 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
         "codex_reviews_complete": True,
         "codex_review_pages_fetched": 2,
         "codex_head_review_count": 1,
+        "codex_changes_requested": False,
         "docs_only_reconciliation_exemption": False,
         "review_decision": "",
         "merge_state_status": "CLEAN",
@@ -387,17 +388,19 @@ def test_classify_review_readiness_grammar_invariant() -> None:
     complete_options = (False, True)
     attestation_counts = (0, 1)
     review_decisions = ("", "CHANGES_REQUESTED")
+    change_request_options = (False, True)
     pending_options = (False, True)
     merge_states = ("CLEAN", "DIRTY")
 
-    for reviews_complete, review_count, decision, has_pending, merge_state in product(
+    for reviews_complete, review_count, decision, changes_requested, has_pending, merge_state in product(
         complete_options,
         attestation_counts,
         review_decisions,
+        change_request_options,
         pending_options,
         merge_states,
     ):
-        if not reviews_complete or decision == "CHANGES_REQUESTED" or merge_state != "CLEAN":
+        if not reviews_complete or decision == "CHANGES_REQUESTED" or changes_requested or merge_state != "CLEAN":
             contract_oracle = "attention"
         elif review_count < 1 or has_pending:
             contract_oracle = "pending"
@@ -419,6 +422,7 @@ def test_classify_review_readiness_grammar_invariant() -> None:
             unresolved_threads=[],
             reviews_complete=reviews_complete,
             codex_head_review_count=review_count,
+            codex_changes_requested=changes_requested,
             reconciliation_code=0,
             review_changed=False,
         )
@@ -950,7 +954,7 @@ def test_paginates_threads_and_keeps_outdated_unresolved_codex_threads(
     ]
 
 
-def test_changes_requested_review_without_valid_attestation_stays_pending(
+def test_exact_head_changes_requested_review_requires_attention(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -974,8 +978,10 @@ def test_changes_requested_review_without_valid_attestation_stays_pending(
         ),
     )
 
-    assert status["state"] == "pending"
+    assert status["state"] == "attention"
     assert status["readiness"]["codex_head_review_count"] == 0
+    assert status["readiness"]["codex_changes_requested"] is True
+    assert "exact-head Codex review requests changes" in wake_bridge.readiness_blockers(status)
 
 
 def test_unresolved_non_codex_thread_does_not_block_ready_state(

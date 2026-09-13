@@ -160,7 +160,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         },
                     }}}}))
                     raise SystemExit(0)
-                if scenario == "final_review_adds_thread":
+                if scenario in {"final_review_adds_thread", "final_review_disappears_with_thread"}:
                     review_state_file = state_file + ".reviews" if state_file else ""
                     review_count = 0
                     if review_state_file and os.path.exists(review_state_file):
@@ -215,7 +215,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     nodes = []
                     has_next = False
                     cursor = None
-                elif scenario == "final_review_disappears" and review_count > 0:
+                elif scenario in {"final_review_disappears", "final_review_disappears_with_thread"} and review_count > 0:
                     nodes = []
                     has_next = False
                     cursor = None
@@ -453,13 +453,13 @@ def test_watcher_blocks_on_outdated_unresolved_codex_thread(tmp_path: Path) -> N
     assert "threads=1" in result.stdout
 
 
-def test_watcher_keeps_changes_requested_without_exact_head_review_pending(tmp_path: Path) -> None:
+def test_watcher_surfaces_exact_head_changes_requested_review(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="changes_requested_review")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
-    assert "REVIEW-PENDING" in result.stdout
-    assert "ACTIONABLE" not in result.stdout
+    assert "REVIEW-PENDING" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
@@ -604,6 +604,16 @@ def test_watcher_keeps_final_review_disappearance_pending(tmp_path: Path) -> Non
     assert "MERGE-READY" not in result.stdout
     assert "REVIEW-PENDING: final-read" in result.stdout
     assert "ACTIONABLE: final-read" not in result.stdout
+
+
+def test_watcher_surfaces_final_thread_before_missing_review(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="final_review_disappears_with_thread")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING: final-read" not in result.stdout
+    assert "ACTIONABLE: final-read" in result.stdout
+    assert "threads=1" in result.stdout
 
 
 def test_watcher_revalidates_required_checks_before_reporting_ready(tmp_path: Path) -> None:
