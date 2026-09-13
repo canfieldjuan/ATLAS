@@ -389,6 +389,38 @@ for i in $(seq 0 "$CYCLES"); do
         FINAL_RECHECK_REVIEW_CURSOR=$(echo "$FINAL_RECHECK_REVIEW_PAGE" | jq -r '.data.repository.pullRequest.reviews.pageInfo.endCursor // empty')
         [ -n "$FINAL_RECHECK_REVIEW_CURSOR" ] || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
       done
+      FINAL_RECHECK_COMMENT_NODES='[]'
+      FINAL_RECHECK_COMMENT_CURSOR=''
+      while [ "$FINAL_RECHECK_REVIEWS_COMPLETE" = "true" ]; do
+        FINAL_RECHECK_COMMENT_ARGS=(gh api graphql -f query="$COMMENT_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
+        [ -n "$FINAL_RECHECK_COMMENT_CURSOR" ] && FINAL_RECHECK_COMMENT_ARGS+=(-f cursor="$FINAL_RECHECK_COMMENT_CURSOR")
+        FINAL_RECHECK_COMMENT_PAGE=$(GH_TOKEN="$TOK" "${FINAL_RECHECK_COMMENT_ARGS[@]}" 2>/dev/null) || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+        if ! echo "$FINAL_RECHECK_COMMENT_PAGE" | jq -e --arg sha "$SHA" '
+            (((.errors // []) | length) == 0)
+            and ((.data.repository.pullRequest | type) == "object")
+            and (.data.repository.pullRequest.headRefOid == $sha)
+            and ((.data.repository.pullRequest.comments | type) == "object")
+            and ((.data.repository.pullRequest.comments.nodes | type) == "array")
+            and ((.data.repository.pullRequest.comments.pageInfo | type) == "object")
+            and ((.data.repository.pullRequest.comments.pageInfo.hasNextPage | type) == "boolean")
+            and (
+              (.data.repository.pullRequest.comments.pageInfo.hasNextPage == false)
+              or (
+                ((.data.repository.pullRequest.comments.pageInfo.endCursor // "") | type) == "string"
+                and (((.data.repository.pullRequest.comments.pageInfo.endCursor // "") | length) > 0)
+              )
+            )
+          ' >/dev/null 2>&1; then
+          FINAL_RECHECK_REVIEWS_COMPLETE=false
+          break
+        fi
+        FINAL_RECHECK_COMMENT_PAGE_NODES=$(echo "$FINAL_RECHECK_COMMENT_PAGE" | jq -c '.data.repository.pullRequest.comments.nodes // []') || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+        FINAL_RECHECK_COMMENT_NODES=$(jq -n -c --argjson existing "$FINAL_RECHECK_COMMENT_NODES" --argjson new "$FINAL_RECHECK_COMMENT_PAGE_NODES" '$existing + $new') || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+        FINAL_RECHECK_COMMENT_HAS_NEXT=$(echo "$FINAL_RECHECK_COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.hasNextPage')
+        [ "$FINAL_RECHECK_COMMENT_HAS_NEXT" = "true" ] || break
+        FINAL_RECHECK_COMMENT_CURSOR=$(echo "$FINAL_RECHECK_COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.endCursor // empty')
+        [ -n "$FINAL_RECHECK_COMMENT_CURSOR" ] || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+      done
       if [ "$FINAL_RECHECK_REVIEWS_COMPLETE" = "true" ] && ! echo "$FINAL_RECHECK_REVIEW_NODES" | jq -e --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha))] | all(.[]; ((.state | type) == "string") and ((.submittedAt | type) == "string") and ((try (.submittedAt | fromdateiso8601) catch null) != null))' >/dev/null; then
         FINAL_RECHECK_REVIEWS_COMPLETE=false
       fi
@@ -397,7 +429,11 @@ for i in $(seq 0 "$CYCLES"); do
       else
         FINAL_REVIEW_SNAPSHOT=$(echo "$FINAL_REVIEW_NODES" | jq -cS --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha)) | {state, submittedAt}] | sort_by(.submittedAt, .state)')
         FINAL_RECHECK_REVIEW_SNAPSHOT=$(echo "$FINAL_RECHECK_REVIEW_NODES" | jq -cS --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha)) | {state, submittedAt}] | sort_by(.submittedAt, .state)')
-        [ "$FINAL_REVIEW_SNAPSHOT" = "$FINAL_RECHECK_REVIEW_SNAPSHOT" ] || FINAL_REVIEW_CHANGED=true
+        FINAL_RECHECK_CODEX_CLEAN_COMMENTS=$(echo "$FINAL_RECHECK_COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
+        if [ "$FINAL_REVIEW_SNAPSHOT" != "$FINAL_RECHECK_REVIEW_SNAPSHOT" ] \
+           || [ "$FINAL_CODEX_CLEAN_COMMENTS" -ne "$FINAL_RECHECK_CODEX_CLEAN_COMMENTS" ]; then
+          FINAL_REVIEW_CHANGED=true
+        fi
       fi
     fi
     if [ "$FINAL_DECISION" = "CHANGES_REQUESTED" ] || [ "$FINAL_CODEX_CHANGE_REQUESTS" -gt 0 ]; then

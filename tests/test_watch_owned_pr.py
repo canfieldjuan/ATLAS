@@ -225,7 +225,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     if scenario == "head_moves_during_final_review_recheck" and review_count > 1
                     else expected_sha
                 )
-                if scenario in {"no_review", "no_review_dirty", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment"}:
+                if scenario in {"no_review", "no_review_dirty", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment", "final_clean_comment_disappears"}:
                     nodes = []
                     has_next = False
                     cursor = None
@@ -325,7 +325,9 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 if comment_state_file:
                     with open(comment_state_file, "w", encoding="utf-8") as handle:
                         handle.write(str(comment_count + 1))
-                if scenario in {"clean_comment", "clean_comment_changes_requested"}:
+                if scenario in {"clean_comment", "clean_comment_changes_requested"} or (
+                    scenario == "final_clean_comment_disappears" and comment_count < 2
+                ):
                     nodes = [{
                         "author": {"login": "chatgpt-codex-connector"},
                         "body": "Codex Review: Didn't find any major issues\\n\\n**Reviewed commit:** `" + expected_sha[:10] + "`",
@@ -676,6 +678,18 @@ def test_watcher_revalidates_head_after_collecting_final_evidence(tmp_path: Path
 
 def test_watcher_rejects_same_head_review_change_during_final_evidence(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="same_head_review_changes_during_final_evidence")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "review evidence changed during final observation" in result.stdout
+
+
+def test_watcher_rejects_clean_comment_disappearance_during_final_evidence(tmp_path: Path) -> None:
+    result = _run_watcher(
+        tmp_path,
+        scenario="final_clean_comment_disappears",
+        sha="a" * 40,
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout

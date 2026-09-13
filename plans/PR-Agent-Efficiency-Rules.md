@@ -29,6 +29,9 @@ The latest exact-head review exposed two remaining contradictions in the same
 merge gate: the final stability recheck performs review network reads after its
 last unbound head read, and the mandatory overnight workflow exempts docs-only
 PRs from the exact-head review presence the executable gate requires.
+A subsequent exact-head review showed that the shell stability token covers
+formal reviews but omits the clean top-level Codex comments the same gate also
+accepts as attestations.
 
 These are policy and merge-readiness failures in the current slice, not optional
 hardening. Fixing only the cited sentences would leave the executable watcher
@@ -61,7 +64,9 @@ that cannot pass its own admission checks.
   the accepted review snapshot without invalidating readiness. The stability
   rechecks themselves then fetch mutable review evidence after their last head
   observation without binding the returned evidence to that head, and the
-  overnight workflow preserves a docs-only bypass of the exact-head gate.
+  overnight workflow preserves a docs-only bypass of the exact-head gate. The
+  shell then compares only formal reviews even though clean top-level Codex
+  comments can independently satisfy the attestation requirement.
 - Correct fix must touch/change: make every mandatory session instruction use
   subscription/external wake plus one snapshot per model activation; require the
   activation source to satisfy the recorded merge authorization; make the shell
@@ -80,7 +85,9 @@ that cannot pass its own admission checks.
   GitHub peer-overlap discovery; and require the complete exact-head formal
   review snapshot to remain stable across each producer's final evidence
   interval; require each paginated review/comment response to identify the
-  armed head; and remove the overnight docs-only review-presence exemption.
+  armed head; remove the overnight docs-only review-presence exemption; and
+  compare every accepted formal-review and clean-comment attestation source on
+  both sides of the shell's final evidence interval.
 - Must not change: watcher infrastructure remains read-only and never gains
   merge authority; external non-model timers may still collect state; required
   CI, thread pagination, ownership, mergeability, and reconciliation gates stay
@@ -120,6 +127,8 @@ Max files: 15
     final stability recheck cannot validate old-head evidence after a push.
 11. Make the overnight direct caller require exact-head review evidence for
     documentation-only PRs just like every other owned PR.
+12. Revalidate accepted clean top-level Codex comments alongside formal reviews
+    before the shell watcher can report merge readiness.
 
 ### Review Contract
 
@@ -178,6 +187,9 @@ Max files: 15
       either producer.
   17. `docs/OVERNIGHT_ARC_WORKFLOW.md` requires complete exact-head Codex review
       evidence for documentation-only and code PRs alike.
+  18. `tests/test_watch_owned_pr.py` proves deletion of the sole accepted clean
+      top-level Codex comment during final evidence collection cannot reach
+      `MERGE-READY`.
 - Reachability proof: the real shell/Python watcher entrypoints consume mocked
   GitHub snapshots in their existing focused test suites; observable output is
   `MERGE-READY` versus pending/actionable and ready versus pending/attention
@@ -227,6 +239,9 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
     merge-ready.
   - A paginated review/comment response identifies any head other than the armed
     SHA: intentionally rejected as incomplete evidence and never merge-ready.
+  - The sole accepted clean top-level Codex comment disappears after the first
+    final snapshot: intentionally treated as changed review evidence and never
+    merge-ready.
 - Boundary path/seam: paginated GitHub reviews -> Python version-1 readiness
   proof -> Python watcher state.
   - Complete exact-head sequence ending clean: intentionally changed to
@@ -334,6 +349,9 @@ Every review and clean-comment page also returns `headRefOid`, which must equal
 the armed head before the page contributes evidence. The overnight workflow
 applies that same exact-head requirement to documentation-only PRs rather than
 treating a green reconciliation check as review presence.
+The shell's final stability recheck re-fetches clean top-level Codex comments as
+well as formal reviews and compares both accepted-source counts/snapshots before
+readiness.
 
 The instruction set distinguishes active model turns from external state
 collectors: external timers/webhooks may wake a session, but the session takes
@@ -380,6 +398,10 @@ recheck pagination bounds; no false-readiness behavior is deferred.
 - Fail-first: a head move during each producer's final review recheck still
   reached ready (`2 failed`).
 - Focused head-bound final-review recheck regressions - `2 passed`.
+- Fail-first: deleting the sole accepted clean top-level Codex comment during
+  the shell's final evidence interval still emitted `MERGE-READY` (`1 failed`).
+- Focused clean-comment disappearance regression - `1 passed`.
+- `uv run pytest -q tests/test_watch_owned_pr.py` - `37 passed`.
 - `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py` -
   `119 passed` with head-bound review/comment pages in both producers.
 - `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py` -
@@ -441,14 +463,14 @@ recheck pagination bounds; no false-readiness behavior is deferred.
 | `docs/OVERNIGHT_ARC_WORKFLOW.md` | 10 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 14 |
 | `docs/long_running_session_watcher_handoff.md` | 87 |
-| `plans/PR-Agent-Efficiency-Rules.md` | 454 |
+| `plans/PR-Agent-Efficiency-Rules.md` | 476 |
 | `scripts/audit_pr_session_drift.py` | 27 |
 | `scripts/codex_wake_bridge.py` | 17 |
 | `scripts/pr_watcher.py` | 142 |
-| `scripts/watch_owned_pr.sh` | 147 |
+| `scripts/watch_owned_pr.sh` | 183 |
 | `tests/test_audit_pr_session_drift.py` | 58 |
 | `tests/test_codex_wake_bridge.py` | 24 |
 | `tests/test_pr_watcher.py` | 257 |
 | `tests/test_report_pr_watcher_state.py` | 19 |
-| `tests/test_watch_owned_pr.py` | 230 |
-| **Total** | **1590** |
+| `tests/test_watch_owned_pr.py` | 246 |
+| **Total** | **1664** |
