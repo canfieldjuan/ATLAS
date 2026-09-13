@@ -202,6 +202,8 @@ class FakeRun:
         thread_pages: list[tuple[int, str, str]] | None = None,
         review_pages: list[tuple[int, str, str]] | None = None,
         comment_pages: list[tuple[int, str, str]] | None = None,
+        post_review_pages: list[tuple[int, str, str]] | None = None,
+        post_comment_pages: list[tuple[int, str, str]] | None = None,
         reconciliation: tuple[int, str, str] = (0, "clean", ""),
         git_status: tuple[int, str, str] = (0, "", ""),
         gate_registry: tuple[int, str, str] | None = None,
@@ -223,8 +225,10 @@ class FakeRun:
         )
         self.reviews = reviews or _response({"comments": [], "reviews": []})
         self.thread_pages = list(thread_pages or [_response(_thread_page())])
-        self.review_pages = list(review_pages or [_response(_review_page())])
-        self.comment_pages = list(comment_pages or [_response(_comment_page())])
+        initial_review_pages = list(review_pages or [_response(_review_page())])
+        initial_comment_pages = list(comment_pages or [_response(_comment_page())])
+        self.review_pages = initial_review_pages + list(post_review_pages or initial_review_pages)
+        self.comment_pages = initial_comment_pages + list(post_comment_pages or initial_comment_pages)
         self.reconciliation = reconciliation
         self.git_status = git_status
         self.gate_registry = gate_registry or (
@@ -431,7 +435,7 @@ def test_classify_review_readiness_grammar_invariant() -> None:
         assert actual == contract_oracle
 
 
-def test_thread_snapshot_is_collected_after_codex_review_pagination(
+def test_thread_snapshot_is_bracketed_by_codex_review_pagination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -460,7 +464,7 @@ def test_thread_snapshot_is_collected_after_codex_review_pagination(
         for command in fake.commands
         if command[:3] == ["gh", "api", "graphql"]
     ]
-    assert graphql_kinds == ["reviews", "comments", "threads"]
+    assert graphql_kinds == ["reviews", "comments", "threads", "reviews", "comments"]
     reconciliation_index = next(
         i
         for i, command in enumerate(fake.commands)
@@ -1018,6 +1022,33 @@ def test_latest_exact_head_codex_review_state_controls_readiness(
 
     assert status["state"] == expected_state
     assert status["readiness"]["codex_changes_requested"] is expected_changes_requested
+
+
+def test_same_head_review_change_during_collection_requires_attention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clean = {
+        "author": {"login": "chatgpt-codex-connector"},
+        "commit": {"oid": "head-a"},
+        "state": "COMMENTED",
+        "submittedAt": "2026-07-27T00:00:00Z",
+    }
+    requested = {**clean, "state": "CHANGES_REQUESTED"}
+
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[_response(_review_page([clean]))],
+            post_review_pages=[_response(_review_page([requested]))],
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_reviews_complete"] is False
+    assert status["readiness"]["codex_changes_requested"] is True
+    assert "review evidence changed during watcher observation" in status["codex_reviews_error"]
 
 
 @pytest.mark.parametrize(

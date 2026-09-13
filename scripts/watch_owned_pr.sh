@@ -350,6 +350,51 @@ for i in $(seq 0 "$CYCLES"); do
     FINAL_REQUNSETTLED=$(echo "$FINAL_CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
     CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error after final evidence, retrying"; continue; }
     if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
+    FINAL_REVIEW_CHANGED=false
+    if [ "$FINAL_REVIEWS_COMPLETE" = "true" ]; then
+      FINAL_RECHECK_REVIEW_NODES='[]'
+      FINAL_RECHECK_REVIEW_CURSOR=''
+      FINAL_RECHECK_REVIEWS_COMPLETE=true
+      while :; do
+        FINAL_RECHECK_REVIEW_ARGS=(gh api graphql -f query="$REVIEW_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
+        [ -n "$FINAL_RECHECK_REVIEW_CURSOR" ] && FINAL_RECHECK_REVIEW_ARGS+=(-f cursor="$FINAL_RECHECK_REVIEW_CURSOR")
+        FINAL_RECHECK_REVIEW_PAGE=$(GH_TOKEN="$TOK" "${FINAL_RECHECK_REVIEW_ARGS[@]}" 2>/dev/null) || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+        if ! echo "$FINAL_RECHECK_REVIEW_PAGE" | jq -e '
+            (((.errors // []) | length) == 0)
+            and ((.data.repository.pullRequest | type) == "object")
+            and ((.data.repository.pullRequest.reviews | type) == "object")
+            and ((.data.repository.pullRequest.reviews.nodes | type) == "array")
+            and ((.data.repository.pullRequest.reviews.pageInfo | type) == "object")
+            and ((.data.repository.pullRequest.reviews.pageInfo.hasNextPage | type) == "boolean")
+            and (
+              (.data.repository.pullRequest.reviews.pageInfo.hasNextPage == false)
+              or (
+                ((.data.repository.pullRequest.reviews.pageInfo.endCursor // "") | type) == "string"
+                and (((.data.repository.pullRequest.reviews.pageInfo.endCursor // "") | length) > 0)
+              )
+            )
+          ' >/dev/null 2>&1; then
+          FINAL_RECHECK_REVIEWS_COMPLETE=false
+          break
+        fi
+        FINAL_RECHECK_PAGE_NODES=$(echo "$FINAL_RECHECK_REVIEW_PAGE" | jq -c '.data.repository.pullRequest.reviews.nodes // []') || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+        FINAL_RECHECK_REVIEW_NODES=$(jq -n -c --argjson existing "$FINAL_RECHECK_REVIEW_NODES" --argjson new "$FINAL_RECHECK_PAGE_NODES" '$existing + $new') || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+        FINAL_RECHECK_HAS_NEXT=$(echo "$FINAL_RECHECK_REVIEW_PAGE" | jq -r '.data.repository.pullRequest.reviews.pageInfo.hasNextPage')
+        [ "$FINAL_RECHECK_HAS_NEXT" = "true" ] || break
+        FINAL_RECHECK_REVIEW_CURSOR=$(echo "$FINAL_RECHECK_REVIEW_PAGE" | jq -r '.data.repository.pullRequest.reviews.pageInfo.endCursor // empty')
+        [ -n "$FINAL_RECHECK_REVIEW_CURSOR" ] || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
+      done
+      if [ "$FINAL_RECHECK_REVIEWS_COMPLETE" = "true" ] && ! echo "$FINAL_RECHECK_REVIEW_NODES" | jq -e --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha))] | all(.[]; ((.state | type) == "string") and ((.submittedAt | type) == "string") and ((try (.submittedAt | fromdateiso8601) catch null) != null))' >/dev/null; then
+        FINAL_RECHECK_REVIEWS_COMPLETE=false
+      fi
+      if [ "$FINAL_RECHECK_REVIEWS_COMPLETE" != "true" ]; then
+        FINAL_REVIEWS_COMPLETE=false
+      else
+        FINAL_REVIEW_SNAPSHOT=$(echo "$FINAL_REVIEW_NODES" | jq -cS --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha)) | {state, submittedAt}] | sort_by(.submittedAt, .state)')
+        FINAL_RECHECK_REVIEW_SNAPSHOT=$(echo "$FINAL_RECHECK_REVIEW_NODES" | jq -cS --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha)) | {state, submittedAt}] | sort_by(.submittedAt, .state)')
+        [ "$FINAL_REVIEW_SNAPSHOT" = "$FINAL_RECHECK_REVIEW_SNAPSHOT" ] || FINAL_REVIEW_CHANGED=true
+      fi
+    fi
     if [ "$FINAL_DECISION" = "CHANGES_REQUESTED" ] || [ "$FINAL_CODEX_CHANGE_REQUESTS" -gt 0 ]; then
       echo "ACTIONABLE: final-read exact-head review requests changes -> reconcile/fix, push, re-arm"; exit 0
     fi
@@ -357,6 +402,9 @@ for i in $(seq 0 "$CYCLES"); do
        || { [ "$FINAL_MSTATE" != "CLEAN" ] && [ "$FINAL_MSTATE" != "UNSTABLE" ]; } \
        || [ "$FINAL_REQRED" -gt 0 ] || [ "$FINAL_REQGREEN" -ne "$REQ_TOTAL" ] || [ "$FINAL_REQUNSETTLED" -ne 0 ]; then
       echo "ACTIONABLE: final-read req-green=$FINAL_REQGREEN/$REQ_TOTAL req-red=$FINAL_REQRED req-unsettled=$FINAL_REQUNSETTLED codex-head-attestations=$FINAL_CODEX_HEAD_REVIEWS codex-change-requests=$FINAL_CODEX_CHANGE_REQUESTS attestation-pages=$FINAL_REVIEW_PAGES attestations-complete=$FINAL_REVIEWS_COMPLETE threads=$FINAL_UNRES decision=$FINAL_DECISION mergeable=$FINAL_MERGEABLE merge-state=$FINAL_MSTATE -> reconcile/fix, push, re-arm"; exit 0
+    fi
+    if [ "$FINAL_REVIEW_CHANGED" = "true" ]; then
+      echo "ACTIONABLE: exact-head review evidence changed during final observation -> reconcile/re-arm"; exit 0
     fi
     if [ "$FINAL_REVIEWS_COMPLETE" != "true" ] || [ "$FINAL_CODEX_HEAD_REVIEWS" -lt 1 ]; then
       echo "REVIEW-PENDING: final-read complete exact-head Codex review evidence is not available"

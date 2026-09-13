@@ -250,6 +250,16 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     }]
                     has_next = False
                     cursor = None
+                elif scenario == "same_head_review_changes_during_final_evidence":
+                    state = "CHANGES_REQUESTED" if review_count > 1 else "COMMENTED"
+                    nodes = [{
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "commit": {"oid": expected_sha},
+                        "state": state,
+                        "submittedAt": "2026-07-27T00:00:00Z",
+                    }]
+                    has_next = False
+                    cursor = None
                 elif scenario == "changes_requested_review":
                     nodes = [{
                         "author": {"login": "chatgpt-codex-connector"},
@@ -653,6 +663,14 @@ def test_watcher_revalidates_head_after_collecting_final_evidence(tmp_path: Path
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
     assert "HEAD-MOVED: head-a -> head-b" in result.stdout
+
+
+def test_watcher_rejects_same_head_review_change_during_final_evidence(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="same_head_review_changes_during_final_evidence")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "review evidence changed during final observation" in result.stdout
 
 
 def test_watcher_blocks_final_decision_change_when_threads_clear(tmp_path: Path) -> None:
