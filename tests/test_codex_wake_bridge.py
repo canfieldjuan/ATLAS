@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from itertools import product
 import json
 from pathlib import Path
 import pytest
@@ -574,6 +575,129 @@ def test_pending_check_list_blocks_scheduled_ready_command(tmp_path: Path) -> No
     assert payload["actionable"] is False
     assert "Pending watcher state" in prompt
     assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    ("state", "check_pending", "expected"),
+    [
+        ("closed", ["maturity-sweep"], "closed"),
+        ("attention", ["maturity-sweep"], "attention"),
+        ("review_changed", ["maturity-sweep"], "attention"),
+        ("pending", [], "pending"),
+        ("ready_for_human_merge", ["maturity-sweep"], "pending"),
+        ("ready_for_human_merge", [], "ready"),
+    ],
+)
+def test_snapshot_state_precedence(
+    tmp_path: Path,
+    state: str,
+    check_pending: list[str],
+    expected: str,
+) -> None:
+    _config_dir, state_dir, watcher_id = _write_fixture(
+        tmp_path,
+        state=state,
+        extra_status={"check_pending": check_pending},
+    )
+    status = json.loads((state_dir / f"{watcher_id}.json").read_text(encoding="utf-8"))
+
+    assert bridge.classify_snapshot_state(status) == expected
+
+
+def _snapshot_state_contract_oracle(
+    *,
+    producer_state: str,
+    pending_shape: object,
+    blocker_field: str | None,
+    github_state: str | None,
+) -> str:
+    if blocker_field is not None:
+        return "attention"
+    if github_state in {"MERGED", "CLOSED"} or producer_state == "closed":
+        return "closed"
+    if producer_state in {"attention", "review_changed"}:
+        return "attention"
+    if producer_state == "pending" or bool(pending_shape):
+        return "pending"
+    if producer_state == "ready_for_human_merge":
+        return "ready"
+    return "other"
+
+
+def test_codex_wake_bridge_snapshot_state_property(tmp_path: Path) -> None:
+    """Grammar axes: state tokens x pending containers x blocker key families."""
+    _config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
+    base_status = json.loads((state_dir / f"{watcher_id}.json").read_text(encoding="utf-8"))
+    producer_states = (
+        "closed",
+        "attention",
+        "review_changed",
+        "pending",
+        "ready_for_human_merge",
+        "unrecognized",
+    )
+    pending_shapes = ([], ["maturity-sweep"], "", "unexpected", False, True, {}, {"job": "maturity-sweep"})
+    blocker_fields = ((None, None), ("head_mismatch", True), ("view_error", "API unavailable"))
+    github_states = (None, "OPEN", "CLOSED", "MERGED")
+    parity_oracle: dict[tuple[object, ...], str] = {}
+
+    for producer_state, pending_shape, blocker, github_state in product(
+        producer_states,
+        pending_shapes,
+        blocker_fields,
+        github_states,
+    ):
+        blocker_field, blocker_value = blocker
+        status = {
+            **base_status,
+            "state": producer_state,
+            "check_pending": pending_shape,
+        }
+        if blocker_field is not None:
+            status[blocker_field] = blocker_value
+        contract_oracle = _snapshot_state_contract_oracle(
+            producer_state=producer_state,
+            pending_shape=pending_shape,
+            blocker_field=blocker_field,
+            github_state=github_state,
+        )
+
+        actual = bridge.classify_snapshot_state(status, gh_state=github_state)
+
+        assert actual == contract_oracle
+        parity_key = (producer_state, bool(pending_shape), blocker_field, github_state)
+        if parity_key in parity_oracle:
+            assert actual == parity_oracle[parity_key]
+        else:
+            parity_oracle[parity_key] = actual
+
+
+def test_actionable_review_state_outranks_optional_pending_checks(tmp_path: Path) -> None:
+    config_dir, state_dir, watcher_id = _write_fixture(
+        tmp_path,
+        state="attention",
+        extra_status={"check_pending": ["maturity-sweep"]},
+    )
+    status_path = state_dir / f"{watcher_id}.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status["readiness"]["codex_changes_requested"] = True
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+
+    code = bridge.main([
+        watcher_id,
+        "--source",
+        "scheduled",
+        "--config-dir",
+        str(config_dir),
+        "--state-dir",
+        str(state_dir),
+    ])
+
+    assert code == 0
+    payload, prompt = _read_handoff(state_dir, watcher_id)
+    assert payload["wake_kind"] == "attention"
+    assert payload["actionable"] is True
+    assert "Attention wake" in prompt
 
 
 def test_run_command_receives_prompt_on_stdin(tmp_path: Path) -> None:

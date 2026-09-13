@@ -215,6 +215,26 @@ def test_reports_attention_status_details(tmp_path: Path) -> None:
     assert "reconciliation_exit_code=1" in result.stdout
 
 
+def test_actionable_review_state_outranks_optional_pending_checks(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    path = state_dir / "attention-with-pending.json"
+    _write_state(
+        path,
+        state="attention",
+        extra={"check_failures": [], "check_pending": ["maturity-sweep"]},
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["readiness"]["codex_changes_requested"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(state_dir)
+
+    assert result.returncode == 0
+    assert "Needs active-agent attention" in result.stdout
+    assert "Still pending" not in result.stdout
+
+
 def test_reports_merged_state_as_stale_cleanup(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()

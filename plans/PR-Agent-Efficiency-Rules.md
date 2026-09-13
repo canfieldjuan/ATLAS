@@ -98,7 +98,7 @@ that cannot pass its own admission checks.
 Ownership lane: atlas-agent-efficiency-policy
 Slice phase: workflow/process
 
-Max files: 15
+Max files: 16
 
 1. Replace model-driven polling instructions with one-snapshot activation and
    preserve the scheduled-ready-only authorization boundary.
@@ -129,6 +129,8 @@ Max files: 15
     documentation-only PRs just like every other owned PR.
 12. Revalidate accepted clean top-level Codex comments alongside formal reviews
     before the shell watcher can report merge readiness.
+13. Make the producer's actionable state outrank optional pending checks through
+    one shared consumer classifier used by the wake bridge and state reporter.
 
 ### Review Contract
 
@@ -190,6 +192,10 @@ Max files: 15
   18. `tests/test_watch_owned_pr.py` proves deletion of the sole accepted clean
       top-level Codex comment during final evidence collection cannot reach
       `MERGE-READY`.
+  19. `tests/test_codex_wake_bridge.py` and
+      `tests/test_report_pr_watcher_state.py` prove a producer snapshot carrying
+      both an exact-head change request and optional pending checks remains
+      actionable in every consumer rather than being downgraded to pending.
 - Reachability proof: the real shell/Python watcher entrypoints consume mocked
   GitHub snapshots in their existing focused test suites; observable output is
   `MERGE-READY` versus pending/actionable and ready versus pending/attention
@@ -264,6 +270,15 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - Complete safe proof: intentionally changed to ready.
   - Missing/malformed/true review evidence: intentionally changed to attention
     with explicit readiness blockers.
+- Boundary path/seam: producer state plus optional check status -> shared
+  consumer classification.
+  - Closed producer or live PR state: preserved as closed/stale.
+  - Actionable producer state with or without optional pending checks:
+    intentionally classified as attention before pending.
+  - Non-actionable pending state or optional pending checks: preserved as
+    pending.
+  - Ready producer state: preserved only when the version-1 proof independently
+    validates; contradictory proof remains attention.
 - Boundary path/seam: activation source -> active-builder merge instruction.
   - Scheduled-ready activation matching recorded authorization: preserved as
     eligible to run live merge guards, not itself authorized to merge.
@@ -289,6 +304,20 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 ### Closure Declaration
 
+- Consumer snapshot state membership is **CLOSED** and **DERIVED** from the
+  producer states returned by `scripts/pr_watcher.py:_classify`, plus the local
+  `review_changed` receipt state. `classify_snapshot_state` is the single
+  consumer choke point. An out-of-vocabulary producer state returns `other`;
+  the wake bridge then defaults it to attention and the reporter never promotes
+  it to ready.
+- Watcher JSON representation is **OPEN** and interpreted at the shared choke
+  point. Top-level actionable diagnostics default to attention, explicit live
+  terminal state maps to closed/stale, actionable producer state precedes every
+  optional-check representation, truthy pending representations default to
+  pending, and only a recognized ready state with a valid version-1 proof can
+  reach ready. `test_codex_wake_bridge_snapshot_state_property` generates state
+  tokens x pending containers x blocker-key families x live GitHub states and
+  checks both a contract-derived semantic oracle and representation parity.
 - Readiness proof fields are **CLOSED** and **ENUMERATED** by the version-1
   readiness object constructed in `scripts/pr_watcher.py` and validated at the
   single choke point `scripts/codex_wake_bridge.py:readiness_blockers`. Missing,
@@ -310,6 +339,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `scripts/audit_pr_session_drift.py`
 - `scripts/codex_wake_bridge.py`
 - `scripts/pr_watcher.py`
+- `scripts/report_pr_watcher_state.py`
 - `scripts/watch_owned_pr.sh`
 - `tests/test_audit_pr_session_drift.py`
 - `tests/test_codex_wake_bridge.py`
@@ -352,6 +382,13 @@ treating a green reconciliation check as review presence.
 The shell's final stability recheck re-fetches clean top-level Codex comments as
 well as formal reviews and compares both accepted-source counts/snapshots before
 readiness.
+The wake bridge owns one shared semantic classifier for stored watcher
+snapshots. Both it and the state reporter apply the same actionable-diagnostic,
+authoritative-closed, actionable-producer, pending, then proof-validated-ready
+precedence, so optional pending checks cannot suppress a producer's actionable
+review state. The reporter supplies its live GitHub state to that classifier;
+the bridge continues to reject a stored ready/closed contradiction through the
+version-1 proof validator.
 
 The instruction set distinguishes active model turns from external state
 collectors: external timers/webhooks may wake a session, but the session takes
@@ -401,6 +438,14 @@ recheck pagination bounds; no false-readiness behavior is deferred.
 - Fail-first: deleting the sole accepted clean top-level Codex comment during
   the shell's final evidence interval still emitted `MERGE-READY` (`1 failed`).
 - Focused clean-comment disappearance regression - `1 passed`.
+- Fail-first actionable-state consumer regressions - `2 failed` because both
+  consumers downgraded attention plus an optional pending check to pending.
+- Focused actionable-state consumer regressions - `2 passed`.
+- `uv run pytest -q tests/test_codex_wake_bridge.py
+  tests/test_report_pr_watcher_state.py` - `80 passed`.
+- `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py
+  tests/test_codex_wake_bridge.py tests/test_report_pr_watcher_state.py` -
+  `200 passed`.
 - `uv run pytest -q tests/test_watch_owned_pr.py` - `37 passed`.
 - `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py` -
   `119 passed` with head-bound review/comment pages in both producers.
@@ -463,14 +508,15 @@ recheck pagination bounds; no false-readiness behavior is deferred.
 | `docs/OVERNIGHT_ARC_WORKFLOW.md` | 10 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 14 |
 | `docs/long_running_session_watcher_handoff.md` | 87 |
-| `plans/PR-Agent-Efficiency-Rules.md` | 476 |
+| `plans/PR-Agent-Efficiency-Rules.md` | 522 |
 | `scripts/audit_pr_session_drift.py` | 27 |
-| `scripts/codex_wake_bridge.py` | 17 |
+| `scripts/codex_wake_bridge.py` | 58 |
 | `scripts/pr_watcher.py` | 142 |
+| `scripts/report_pr_watcher_state.py` | 19 |
 | `scripts/watch_owned_pr.sh` | 183 |
 | `tests/test_audit_pr_session_drift.py` | 58 |
-| `tests/test_codex_wake_bridge.py` | 24 |
+| `tests/test_codex_wake_bridge.py` | 148 |
 | `tests/test_pr_watcher.py` | 257 |
-| `tests/test_report_pr_watcher_state.py` | 19 |
+| `tests/test_report_pr_watcher_state.py` | 39 |
 | `tests/test_watch_owned_pr.py` | 246 |
-| **Total** | **1664** |
+| **Total** | **1914** |

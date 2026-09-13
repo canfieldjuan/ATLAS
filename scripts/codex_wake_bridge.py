@@ -180,27 +180,46 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def classify_snapshot_state(
+    status: dict[str, Any],
+    *,
+    watcher_state: str | None = None,
+    gh_state: str | None = None,
+) -> str:
+    """Classify one producer snapshot without losing actionable precedence."""
+    state = watcher_state if watcher_state is not None else str(status.get("state") or "unknown")
+    if attention_blockers(status):
+        return "attention"
+
+    if gh_state in {"MERGED", "CLOSED"} or state == "closed":
+        return "closed"
+    if state in {"attention", "review_changed"}:
+        return "attention"
+    if state == "pending" or _truthy(status.get("check_pending")):
+        return "pending"
+    if state == "ready_for_human_merge":
+        return "attention" if readiness_blockers(status) else "ready"
+    return "other"
+
+
 def classify_wake(status: dict[str, Any], *, source: str, status_error: str | None = None) -> str:
     """Classify the bridge wake without granting merge authority."""
     if status_error:
         return "invalid-snapshot"
 
-    state = str(status.get("state") or "unknown")
-    if attention_blockers(status):
-        return "attention"
-
-    if state == "closed":
+    snapshot_state = classify_snapshot_state(status)
+    if snapshot_state == "closed":
         return "closed"
     if source == "event":
-        if state in {"attention", "pending", "ready_for_human_merge", "review_changed"} or _truthy(status.get("review_changed")):
+        if snapshot_state in {"attention", "pending", "ready"} or _truthy(status.get("review_changed")):
             return "event-attention"
         return "event-noop"
-    if state == "pending" or _truthy(status.get("check_pending")):
-        return "pending"
-    if source == "scheduled" and state == "ready_for_human_merge":
-        return "scheduled-ready" if not readiness_blockers(status) else "attention"
-    if state in {"attention", "review_changed"}:
+    if snapshot_state == "attention":
         return "attention"
+    if snapshot_state == "pending":
+        return "pending"
+    if source == "scheduled" and snapshot_state == "ready":
+        return "scheduled-ready"
     return "attention"
 
 
