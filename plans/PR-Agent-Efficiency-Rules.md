@@ -9,7 +9,10 @@ PR #2521 exposed three reachable splits: mandatory companion instructions still
 tell Claude to poll, the rewritten merge step no longer preserves the recorded
 wake-source authorization boundary, and watcher readiness treats exact-head
 Codex review evidence as diagnostic even though the new policy makes its absence
-pending.
+pending. The corrected plan-required body then exposed a pre-push deadlock:
+`--current-pr-body-file` validates the intended body but the session-drift audit
+also validates the stale GitHub body for the same branch, while `open_pr.sh`
+correctly refuses to update that body until the new head is pushed.
 
 These are policy and merge-readiness failures in the current slice, not optional
 hardening. Fixing only the cited sentences would leave the executable watcher
@@ -18,7 +21,8 @@ able to report a pre-review PR as ready.
 The 400-LOC soft cap is exceeded because the root decision spans four mandatory
 instruction surfaces, both watcher producers, the shared readiness consumer,
 and their existing focused contract tests; splitting those pieces would publish
-a policy/runtime contradiction or an unverified merge gate.
+a policy/runtime contradiction, an unverified merge gate, or a body-update path
+that cannot pass its own admission checks.
 
 ### Problem-derived contract
 
@@ -27,14 +31,17 @@ a policy/runtime contradiction or an unverified merge gate.
   polling model. It also removed the activation-source predicate from the merge
   instruction. Both watcher producers already collect exact-head Codex review
   evidence, but their readiness decisions and the shared proof validator do not
-  require complete evidence or a positive current-head attestation.
+  require complete evidence or a positive current-head attestation. The
+  session-drift audit also treats its explicit local current-body override and
+  the same branch's stale GitHub body as simultaneous authorities.
 - Correct fix must touch/change: make every mandatory session instruction use
   subscription/external wake plus one snapshot per model activation; require the
   activation source to satisfy the recorded merge authorization; make the shell
   watcher, Python watcher, and shared readiness validator keep incomplete,
   absent, stale, or rejected exact-head review evidence out of ready state; and
   prove the positive and negative sides in focused watcher, bridge, and reporter
-  tests.
+  tests; and make the explicit local current-body override authoritative only
+  for the current PR while preserving GitHub peer-overlap discovery.
 - Must not change: watcher infrastructure remains read-only and never gains
   merge authority; external non-model timers may still collect state; required
   CI, thread pagination, ownership, mergeability, and reconciliation gates stay
@@ -45,7 +52,7 @@ a policy/runtime contradiction or an unverified merge gate.
 Ownership lane: atlas-agent-efficiency-policy
 Slice phase: workflow/process
 
-Max files: 12
+Max files: 14
 
 1. Replace model-driven polling instructions with one-snapshot activation and
    preserve the scheduled-ready-only authorization boundary.
@@ -54,6 +61,8 @@ Max files: 12
 3. Add focused positive/negative tests for no review, stale/wrong review,
    incomplete review pagination, requested changes, and one valid exact-head
    review.
+4. Remove the pre-push body-update deadlock by preventing a same-branch stale
+   GitHub body from overriding the explicitly supplied local current-body file.
 
 ### Review Contract
 
@@ -79,13 +88,16 @@ Max files: 12
      classified ready.
   6. `python scripts/audit_pr_watcher_safety.py --repo-only` proves no watcher,
      timer, bridge, or handoff gained merge authority.
+  7. `tests/test_audit_pr_session_drift.py` proves an explicit valid local
+     current-body file wins over the stale body of the same GitHub PR while the
+     GitHub sweep still runs for peer PR conflicts.
 - Reachability proof: the real shell/Python watcher entrypoints consume mocked
   GitHub snapshots in their existing focused test suites; observable output is
   `MERGE-READY` versus pending/actionable and ready versus pending/attention
   state/report buckets.
 - Affected surfaces: builder instructions, session-state handoff, shell watcher,
   Python watcher, wake-bridge readiness validation, reporter classification, and
-  their focused tests.
+  their focused tests, and the pre-push cross-session drift audit.
 - Risk areas: premature merge readiness, stale/incomplete review evidence,
   mismatched wake authorization, accidental model polling, and watcher merge
   authority.
@@ -108,6 +120,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   activation source.
 - Caller x input shape: shell watcher GraphQL pages, Python watcher version-1
   readiness dict, wake bridge, reporter, and active-builder instruction flow.
+- Boundary path/seam: explicit local current-body file -> current-PR body
+  validation, while other GitHub PRs remain inputs to collision detection.
 
 ### Deployed-config probing
 
@@ -141,9 +155,11 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 - `docs/SESSION_STATE_TEMPLATE.md`
 - `docs/long_running_session_watcher_handoff.md`
 - `plans/PR-Agent-Efficiency-Rules.md`
+- `scripts/audit_pr_session_drift.py`
 - `scripts/codex_wake_bridge.py`
 - `scripts/pr_watcher.py`
 - `scripts/watch_owned_pr.sh`
+- `tests/test_audit_pr_session_drift.py`
 - `tests/test_codex_wake_bridge.py`
 - `tests/test_pr_watcher.py`
 - `tests/test_report_pr_watcher_state.py`
@@ -164,6 +180,11 @@ collectors: external timers/webhooks may wake a session, but the session takes
 one snapshot and yields again on unchanged/pending state. Merge authorization
 continues to be conditioned on its recorded activation source.
 
+The session-drift audit treats `--current-pr-body-file` as the intended body for
+the current branch and does not append stale same-PR GitHub-body errors after
+that file passes. It still loads GitHub PRs and evaluates every peer PR for path
+and lane overlap.
+
 ## Intentional
 
 - A missing Codex review is pending, not actionable: there is nothing for the
@@ -172,6 +193,8 @@ continues to be conditioned on its recorded activation source.
   because treating uncertainty as ready would weaken the merge gate.
 - Local non-model watchers may continue polling GitHub; this slice removes model
   polling, not deterministic state collection.
+- The local body override applies only to the current PR identified by branch or
+  head. It does not suppress peer-PR collision checks.
 
 ## Deferred
 
@@ -200,6 +223,9 @@ Parked hardening: none.
   OK; no guard-shaped change without a property test.
 - Targeted mandatory-doc audit - `stale model polling directives: 0`.
 - `git diff --check` - exit 0.
+- `uv run pytest -q tests/test_audit_pr_session_drift.py` - `50 passed`.
+- `uv run ruff check scripts/audit_pr_session_drift.py
+  tests/test_audit_pr_session_drift.py` - all checks passed.
 - At push, `scripts/push_pr.sh` owns the single local review bundle; it is not
   duplicated manually.
 
@@ -211,12 +237,14 @@ Parked hardening: none.
 | `CLAUDE.md` | 18 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 14 |
 | `docs/long_running_session_watcher_handoff.md` | 34 |
-| `plans/PR-Agent-Efficiency-Rules.md` | 222 |
+| `plans/PR-Agent-Efficiency-Rules.md` | 246 |
+| `scripts/audit_pr_session_drift.py` | 27 |
 | `scripts/codex_wake_bridge.py` | 11 |
 | `scripts/pr_watcher.py` | 4 |
 | `scripts/watch_owned_pr.sh` | 19 |
+| `tests/test_audit_pr_session_drift.py` | 58 |
 | `tests/test_codex_wake_bridge.py` | 20 |
 | `tests/test_pr_watcher.py` | 75 |
 | `tests/test_report_pr_watcher_state.py` | 18 |
 | `tests/test_watch_owned_pr.py` | 64 |
-| **Total** | **585** |
+| **Total** | **694** |
