@@ -43,7 +43,7 @@ a policy/runtime contradiction or an unverified merge gate.
 ## Scope (this PR)
 
 Ownership lane: atlas-agent-efficiency-policy
-Slice phase: Workflow policy correction
+Slice phase: workflow/process
 
 Max files: 12
 
@@ -184,7 +184,7 @@ Parked hardening: none.
 - Fail-first: four targeted regressions failed in the declared readiness class
   before implementation (`4 failed`).
 - `uv run pytest -q tests/test_watch_owned_pr.py` - `26 passed`.
-- `uv run pytest -q tests/test_pr_watcher.py` - `75 passed`.
+- `uv run pytest -q tests/test_pr_watcher.py` - `76 passed`.
 - `uv run pytest -q tests/test_codex_wake_bridge.py
   tests/test_report_pr_watcher_state.py` - `68 passed`.
 - `uv run ruff check scripts/codex_wake_bridge.py scripts/pr_watcher.py
@@ -216,7 +216,7 @@ Parked hardening: none.
 | `scripts/pr_watcher.py` | 4 |
 | `scripts/watch_owned_pr.sh` | 19 |
 | `tests/test_codex_wake_bridge.py` | 20 |
-| `tests/test_pr_watcher.py` | 32 |
+| `tests/test_pr_watcher.py` | 75 |
 | `tests/test_report_pr_watcher_state.py` | 18 |
 | `tests/test_watch_owned_pr.py` | 64 |
-| **Total** | **542** |
+| **Total** | **585** |

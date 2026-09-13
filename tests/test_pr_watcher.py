@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -379,6 +380,48 @@ def test_post_review_metadata_blocks_readiness_on_changes_requested(
     assert status["pr"]["reviewDecision"] == "CHANGES_REQUESTED"
     assert status["readiness"]["review_decision"] == "CHANGES_REQUESTED"
     assert "review decision has open changes requested" in wake_bridge.readiness_blockers(status)
+
+
+def test_classify_review_readiness_grammar_invariant() -> None:
+    # Grammar axes: review tokens x proof containers x decision key families.
+    complete_options = (False, True)
+    attestation_counts = (0, 1)
+    review_decisions = ("", "CHANGES_REQUESTED")
+    pending_options = (False, True)
+
+    for reviews_complete, review_count, decision, has_pending in product(
+        complete_options,
+        attestation_counts,
+        review_decisions,
+        pending_options,
+    ):
+        if not reviews_complete or decision == "CHANGES_REQUESTED":
+            contract_oracle = "attention"
+        elif review_count < 1 or has_pending:
+            contract_oracle = "pending"
+        else:
+            contract_oracle = "ready_for_human_merge"
+
+        actual = watcher._classify(
+            pr=_pr(decision=decision),
+            errors=[],
+            unsafe_auto_merge=False,
+            head_mismatch=False,
+            worktree_dirty=False,
+            failures=[],
+            required_failures=[],
+            pending=["ci"] if has_pending else [],
+            required_pending=[],
+            required_count=1,
+            threads_complete=True,
+            unresolved_threads=[],
+            reviews_complete=reviews_complete,
+            codex_head_review_count=review_count,
+            reconciliation_code=0,
+            review_changed=False,
+        )
+
+        assert actual == contract_oracle
 
 
 def test_thread_snapshot_is_collected_after_codex_review_pagination(
