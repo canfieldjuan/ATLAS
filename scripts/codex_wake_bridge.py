@@ -146,6 +146,21 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
     elif unresolved:
         blockers.append(f"unresolved review threads remain: {len(unresolved)}")
 
+    if proof.get("codex_reviews_complete") is not True:
+        blockers.append("Codex review pagination is incomplete")
+    review_pages = proof.get("codex_review_pages_fetched")
+    if not _non_negative_int(review_pages) or review_pages < 1:
+        blockers.append("Codex review pages fetched must be at least 1")
+    review_count = proof.get("codex_head_review_count")
+    if not _non_negative_int(review_count) or review_count < 1:
+        blockers.append("exact-head Codex review count must be at least 1")
+    if "codex_changes_requested" not in proof:
+        blockers.append("exact-head Codex change-request evidence is missing")
+    elif proof.get("codex_changes_requested") is True:
+        blockers.append("exact-head Codex review requests changes")
+    elif proof.get("codex_changes_requested") is not False:
+        blockers.append("exact-head Codex change-request evidence must be boolean")
+
     if "review_decision" not in proof or "reviewDecision" not in pr:
         blockers.append("review decision evidence is missing")
     else:
@@ -153,6 +168,8 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
         pr_decision = str(pr.get("reviewDecision") or "").upper()
         if proof_decision != pr_decision:
             blockers.append("review decision does not match PR metadata")
+        if proof_decision == "CHANGES_REQUESTED":
+            blockers.append("review decision has open changes requested")
 
     proof_merge = proof.get("merge_state_status")
     pr_merge = pr.get("mergeStateStatus")
@@ -163,27 +180,46 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
     return blockers
 
 
+def classify_snapshot_state(
+    status: dict[str, Any],
+    *,
+    watcher_state: str | None = None,
+    gh_state: str | None = None,
+) -> str:
+    """Classify one producer snapshot without losing actionable precedence."""
+    state = watcher_state if watcher_state is not None else str(status.get("state") or "unknown")
+    if attention_blockers(status):
+        return "attention"
+
+    if gh_state in {"MERGED", "CLOSED"} or state == "closed":
+        return "closed"
+    if state in {"attention", "review_changed"}:
+        return "attention"
+    if state == "pending" or _truthy(status.get("check_pending")):
+        return "pending"
+    if state == "ready_for_human_merge":
+        return "attention" if readiness_blockers(status) else "ready"
+    return "other"
+
+
 def classify_wake(status: dict[str, Any], *, source: str, status_error: str | None = None) -> str:
     """Classify the bridge wake without granting merge authority."""
     if status_error:
         return "invalid-snapshot"
 
-    state = str(status.get("state") or "unknown")
-    if attention_blockers(status):
-        return "attention"
-
-    if state == "closed":
+    snapshot_state = classify_snapshot_state(status)
+    if snapshot_state == "closed":
         return "closed"
     if source == "event":
-        if state in {"attention", "pending", "ready_for_human_merge", "review_changed"} or _truthy(status.get("review_changed")):
+        if snapshot_state in {"attention", "pending", "ready"} or _truthy(status.get("review_changed")):
             return "event-attention"
         return "event-noop"
-    if state == "pending" or _truthy(status.get("check_pending")):
-        return "pending"
-    if source == "scheduled" and state == "ready_for_human_merge":
-        return "scheduled-ready" if not readiness_blockers(status) else "attention"
-    if state in {"attention", "review_changed"}:
+    if snapshot_state == "attention":
         return "attention"
+    if snapshot_state == "pending":
+        return "pending"
+    if source == "scheduled" and snapshot_state == "ready":
+        return "scheduled-ready"
     return "attention"
 
 

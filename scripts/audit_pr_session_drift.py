@@ -168,21 +168,22 @@ def build_report(
             is_current_pr = pr.head_ref == current_branch or (pr.head_oid and pr.head_oid == current_oid)
             if is_current_pr:
                 current_pr_body_checked = True
-                current_pr_phase_errors.extend(pr.slice_phase_errors)
-                current_pr_phase_errors.extend(
-                    compare_current_pr_body_ownership_lanes(
-                        pr.ownership_lanes,
-                        branch_ownership_lanes=branch_ownership_lanes,
-                        source="current PR body",
+                if not current_pr_body_file:
+                    current_pr_phase_errors.extend(pr.slice_phase_errors)
+                    current_pr_phase_errors.extend(
+                        compare_current_pr_body_ownership_lanes(
+                            pr.ownership_lanes,
+                            branch_ownership_lanes=branch_ownership_lanes,
+                            source="current PR body",
+                        )
                     )
-                )
-                current_pr_phase_errors.extend(
-                    compare_current_pr_body_slice_phases(
-                        pr.slice_phases,
-                        branch_slice_phases=branch_slice_phases,
-                        source="current PR body",
+                    current_pr_phase_errors.extend(
+                        compare_current_pr_body_slice_phases(
+                            pr.slice_phases,
+                            branch_slice_phases=branch_slice_phases,
+                            source="current PR body",
+                        )
                     )
-                )
                 continue
             overlap = frozenset(branch_files & pr.files)
             if overlap:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -125,11 +126,18 @@ def _thread_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = 
     }
 
 
-def _review_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = False, cursor: str | None = None) -> dict[str, Any]:
+def _review_page(
+    nodes: list[dict[str, Any]] | None = None,
+    *,
+    head: str = "head-a",
+    has_next: bool = False,
+    cursor: str | None = None,
+) -> dict[str, Any]:
     return {
         "data": {
             "repository": {
                 "pullRequest": {
+                    "headRefOid": head,
                     "reviews": {
                         "nodes": nodes
                         if nodes is not None
@@ -138,6 +146,7 @@ def _review_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = 
                                 "author": {"login": "chatgpt-codex-connector"},
                                 "commit": {"oid": "head-a"},
                                 "state": "COMMENTED",
+                                "submittedAt": "2026-07-27T00:00:00Z",
                             }
                         ],
                         "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
@@ -148,11 +157,18 @@ def _review_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = 
     }
 
 
-def _comment_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = False, cursor: str | None = None) -> dict[str, Any]:
+def _comment_page(
+    nodes: list[dict[str, Any]] | None = None,
+    *,
+    head: str = "head-a",
+    has_next: bool = False,
+    cursor: str | None = None,
+) -> dict[str, Any]:
     return {
         "data": {
             "repository": {
                 "pullRequest": {
+                    "headRefOid": head,
                     "comments": {
                         "nodes": nodes or [],
                         "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
@@ -200,6 +216,8 @@ class FakeRun:
         thread_pages: list[tuple[int, str, str]] | None = None,
         review_pages: list[tuple[int, str, str]] | None = None,
         comment_pages: list[tuple[int, str, str]] | None = None,
+        post_review_pages: list[tuple[int, str, str]] | None = None,
+        post_comment_pages: list[tuple[int, str, str]] | None = None,
         reconciliation: tuple[int, str, str] = (0, "clean", ""),
         git_status: tuple[int, str, str] = (0, "", ""),
         gate_registry: tuple[int, str, str] | None = None,
@@ -221,8 +239,10 @@ class FakeRun:
         )
         self.reviews = reviews or _response({"comments": [], "reviews": []})
         self.thread_pages = list(thread_pages or [_response(_thread_page())])
-        self.review_pages = list(review_pages or [_response(_review_page())])
-        self.comment_pages = list(comment_pages or [_response(_comment_page())])
+        initial_review_pages = list(review_pages or [_response(_review_page())])
+        initial_comment_pages = list(comment_pages or [_response(_comment_page())])
+        self.review_pages = initial_review_pages + list(post_review_pages or initial_review_pages)
+        self.comment_pages = initial_comment_pages + list(post_comment_pages or initial_comment_pages)
         self.reconciliation = reconciliation
         self.git_status = git_status
         self.gate_registry = gate_registry or (
@@ -338,6 +358,7 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
         "codex_reviews_complete": True,
         "codex_review_pages_fetched": 2,
         "codex_head_review_count": 1,
+        "codex_changes_requested": False,
         "docs_only_reconciliation_exemption": False,
         "review_decision": "",
         "merge_state_status": "CLEAN",
@@ -361,7 +382,7 @@ def test_valid_snapshot_is_ready_and_accepted_by_consumer(tmp_path: Path, monkey
     assert watcher.TRUSTED_RECONCILIATION_CHECKER.parent.name == watcher.RECONCILIATION_LIB_DIR
 
 
-def test_post_review_metadata_records_review_decision_without_blocking_readiness(
+def test_post_review_metadata_blocks_readiness_on_changes_requested(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -375,13 +396,60 @@ def test_post_review_metadata_records_review_decision_without_blocking_readiness
 
     status = _produce(tmp_path, monkeypatch, fake)
 
-    assert status["state"] == "ready_for_human_merge"
+    assert status["state"] == "attention"
     assert status["pr"]["reviewDecision"] == "CHANGES_REQUESTED"
     assert status["readiness"]["review_decision"] == "CHANGES_REQUESTED"
-    assert wake_bridge.readiness_blockers(status) == []
+    assert "review decision has open changes requested" in wake_bridge.readiness_blockers(status)
 
 
-def test_thread_snapshot_is_collected_after_codex_review_pagination(
+def test_classify_review_readiness_grammar_invariant() -> None:
+    # Grammar axes: review tokens x proof containers x decision key families x merge states.
+    complete_options = (False, True)
+    attestation_counts = (0, 1)
+    review_decisions = ("", "CHANGES_REQUESTED")
+    change_request_options = (False, True)
+    pending_options = (False, True)
+    merge_states = ("CLEAN", "DIRTY")
+
+    for reviews_complete, review_count, decision, changes_requested, has_pending, merge_state in product(
+        complete_options,
+        attestation_counts,
+        review_decisions,
+        change_request_options,
+        pending_options,
+        merge_states,
+    ):
+        if not reviews_complete or decision == "CHANGES_REQUESTED" or changes_requested or merge_state != "CLEAN":
+            contract_oracle = "attention"
+        elif review_count < 1 or has_pending:
+            contract_oracle = "pending"
+        else:
+            contract_oracle = "ready_for_human_merge"
+
+        actual = watcher._classify(
+            pr=_pr(decision=decision, merge=merge_state),
+            errors=[],
+            unsafe_auto_merge=False,
+            head_mismatch=False,
+            worktree_dirty=False,
+            failures=[],
+            required_failures=[],
+            pending=["ci"] if has_pending else [],
+            required_pending=[],
+            required_count=1,
+            threads_complete=True,
+            unresolved_threads=[],
+            reviews_complete=reviews_complete,
+            codex_head_review_count=review_count,
+            codex_changes_requested=changes_requested,
+            reconciliation_code=0,
+            review_changed=False,
+        )
+
+        assert actual == contract_oracle
+
+
+def test_thread_snapshot_is_bracketed_by_codex_review_pagination(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -410,7 +478,7 @@ def test_thread_snapshot_is_collected_after_codex_review_pagination(
         for command in fake.commands
         if command[:3] == ["gh", "api", "graphql"]
     ]
-    assert graphql_kinds == ["reviews", "comments", "threads"]
+    assert graphql_kinds == ["reviews", "comments", "threads", "reviews", "comments"]
     reconciliation_index = next(
         i
         for i, command in enumerate(fake.commands)
@@ -905,7 +973,7 @@ def test_paginates_threads_and_keeps_outdated_unresolved_codex_threads(
     ]
 
 
-def test_changes_requested_codex_review_does_not_block_ready_state_without_threads(
+def test_exact_head_changes_requested_review_requires_attention(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -921,6 +989,7 @@ def test_changes_requested_codex_review_does_not_block_ready_state_without_threa
                                 "author": {"login": "chatgpt-codex-connector"},
                                 "commit": {"oid": "head-a"},
                                 "state": "CHANGES_REQUESTED",
+                                "submittedAt": "2026-07-27T00:00:00Z",
                             }
                         ]
                     )
@@ -929,8 +998,133 @@ def test_changes_requested_codex_review_does_not_block_ready_state_without_threa
         ),
     )
 
-    assert status["state"] == "ready_for_human_merge"
+    assert status["state"] == "attention"
     assert status["readiness"]["codex_head_review_count"] == 0
+    assert status["readiness"]["codex_changes_requested"] is True
+    assert "exact-head Codex review requests changes" in wake_bridge.readiness_blockers(status)
+
+
+@pytest.mark.parametrize(
+    ("states", "expected_state", "expected_changes_requested"),
+    [
+        (("CHANGES_REQUESTED", "COMMENTED"), "ready_for_human_merge", False),
+        (("COMMENTED", "CHANGES_REQUESTED"), "attention", True),
+    ],
+)
+def test_latest_exact_head_codex_review_state_controls_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    states: tuple[str, str],
+    expected_state: str,
+    expected_changes_requested: bool,
+) -> None:
+    nodes = [
+        {
+            "author": {"login": "chatgpt-codex-connector"},
+            "commit": {"oid": "head-a"},
+            "state": state,
+            "submittedAt": f"2026-07-27T00:0{index}:00Z",
+        }
+        for index, state in enumerate(states)
+    ]
+
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(review_pages=[_response(_review_page(nodes))]),
+    )
+
+    assert status["state"] == expected_state
+    assert status["readiness"]["codex_changes_requested"] is expected_changes_requested
+
+
+def test_same_head_review_change_during_collection_requires_attention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clean = {
+        "author": {"login": "chatgpt-codex-connector"},
+        "commit": {"oid": "head-a"},
+        "state": "COMMENTED",
+        "submittedAt": "2026-07-27T00:00:00Z",
+    }
+    requested = {**clean, "state": "CHANGES_REQUESTED"}
+
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[_response(_review_page([clean]))],
+            post_review_pages=[_response(_review_page([requested]))],
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_reviews_complete"] is False
+    assert status["readiness"]["codex_changes_requested"] is True
+    assert "review evidence changed during watcher observation" in status["codex_reviews_error"]
+
+
+def test_head_move_during_final_review_recheck_requires_attention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clean = {
+        "author": {"login": "chatgpt-codex-connector"},
+        "commit": {"oid": "head-a"},
+        "state": "COMMENTED",
+        "submittedAt": "2026-07-27T00:00:00Z",
+    }
+
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[_response(_review_page([clean]))],
+            post_review_pages=[_response(_review_page([clean], head="head-b"))],
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_reviews_complete"] is False
+    assert "review snapshot head changed" in status["codex_reviews_error"]
+
+
+@pytest.mark.parametrize(
+    ("submitted_at", "expected_error"),
+    [
+        (None, "submittedAt is missing"),
+        ("not-a-time", "submittedAt is malformed"),
+        ("2026-07-27T00:00:00", "submittedAt has no timezone"),
+    ],
+)
+def test_exact_head_codex_review_with_invalid_submission_time_is_attention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    submitted_at: str | None,
+    expected_error: str,
+) -> None:
+    review = {
+        "author": {"login": "chatgpt-codex-connector"},
+        "commit": {"oid": "head-a"},
+        "state": "COMMENTED",
+    }
+    if submitted_at is not None:
+        review["submittedAt"] = submitted_at
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[
+                _response(
+                    _review_page([review])
+                )
+            ]
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert expected_error in status["codex_reviews_error"]
 
 
 def test_unresolved_non_codex_thread_does_not_block_ready_state(
@@ -960,7 +1154,7 @@ def test_unresolved_non_codex_thread_does_not_block_ready_state(
     assert status["readiness"]["unresolved_review_threads"] == []
 
 
-def test_current_head_codex_review_is_not_required_for_ready_state(
+def test_current_head_codex_review_is_required_for_ready_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -984,13 +1178,13 @@ def test_current_head_codex_review_is_not_required_for_ready_state(
         ),
     )
 
-    assert status["state"] == "ready_for_human_merge"
+    assert status["state"] == "pending"
     assert status["readiness"]["codex_reviews_complete"] is True
     assert status["readiness"]["codex_head_review_count"] == 0
-    assert wake_bridge.readiness_blockers(status) == []
+    assert "exact-head Codex review count must be at least 1" in wake_bridge.readiness_blockers(status)
 
 
-def test_docs_only_body_does_not_need_review_exemption_for_readiness(
+def test_docs_only_body_still_requires_current_head_review_for_readiness(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1018,10 +1212,10 @@ def test_docs_only_body_does_not_need_review_exemption_for_readiness(
         ),
     )
 
-    assert status["state"] == "ready_for_human_merge"
+    assert status["state"] == "pending"
     assert status["readiness"]["codex_head_review_count"] == 0
     assert status["readiness"]["docs_only_reconciliation_exemption"] is False
-    assert wake_bridge.readiness_blockers(status) == []
+    assert "exact-head Codex review count must be at least 1" in wake_bridge.readiness_blockers(status)
 
 
 def test_docs_only_reconciliation_exemption_requires_final_body_marker(
@@ -1135,7 +1329,7 @@ def test_current_head_review_requires_exact_codex_connector_identity(
         ),
     )
 
-    assert status["state"] == "ready_for_human_merge"
+    assert status["state"] == "pending"
     assert status["readiness"]["codex_head_review_count"] == 0
 
 
@@ -1181,7 +1375,7 @@ def test_codex_clean_comment_attests_current_head(
         monkeypatch,
         FakeRun(
             pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
-            review_pages=[_response(_review_page(nodes=[]))],
+            review_pages=[_response(_review_page(nodes=[], head=head))],
             comment_pages=[
                 _response(
                     _comment_page(
@@ -1191,7 +1385,8 @@ def test_codex_clean_comment_attests_current_head(
                                 "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
                                 "bodyText": "",
                             }
-                        ]
+                        ],
+                        head=head,
                     )
                 )
             ],
@@ -1213,7 +1408,7 @@ def test_authorless_comment_is_ignored_for_codex_attestation(
         monkeypatch,
         FakeRun(
             pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
-            review_pages=[_response(_review_page(nodes=[]))],
+            review_pages=[_response(_review_page(nodes=[], head=head))],
             comment_pages=[
                 _response(
                     _comment_page(
@@ -1223,7 +1418,8 @@ def test_authorless_comment_is_ignored_for_codex_attestation(
                                 "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
                                 "bodyText": "",
                             }
-                        ]
+                        ],
+                        head=head,
                     )
                 )
             ],
@@ -1231,7 +1427,7 @@ def test_authorless_comment_is_ignored_for_codex_attestation(
         head=head,
     )
 
-    assert status["state"] == "ready_for_human_merge"
+    assert status["state"] == "pending"
     assert status["readiness"]["codex_reviews_complete"] is True
     assert status["readiness"]["codex_head_review_count"] == 0
 
@@ -1246,9 +1442,9 @@ def test_codex_comment_pagination_reaches_later_current_head_attestation(
         monkeypatch,
         FakeRun(
             pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
-            review_pages=[_response(_review_page(nodes=[]))],
+            review_pages=[_response(_review_page(nodes=[], head=head))],
             comment_pages=[
-                _response(_comment_page(has_next=True, cursor="comment-cursor")),
+                _response(_comment_page(head=head, has_next=True, cursor="comment-cursor")),
                 _response(
                     _comment_page(
                         [
@@ -1257,7 +1453,8 @@ def test_codex_comment_pagination_reaches_later_current_head_attestation(
                                 "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
                                 "bodyText": "",
                             }
-                        ]
+                        ],
+                        head=head,
                     )
                 ),
             ],
@@ -1270,7 +1467,7 @@ def test_codex_comment_pagination_reaches_later_current_head_attestation(
     assert status["readiness"]["codex_head_review_count"] == 1
 
 
-def test_codex_review_pagination_failure_is_diagnostic_only(
+def test_codex_review_pagination_failure_requires_attention(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1281,7 +1478,7 @@ def test_codex_review_pagination_failure_is_diagnostic_only(
         FakeRun(review_pages=[_response(_review_page(has_next=True, cursor="again"))]),
     )
 
-    assert status["state"] == "ready_for_human_merge"
+    assert status["state"] == "attention"
     assert status["readiness"]["codex_reviews_complete"] is False
     assert "review pagination exceeded 1 pages" in status["codex_reviews_error"]
 
@@ -1508,7 +1705,7 @@ def test_malformed_review_thread_nodes_fail_closed(
     ("pr_value", "all_checks", "reconciliation", "git_status", "expected"),
     [
         (_pr(draft=True), None, (0, "clean", ""), (0, "", ""), "attention"),
-        (_pr(decision="CHANGES_REQUESTED"), None, (0, "clean", ""), (0, "", ""), "ready_for_human_merge"),
+        (_pr(decision="CHANGES_REQUESTED"), None, (0, "clean", ""), (0, "", ""), "attention"),
         (_pr(merge="DIRTY"), None, (0, "clean", ""), (0, "", ""), "attention"),
         (_pr(merge="UNSTABLE"), [_check("required-a", "pending")], (0, "clean", ""), (0, "", ""), "pending"),
         (_pr(state="MERGED"), None, (0, "clean", ""), (0, "", ""), "closed"),
@@ -1679,7 +1876,7 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
             elif args[:2] == ["api", "graphql"]:
                 query = " ".join(args)
                 if "reviews(first:100" in query:
-                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviews": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}, "commit": {"oid": "head-a"}, "state": "COMMENTED"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviews": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}, "commit": {"oid": "head-a"}, "state": "COMMENTED", "submittedAt": "2026-07-27T00:00:00Z"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 elif "comments(first:100" in query:
                     payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 elif "comments(first:1)" in query:

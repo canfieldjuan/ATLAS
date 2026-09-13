@@ -8,10 +8,11 @@ map in `docs/ci_cd_autonomous_coding_map.md`.
 
 Important mode split:
 
-- **Claude Code native sessions** should use Claude Code's PR subscription,
-  review reactivity, and 30-minute polling. Do not force those sessions onto
-  the local systemd `atlas-pr-watch` timer unless the operator explicitly asks
-  for local state files too.
+- **Claude Code native sessions** should use Claude Code's PR subscription and
+  review reactivity. A later platform/external activation takes one exact-head
+  snapshot; the active model does not remain in a polling loop. Do not force
+  those sessions onto the local systemd `atlas-pr-watch` timer unless the
+  operator explicitly asks for local state files too.
 - **Codex/local CLI sessions** need a separate wake bridge for true autonomous
   resume. `atlas-pr-watch` can write watcher JSON/log state, but it cannot wake
   Codex by itself. A bridge must start or resume a Codex run with the watcher
@@ -26,7 +27,7 @@ Long-running sessions now have two durable responsibilities:
 
 1. Keep this session's state file current for the owned lane and PR.
 2. Record the actual wake mode after each PR open or push: Claude Code native
-   subscription/polling, a Codex wake bridge, or local watcher state-only.
+   subscription, a Codex wake bridge, or local watcher state-only.
 
 The watcher executable is an installed copy of repo-owned
 `scripts/pr_watcher.py`; its configs and output remain intentionally local and
@@ -43,7 +44,7 @@ allows.
 
 | Mode | Source | Builder action | Autonomous today? | Merge allowed? |
 |---|---|---|---|---|
-| Claude Code native | Claude Code PR subscription/review reactivity plus 30-minute polling | Claude Code resumes as the active builder, inspects only the owned PR, fixes actionable feedback, and runs merge guards when scheduled polling reports ready | Yes, when Claude Code subscription is active | Active builder only after explicit operator authorization and fresh guards |
+| Claude Code native | Claude Code PR subscription/review reactivity plus a later platform/external activation | Claude Code resumes as the active builder, takes one exact-head snapshot, acts on new evidence, and yields again when pending/unchanged | Yes, when the subscription can reactivate the builder | Active builder only after explicit source-matched operator authorization and fresh guards |
 | Codex wake bridge | External wrapper that starts/resumes Codex with watcher state | Fresh/active Codex reads this session's state file, runs `scripts/report_pr_watcher_state.py`, then fixes, waits, reports ready, or runs guarded merge if authorized | Only when the bridge exists | Active builder only after explicit operator authorization and fresh guards |
 | Local watcher state-only | `atlas-pr-watch@<session>.timer` writes JSON/log state every 30 minutes | No agent wakes automatically; the next active agent consumes the state with `scripts/report_pr_watcher_state.py` | No | No |
 | Operator signal | Human says "review is up", "green", or "merge" | Active builder inspects the owned PR and runs the same guards | Manual | Active builder only after explicit operator authorization and fresh guards |
@@ -54,10 +55,11 @@ bridge exists for Codex/local sessions, record `Wake bridge: unavailable` in
 this session's state file; the scheduled watcher remains only a state recorder
 until an active agent consumes its output.
 
-The scheduled poll/wake is the canonical readiness signal. A push/review-event
-wake that observes a clean PR records readiness and waits for the scheduled
-Claude poll or Codex wake-bridge confirmation before an active builder considers
-a guarded merge.
+No model-driven poll is the canonical readiness signal. A subscription,
+operator signal, webhook, or external non-model wake activates the builder, and
+that activation takes one exact-head snapshot before acting or yielding. A
+guarded merge additionally requires the activation source to satisfy the
+authorization recorded in session state.
 
 ## Local Watcher Files For Codex/Local State
 
@@ -136,15 +138,18 @@ Wake-source rules:
 
 - `--source event` is attention-only. It can wake Codex to inspect review
   activity or a new push, but it must not merge, even if the watcher snapshot is
-  green. Pending, ready, review-changed, and failure snapshots are actionable
-  as inspection/fix handoffs only; scheduled green-confirmation is still the
-  only wake source that may proceed to merge consideration after live guards.
+  green. Pending, ready, review-changed, and failure snapshots are inspection or
+  fix handoffs only. Only `--source scheduled` can produce the bridge's
+  `scheduled-ready` classification, and only source-matched authorization can
+  use that classification for merge consideration after live guards.
 - `--source scheduled` may classify `ready_for_human_merge` as
   `scheduled-ready` only when the snapshot carries a version-1 readiness proof
   for the same open, non-draft head: at least one required check, all required
-  checks complete/green, complete review-thread pagination, zero unresolved
-  non-outdated Codex connector threads, and a clean merge state. Missing or
-  contradictory proof becomes
+  checks complete/green, complete Codex review pagination with at least one
+  exact-head Codex attestation and no exact-head change request, complete
+  review-thread pagination, zero unresolved non-outdated Codex connector
+  threads, and a clean merge state.
+  Missing or contradictory proof becomes
   `attention` and lists its blockers. `scheduled-ready` is still only
   permission to run the AGENTS merge guards; the resumed builder also needs
   explicit standing merge authorization in this session's state file before
@@ -166,6 +171,10 @@ The version-1 snapshot proof is:
     "review_threads_complete": true,
     "review_thread_pages_fetched": 1,
     "unresolved_review_threads": [],
+    "codex_reviews_complete": true,
+    "codex_review_pages_fetched": 2,
+    "codex_head_review_count": 1,
+    "codex_changes_requested": false,
     "review_decision": "<same as pr.reviewDecision>",
     "merge_state_status": "CLEAN"
   }
@@ -173,7 +182,7 @@ The version-1 snapshot proof is:
 ```
 
 This gives the two-hook shape without making the watcher merge-capable: event
-hooks can call the bridge with `--source event`; the 30-minute green-confirmation
+hooks can call the bridge with `--source event`; an optional external non-model
 timer can call it with `--source scheduled`.
 
 ## Safety Rules
@@ -189,15 +198,18 @@ timer can call it with `--source scheduled`.
 - Codex/local active builders must run `scripts/report_pr_watcher_state.py` on
   resume to consume ready, attention, pending, and stale watcher states.
   Desktop notifications are advisory only.
-- Claude Code native sessions use Claude Code's PR subscription and 30-minute
-  polling; local systemd watcher setup is optional, not required.
+- Claude Code native sessions use Claude Code's PR subscription; each later
+  platform or external activation takes one exact-head snapshot and yields when
+  state is pending or unchanged. Local systemd watcher setup is optional, not
+  required.
 - If the operator gives explicit standing authorization for an arc, the active
-  builder may merge after a scheduled `ready_for_human_merge` wake-up, but only
-  after re-running the AGENTS pre-merge guards: open PR list, `origin/main`
-  log, ownership guard, matching head SHA, current checks, review-thread
-  status, live reconciliation, and merge-conflict/mergeability state.
-- Standing authorization applies only to the scheduled green-confirmation wake,
-  never to a push/review-event attention wake.
+  builder may merge after a source-matched `ready_for_human_merge` wake-up, but
+  only after re-running the AGENTS pre-merge guards: open PR list,
+  `origin/main` log, ownership guard, matching head SHA, current checks,
+  review-thread status, live reconciliation, and merge-conflict/mergeability
+  state.
+- Standing authorization applies only to the wake source it names; a
+  `scheduled-ready-only` authorization never applies to a push/review-event wake.
 - Review/comment events do not currently wake a Codex/local builder session by
   themselves. Treat them as fast attention only when the operator or another
   explicit integration wakes the session; otherwise record the wake bridge as
@@ -298,7 +310,7 @@ Run one manual poll through the same wrapper the timer will use:
 ~/.local/bin/atlas-pr-watch-and-wake "${SESSION_ID}"
 ```
 
-Enable the 30-minute timer:
+Enable the optional external non-model timer:
 
 ```bash
 systemctl --user daemon-reload
@@ -323,10 +335,10 @@ systemctl --user disable --now "atlas-pr-watch@${SESSION_ID}.timer"
 
 | State | Meaning | Builder action |
 |---|---|---|
-| `pending` | At least one check is still pending and no new review/comment activity was observed | Record the next poll; do not ask the operator to babysit CI |
+| `pending` | A required check or complete exact-head Codex review is still pending and no new actionable activity was observed | Record the latest snapshot; do not keep the model active or ask the operator to babysit CI |
 | `attention` | Red/canceled check, failed AI reconciliation, or status details such as `head_mismatch: true` | Inspect the owned PR, fix the root cause in-scope, push, update watcher config head SHA. If `head_mismatch` is true, follow the stop/fetch/inspect branch before any force-push or merge |
-| `review_changed` | New review/comment activity since last poll, including while checks are pending | Inspect comments before any merge decision |
-| `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, all thread pages fetched, zero unresolved non-outdated Codex connector threads, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly authorized and after fresh live guards |
+| `review_changed` | New review/comment activity since the last external snapshot, including while checks are pending | Inspect comments before any merge decision |
+| `ready_for_human_merge` | The snapshot label and version-1 proof agree: same open/non-draft head, required checks complete/green, complete exact-head Codex review evidence with at least one attestation, all thread pages fetched, zero unresolved non-outdated Codex connector threads, clean merge state | Run `scripts/report_pr_watcher_state.py`; missing/contradictory proof is reported as attention. Otherwise report readiness or perform the active-builder guarded merge only when explicitly source-authorized and after fresh live guards |
 
 The installed producer reads branch protection's required-context inventory,
 then replaces that expected set with `origin/main:ci/gates.yml` parsed through
@@ -335,9 +347,10 @@ exists. It compares the expected set with `gh pr checks --required`, fetches
 every GraphQL `reviewThreads` page, and reads PR metadata again after those
 calls. This prevents a required context that has not reported yet from
 disappearing from the observed set. A changed head, empty/malformed required
-policy, unreported required context, incomplete thread pagination, unresolved
-non-outdated Codex connector thread, or GitHub read error cannot produce a ready
-proof. The JSON snapshot is replaced atomically so the bridge/reporter
+policy, unreported required context, incomplete review/thread pagination,
+absent or stale exact-head Codex attestation, unresolved non-outdated Codex
+connector thread, or GitHub read error cannot produce a ready proof. The JSON
+snapshot is replaced atomically so the bridge/reporter
 cannot consume a partial file.
 Live AI reconciliation runs from the exact checker and parser sources installed
 beside the watcher; it never executes the watched PR worktree's checker.
@@ -362,9 +375,9 @@ New rules to follow:
 - A PR is yours only if this session's state file lists it under Owned Active PR or PRs This Session May Touch.
 - Do not inspect, push to, close, merge, or modify any other open PR unless the operator explicitly reassigns it and you update this session's state file first.
 - Record your builder surface in this session's state file: Claude Code native, Codex/local CLI, or other.
-- For Claude Code native sessions, subscribe to the owned PR and use Claude Code's native review reactivity plus 30-minute polling. Do not install the local systemd watcher unless the operator explicitly asks for local watcher JSON/log state too.
+- For Claude Code native sessions, subscribe to the owned PR and use native review reactivity. On each later platform/external activation, take one exact-head snapshot and yield again if it is pending or unchanged. Do not install the local systemd watcher unless the operator explicitly asks for local watcher JSON/log state too.
 - For Codex/local CLI sessions, install or refresh a per-session watcher config at ~/.config/atlas-pr-watchers/<session-id>.env only as state production. True autonomous resume requires a separate external wake bridge that starts/resumes Codex with the watcher state.
-- Fill the session state hook fields: `Push/review-event hook`, `Timer/poll hook`, `Wake bridge`, `Next timer wake`, `Last watcher state`, and `Standing merge authorization`.
+- Fill the session state hook fields: `Push/review-event hook`, `Timer/poll hook`, `Wake bridge`, `Next external wake`, `Last watcher state`, and `Standing merge authorization`.
 - Record the push/review-event hook in this session's state file only when it wakes the builder session. If no concrete external bridge wakes a Codex/local builder, write `Wake bridge: unavailable`; the scheduled watcher is state-only and the session does not have autonomous review-event wake-up coverage.
 - Do not use the scheduled atlas-pr-watch command as the push/review-event bridge unless it has a source-aware event mode that cannot produce merge permission.
 - Use `python scripts/codex_wake_bridge.py "${SESSION_ID}" --source event`
@@ -382,8 +395,8 @@ New rules to follow:
   `~/.local/bin`, not the repository files.
 - Codex/local sessions must run `scripts/report_pr_watcher_state.py` on resume before starting the next slice in a long-running arc.
 - No auto-merge in the watcher. When the watcher reports ready_for_human_merge, the active builder reports readiness and waits for the operator unless this specific arc has explicit active-builder merge authorization.
-- With standing merge authorization recorded in this session's state file, the active builder merges only after a scheduled Claude poll or Codex/local wake bridge reports ready_for_human_merge and the current AGENTS pre-merge guards pass, including review-thread status and merge-conflict/mergeability state.
-- Do not merge from a push/review-event wake. If that wake observes green checks, record readiness and wait for the scheduled green-confirmation wake.
+- With standing merge authorization recorded in this session's state file, the active builder merges only when the current activation source satisfies that recorded authorization, a fresh exact-head snapshot reports ready_for_human_merge, and the current AGENTS pre-merge guards pass, including review-thread status and merge-conflict/mergeability state. Scheduled-ready-only authority requires an external scheduled wake.
+- Do not merge from a push/review-event wake. If that wake observes green checks, record readiness and end the model turn; a later authorized activation takes its own fresh snapshot.
 - Do not actively poll GitHub for green CI between watcher wake-ups.
 - Review/comment events are fast attention only when the operator, Claude Code
   native subscription, or an explicit integration wakes this session. Until a
@@ -391,7 +404,7 @@ New rules to follow:
   record `review_changed`.
 - If checks are red or review comments are actionable, fix only the owned PR, fix the upstream/root cause within the slice, push with scripts/push_pr.sh, resolve fixed review threads, update the PR body/reconciliation record when needed, and refresh the watcher head SHA.
 - If the watcher reports `attention` with `head_mismatch: true`, stop, fetch the remote head, inspect the delta, and do not force-push over another actor's commit.
-- If checks are pending, update this session's state file with the current pending list and next poll time.
+- If checks or exact-head review are pending, update this session's state file with the current snapshot and end the model turn without polling again.
 - Do not start the next slice while the owned PR has unresolved CI, review, AI reconciliation, or merge state.
 
 When you resume:

@@ -115,9 +115,10 @@ REVIEWS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$pr){
+      headRefOid
       reviews(first:100, after:$cursor){
         pageInfo{ hasNextPage endCursor }
-        nodes{ author{ login } commit{ oid } state }
+        nodes{ author{ login } commit{ oid } state submittedAt }
       }
     }
   }
@@ -128,6 +129,7 @@ COMMENTS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$pr){
+      headRefOid
       comments(first:100, after:$cursor){
         pageInfo{ hasNextPage endCursor }
         nodes{ author{ login } body bodyText }
@@ -660,11 +662,28 @@ def _fetch_codex_head_reviews(
     *,
     head_sha: str,
     cwd: Path,
-) -> tuple[int, int, bool, str | None]:
+) -> tuple[int, int, bool, bool, str | None, str]:
     owner, name = _repo_parts(repo)
     cursor: str | None = None
     pages = 0
     matches = 0
+    changes_requested = False
+    latest_review: tuple[dt.datetime, int, str] | None = None
+    review_sequence = 0
+    formal_snapshot: list[tuple[str, str]] = []
+    clean_comment_count = 0
+
+    def result(complete: bool, error: str | None) -> tuple[int, int, bool, bool, str | None, str]:
+        token = json.dumps(
+            {
+                "clean_comment_count": clean_comment_count,
+                "formal_reviews": sorted(formal_snapshot),
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return matches, pages, changes_requested, complete, error, token
+
     for _ in range(MAX_REVIEW_PAGES):
         command = [
             "gh",
@@ -688,58 +707,74 @@ def _fetch_codex_head_reviews(
             expected_type=dict,
         )
         if error:
-            return matches, pages, False, error
+            return result(False, error)
         graphql_errors = payload.get("errors")
         if graphql_errors:
-            return matches, pages, False, "GraphQL response contains errors"
+            return result(False, "GraphQL response contains errors")
         data = payload.get("data")
         repository = data.get("repository") if isinstance(data, dict) else None
         pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+        observed_head = pull_request.get("headRefOid") if isinstance(pull_request, dict) else None
+        if observed_head != head_sha:
+            return result(False, "review snapshot head changed during watcher observation")
         reviews = pull_request.get("reviews") if isinstance(pull_request, dict) else None
         if reviews is None:
-            return matches, pages, False, "GraphQL reviews envelope is missing"
+            return result(False, "GraphQL reviews envelope is missing")
         if not isinstance(reviews, dict):
-            return matches, pages, False, "GraphQL reviews must be an object"
+            return result(False, "GraphQL reviews must be an object")
         nodes = reviews.get("nodes")
         page_info = reviews.get("pageInfo")
         if not isinstance(nodes, list) or not isinstance(page_info, dict):
-            return matches, pages, False, "GraphQL review nodes/pageInfo are malformed"
+            return result(False, "GraphQL review nodes/pageInfo are malformed")
         pages += 1
         for index, node in enumerate(nodes):
             if not isinstance(node, dict):
-                return matches, pages, False, f"review {index} is not an object"
+                return result(False, f"review {index} is not an object")
             author = node.get("author")
             commit = node.get("commit")
             state = node.get("state")
             if author is None or commit is None:
                 continue
             if not isinstance(author, dict) or not isinstance(commit, dict):
-                return matches, pages, False, f"review {index} author/commit is malformed"
+                return result(False, f"review {index} author/commit is malformed")
             login = author.get("login")
             oid = commit.get("oid")
+            submitted_at = node.get("submittedAt")
             if login is not None and not isinstance(login, str):
-                return matches, pages, False, f"review {index} author login is malformed"
+                return result(False, f"review {index} author login is malformed")
             if oid is not None and not isinstance(oid, str):
-                return matches, pages, False, f"review {index} commit oid is malformed"
+                return result(False, f"review {index} commit oid is malformed")
             if state is not None and not isinstance(state, str):
-                return matches, pages, False, f"review {index} state is malformed"
-            if (
-                _is_codex_login(login)
-                and oid == head_sha
-                and state in {"COMMENTED", "APPROVED"}
-            ):
-                matches += 1
+                return result(False, f"review {index} state is malformed")
+            if _is_codex_login(login) and oid == head_sha:
+                if not isinstance(state, str):
+                    return result(False, f"review {index} state is missing")
+                if not isinstance(submitted_at, str) or not submitted_at:
+                    return result(False, f"review {index} submittedAt is missing")
+                try:
+                    submitted_time = dt.datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
+                except ValueError:
+                    return result(False, f"review {index} submittedAt is malformed")
+                if submitted_time.tzinfo is None:
+                    return result(False, f"review {index} submittedAt has no timezone")
+                formal_snapshot.append((submitted_at, state))
+                review_sequence += 1
+                candidate = (submitted_time, review_sequence, state)
+                if latest_review is None or candidate[:2] > latest_review[:2]:
+                    latest_review = candidate
+                    matches = int(state in {"COMMENTED", "APPROVED"})
+                    changes_requested = state == "CHANGES_REQUESTED"
         has_next = page_info.get("hasNextPage")
         if not isinstance(has_next, bool):
-            return matches, pages, False, "GraphQL review hasNextPage must be boolean"
+            return result(False, "GraphQL review hasNextPage must be boolean")
         if not has_next:
             break
         next_cursor = page_info.get("endCursor")
         if not isinstance(next_cursor, str) or not next_cursor:
-            return matches, pages, False, "GraphQL review pagination cursor is missing"
+            return result(False, "GraphQL review pagination cursor is missing")
         cursor = next_cursor
     else:
-        return matches, pages, False, f"review pagination exceeded {MAX_REVIEW_PAGES} pages"
+        return result(False, f"review pagination exceeded {MAX_REVIEW_PAGES} pages")
 
     cursor = None
     for _ in range(MAX_COMMENT_PAGES):
@@ -765,41 +800,45 @@ def _fetch_codex_head_reviews(
             expected_type=dict,
         )
         if error:
-            return matches, pages, False, error
+            return result(False, error)
         graphql_errors = payload.get("errors")
         if graphql_errors:
-            return matches, pages, False, "GraphQL response contains errors"
+            return result(False, "GraphQL response contains errors")
         data = payload.get("data")
         repository = data.get("repository") if isinstance(data, dict) else None
         pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+        observed_head = pull_request.get("headRefOid") if isinstance(pull_request, dict) else None
+        if observed_head != head_sha:
+            return result(False, "review snapshot head changed during watcher observation")
         comments = pull_request.get("comments") if isinstance(pull_request, dict) else None
         if comments is None:
-            return matches, pages, False, "GraphQL comments envelope is missing"
+            return result(False, "GraphQL comments envelope is missing")
         if not isinstance(comments, dict):
-            return matches, pages, False, "GraphQL comments must be an object"
+            return result(False, "GraphQL comments must be an object")
         nodes = comments.get("nodes")
         page_info = comments.get("pageInfo")
         if not isinstance(nodes, list) or not isinstance(page_info, dict):
-            return matches, pages, False, "GraphQL comment nodes/pageInfo are malformed"
+            return result(False, "GraphQL comment nodes/pageInfo are malformed")
         pages += 1
         for index, node in enumerate(nodes):
             if not isinstance(node, dict):
-                return matches, pages, False, f"comment {index} is not an object"
+                return result(False, f"comment {index} is not an object")
             clean = _is_current_head_clean_codex_comment(node, head_sha=head_sha)
             if isinstance(clean, str):
-                return matches, pages, False, clean
+                return result(False, clean)
             if clean:
+                clean_comment_count += 1
                 matches += 1
         has_next = page_info.get("hasNextPage")
         if not isinstance(has_next, bool):
-            return matches, pages, False, "GraphQL comment hasNextPage must be boolean"
+            return result(False, "GraphQL comment hasNextPage must be boolean")
         if not has_next:
-            return matches, pages, True, None
+            return result(True, None)
         next_cursor = page_info.get("endCursor")
         if not isinstance(next_cursor, str) or not next_cursor:
-            return matches, pages, False, "GraphQL comment pagination cursor is missing"
+            return result(False, "GraphQL comment pagination cursor is missing")
         cursor = next_cursor
-    return matches, pages, False, f"comment pagination exceeded {MAX_COMMENT_PAGES} pages"
+    return result(False, f"comment pagination exceeded {MAX_COMMENT_PAGES} pages")
 
 
 def _read_previous(path: Path) -> tuple[dict[str, Any], str | None]:
@@ -879,6 +918,7 @@ def _classify(
     unresolved_threads: list[dict[str, Any]],
     reviews_complete: bool,
     codex_head_review_count: int,
+    codex_changes_requested: bool,
     reconciliation_code: int,
     review_changed: bool,
 ) -> str:
@@ -894,13 +934,17 @@ def _classify(
         return "attention"
     if (
         not threads_complete
+        or not reviews_complete
         or unresolved_threads
         or pr.get("isDraft") is not False
+        or pr.get("reviewDecision") == "CHANGES_REQUESTED"
+        or codex_changes_requested
+        or pr.get("mergeStateStatus") == "DIRTY"
     ):
         return "attention"
     if review_changed:
         return "review_changed"
-    if pending or required_pending:
+    if pending or required_pending or codex_head_review_count < 1:
         return "pending"
     if pr.get("mergeStateStatus") != "CLEAN":
         return "attention"
@@ -996,10 +1040,17 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
     expected_head = config.get("HEAD_SHA", "")
     initial_head = str(pr_initial.get("headRefOid") or "")
     final_head = str(pr.get("headRefOid") or "")
-    codex_head_review_count, review_pages, reviews_complete, codex_reviews_error = (
+    (
+        codex_head_review_count,
+        review_pages,
+        codex_changes_requested,
+        reviews_complete,
+        codex_reviews_error,
+        review_snapshot,
+    ) = (
         _fetch_codex_head_reviews(int(pr_text), repo, head_sha=final_head, cwd=repo_dir)
         if final_head
-        else (0, 0, False, "PR head SHA missing before Codex review pagination")
+        else (0, 0, False, False, "PR head SHA missing before Codex review pagination", "")
     )
     unresolved_threads, thread_pages, threads_complete, threads_error = _fetch_threads(
         int(pr_text), repo, cwd=repo_dir
@@ -1027,6 +1078,24 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         else None
     )
     post_review_head = str(pr_after_reviews.get("headRefOid") or "")
+    if reviews_complete and post_review_head and post_review_head == final_head:
+        (
+            rechecked_review_count,
+            _rechecked_review_pages,
+            rechecked_changes_requested,
+            rechecked_reviews_complete,
+            rechecked_reviews_error,
+            rechecked_review_snapshot,
+        ) = _fetch_codex_head_reviews(int(pr_text), repo, head_sha=final_head, cwd=repo_dir)
+        if rechecked_reviews_complete:
+            codex_head_review_count = rechecked_review_count
+            codex_changes_requested = rechecked_changes_requested
+            if rechecked_review_snapshot != review_snapshot:
+                reviews_complete = False
+                codex_reviews_error = "review evidence changed during watcher observation"
+        else:
+            reviews_complete = False
+            codex_reviews_error = rechecked_reviews_error or "final review evidence recheck failed"
     initial_base = str(pr_initial.get("baseRefName") or "")
     final_base = str(pr.get("baseRefName") or "")
     post_review_base = str(pr_after_reviews.get("baseRefName") or "")
@@ -1166,6 +1235,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
         unresolved_threads=unresolved_threads,
         reviews_complete=reviews_complete,
         codex_head_review_count=codex_head_review_count,
+        codex_changes_requested=codex_changes_requested,
         reconciliation_code=reconciliation_code,
         review_changed=review_changed,
     )
@@ -1239,6 +1309,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             "codex_reviews_complete": reviews_complete,
             "codex_review_pages_fetched": review_pages,
             "codex_head_review_count": codex_head_review_count,
+            "codex_changes_requested": codex_changes_requested,
             "docs_only_reconciliation_exemption": docs_only_reconciliation_exemption,
             "review_decision": observed_pr.get("reviewDecision"),
             "merge_state_status": observed_pr.get("mergeStateStatus"),
@@ -1268,6 +1339,7 @@ def produce(watcher_id: str, *, config_dir: Path, state_dir: Path) -> tuple[int,
             ),
             f"Unresolved review threads: {len(unresolved_threads)} across {thread_pages} fetched page(s)",
             f"Codex review diagnostics: {codex_head_review_count} current-head clean review(s) across {review_pages} fetched page(s)",
+            f"Codex exact-head changes requested: {'yes' if codex_changes_requested else 'no'}",
             f"Reviews/comments: {review_count} reviews, {comment_count} comments",
             f"Review changed since last poll: {'yes' if review_changed else 'no'}",
             f"AI reconciliation: {'pass' if reconciliation_code == 0 else 'fail'}",

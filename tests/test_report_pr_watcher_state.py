@@ -45,6 +45,7 @@ def _write_state(
             "codex_reviews_complete": True,
             "codex_review_pages_fetched": 1,
             "codex_head_review_count": 1,
+            "codex_changes_requested": False,
             "review_decision": "",
             "merge_state_status": "CLEAN",
         },
@@ -80,6 +81,24 @@ def test_reports_ready_as_manual_merge_decision(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "Ready for active-agent merge decision" in result.stdout
     assert "ready_for_human_merge PR" in result.stdout
+
+
+def test_ready_snapshot_without_exact_head_codex_review_reports_attention(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    path = state_dir / "missing-review.json"
+    _write_state(path, state="ready_for_human_merge")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["readiness"]["codex_head_review_count"] = 0
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(state_dir)
+
+    assert "Needs active-agent attention" in result.stdout
+    assert "Ready for active-agent merge decision" not in result.stdout
+    assert "exact-head Codex review count must be at least 1" in result.stdout
 
 
 def test_ready_snapshot_with_failure_details_reports_attention(tmp_path: Path) -> None:
@@ -194,6 +213,26 @@ def test_reports_attention_status_details(tmp_path: Path) -> None:
     assert "Needs active-agent attention" in result.stdout
     assert "head_mismatch=true" in result.stdout
     assert "reconciliation_exit_code=1" in result.stdout
+
+
+def test_actionable_review_state_outranks_optional_pending_checks(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    path = state_dir / "attention-with-pending.json"
+    _write_state(
+        path,
+        state="attention",
+        extra={"check_failures": [], "check_pending": ["maturity-sweep"]},
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["readiness"]["codex_changes_requested"] = True
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(state_dir)
+
+    assert result.returncode == 0
+    assert "Needs active-agent attention" in result.stdout
+    assert "Still pending" not in result.stdout
 
 
 def test_reports_merged_state_as_stale_cleanup(tmp_path: Path) -> None:

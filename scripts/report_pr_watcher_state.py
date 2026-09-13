@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Sequence
 
-from codex_wake_bridge import attention_blockers, readiness_blockers
+from codex_wake_bridge import classify_snapshot_state, readiness_blockers
 
 
 def _json(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -58,17 +58,14 @@ def _gh_pr_metadata(
 
 
 def _bucket(data: dict[str, Any], *, watcher_state: str, gh_state: str) -> str:
-    if attention_blockers(data):
-        return "attention"
-    if gh_state in {"MERGED", "CLOSED"} or watcher_state == "closed":
+    snapshot_state = classify_snapshot_state(
+        data,
+        watcher_state=watcher_state,
+        gh_state=gh_state,
+    )
+    if snapshot_state == "closed":
         return "stale"
-    if watcher_state == "pending" or bool(data.get("check_pending")):
-        return "pending"
-    if watcher_state == "ready_for_human_merge":
-        return "attention" if readiness_blockers(data) else "ready"
-    if watcher_state in {"attention", "review_changed"}:
-        return "attention"
-    return "other"
+    return snapshot_state
 
 
 def _entries(state_dir: Path, *, skip_github: bool) -> list[dict[str, Any]]:

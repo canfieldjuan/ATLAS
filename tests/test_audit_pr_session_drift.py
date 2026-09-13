@@ -308,6 +308,64 @@ def test_cli_accepts_current_pr_body_file_before_pr_exists(tmp_path: Path) -> No
     assert "OK: no blocking drift detected" in result.stdout
 
 
+def test_cli_local_current_body_overrides_stale_same_pr_github_body(
+    tmp_path: Path,
+) -> None:
+    repo = _write_fixture_repo(tmp_path, branch="claude/current")
+    plan_path = "plans/PR-Current.md"
+    _commit(
+        repo,
+        plan_path,
+        "# PR-Current\n\n## Scope (this PR)\n\n"
+        "Ownership lane: atlas-workflow\n\nSlice phase: Workflow/process\n",
+    )
+    body = repo / "pr-body.md"
+    body.write_text(
+        "Plan: plans/PR-Current.md\nSlice phase: Workflow/process\n"
+        "Ownership lane: atlas-workflow\n",
+        encoding="utf-8",
+    )
+    gh_bin = _write_fake_gh(
+        tmp_path,
+        prs=[
+            {
+                "number": 23,
+                "title": "Current PR with stale body",
+                "headRefName": "claude/current",
+                "url": "https://github.test/pr/23",
+            },
+            {
+                "number": 24,
+                "title": "Peer PR",
+                "headRefName": "claude/peer",
+                "url": "https://github.test/pr/24",
+            },
+        ],
+        files={23: [plan_path], 24: ["README.md"]},
+        bodies={
+            23: "Docs-only: true\n",
+            24: "Plan: plans/PR-Peer.md\nSlice phase: Workflow/process\n"
+            "Ownership lane: peer-workflow\n",
+        },
+    )
+
+    result = _run_with_path(
+        repo,
+        gh_bin,
+        [
+            "python",
+            "scripts/audit_pr_session_drift.py",
+            "--require-current-pr-body",
+            "--current-pr-body-file",
+            str(body),
+        ],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "checked 2 open PR(s)" in result.stdout
+    assert "OK: no blocking drift detected" in result.stdout
+
+
 def test_cli_rejects_current_pr_body_file_missing_slice_phase(tmp_path: Path) -> None:
     repo = _write_fixture_repo(tmp_path, branch="claude/current")
     _commit(

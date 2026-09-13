@@ -4,8 +4,9 @@ import os
 from pathlib import Path
 import stat
 import subprocess
-import sys
 import textwrap
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,6 +83,10 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
         expected_sha = os.environ.get("SHA", "head-a")
         state_file = os.environ.get("WATCHER_STATE_FILE", "")
         if args[:2] == ["api", "repos/owner/repo/pulls/7"]:
+            if scenario == "head_moves_during_final_evidence":
+                marker = state_file + ".final-evidence" if state_file else ""
+                print("head-b" if marker and os.path.exists(marker) else "head-a")
+                raise SystemExit(0)
             if scenario == "head_moves_before_ready":
                 count = 0
                 if state_file and os.path.exists(state_file):
@@ -102,6 +107,9 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
             if check_state_file:
                 with open(check_state_file, "w", encoding="utf-8") as handle:
                     handle.write(str(check_count + 1))
+            if scenario == "head_moves_during_final_evidence" and check_count > 0 and state_file:
+                with open(state_file + ".final-evidence", "w", encoding="utf-8") as handle:
+                    handle.write("moved")
             status = "in_progress" if scenario == "final_required_check_reruns" and check_count > 0 else "completed"
             conclusion = None if status == "in_progress" else "success"
             contexts = (
@@ -161,7 +169,18 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         },
                     }}}}))
                     raise SystemExit(0)
-                if scenario == "copilot_thread":
+                if scenario in {"final_review_adds_thread", "final_review_disappears_with_thread"}:
+                    review_state_file = state_file + ".reviews" if state_file else ""
+                    review_count = 0
+                    if review_state_file and os.path.exists(review_state_file):
+                        with open(review_state_file, "r", encoding="utf-8") as handle:
+                            review_count = int(handle.read() or "0")
+                    nodes = ([{
+                        "isResolved": False,
+                        "isOutdated": False,
+                        "comments": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}}]},
+                    }] if review_count > 1 else [])
+                elif scenario == "copilot_thread":
                     nodes = [{
                         "isResolved": False,
                         "isOutdated": False,
@@ -184,8 +203,8 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 print(json.dumps({"data": {"repository": {"pullRequest": {
                     "state": "OPEN",
                     "merged": False,
-                    "mergeable": "MERGEABLE",
-                    "mergeStateStatus": "CLEAN",
+                    "mergeable": "CONFLICTING" if scenario == "no_review_dirty" else "MERGEABLE",
+                    "mergeStateStatus": "DIRTY" if scenario == "no_review_dirty" else "CLEAN",
                     "reviewDecision": review_decision,
                     "reviewThreads": {
                         "pageInfo": {"hasNextPage": False},
@@ -201,11 +220,16 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 if review_state_file:
                     with open(review_state_file, "w", encoding="utf-8") as handle:
                         handle.write(str(review_count + 1))
-                if scenario in {"no_review", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment"}:
+                observed_head = (
+                    "head-b"
+                    if scenario == "head_moves_during_final_review_recheck" and review_count > 1
+                    else expected_sha
+                )
+                if scenario in {"no_review", "no_review_dirty", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment", "final_clean_comment_disappears"}:
                     nodes = []
                     has_next = False
                     cursor = None
-                elif scenario == "final_review_disappears" and review_count > 0:
+                elif scenario in {"final_review_disappears", "final_review_disappears_with_thread"} and review_count > 0:
                     nodes = []
                     has_next = False
                     cursor = None
@@ -219,7 +243,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     }}}}}))
                     raise SystemExit(0)
                 elif scenario == "paginated_review" and "cursor=c2" not in joined:
-                    nodes = [{"author": {"login": "human"}, "commit": {"oid": expected_sha}, "state": "APPROVED"}]
+                    nodes = [{"author": {"login": "human"}, "commit": {"oid": expected_sha}, "state": "APPROVED", "submittedAt": "2026-07-27T00:00:00Z"}]
                     has_next = True
                     cursor = "c2"
                 elif scenario == "helper_review":
@@ -227,6 +251,17 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         "author": {"login": "codex-helper"},
                         "commit": {"oid": expected_sha},
                         "state": "COMMENTED",
+                        "submittedAt": "2026-07-27T00:00:00Z",
+                    }]
+                    has_next = False
+                    cursor = None
+                elif scenario == "same_head_review_changes_during_final_evidence":
+                    state = "CHANGES_REQUESTED" if review_count > 1 else "COMMENTED"
+                    nodes = [{
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "commit": {"oid": expected_sha},
+                        "state": state,
+                        "submittedAt": "2026-07-27T00:00:00Z",
                     }]
                     has_next = False
                     cursor = None
@@ -235,7 +270,35 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         "author": {"login": "chatgpt-codex-connector"},
                         "commit": {"oid": expected_sha},
                         "state": "CHANGES_REQUESTED",
+                        "submittedAt": "2026-07-27T00:00:00Z",
                     }]
+                    has_next = False
+                    cursor = None
+                elif scenario in {"changes_requested_then_clean", "clean_then_changes_requested"}:
+                    states = (
+                        ["CHANGES_REQUESTED", "COMMENTED"]
+                        if scenario == "changes_requested_then_clean"
+                        else ["COMMENTED", "CHANGES_REQUESTED"]
+                    )
+                    nodes = [
+                        {
+                            "author": {"login": "chatgpt-codex-connector"},
+                            "commit": {"oid": expected_sha},
+                            "state": state,
+                            "submittedAt": f"2026-07-27T00:0{index}:00Z",
+                        }
+                        for index, state in enumerate(states)
+                    ]
+                    has_next = False
+                    cursor = None
+                elif scenario in {"review_missing_submitted_at", "review_malformed_submitted_at"}:
+                    nodes = [{
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "commit": {"oid": expected_sha},
+                        "state": "COMMENTED",
+                    }]
+                    if scenario == "review_malformed_submitted_at":
+                        nodes[0]["submittedAt"] = "not-a-time"
                     has_next = False
                     cursor = None
                 else:
@@ -243,10 +306,13 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         "author": {"login": "chatgpt-codex-connector"},
                         "commit": {"oid": expected_sha},
                         "state": "COMMENTED",
+                        "submittedAt": "2026-07-27T00:00:00Z",
                     }]
                     has_next = False
                     cursor = None
-                print(json.dumps({"data": {"repository": {"pullRequest": {"reviews": {
+                print(json.dumps({"data": {"repository": {"pullRequest": {
+                    "headRefOid": observed_head,
+                    "reviews": {
                     "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
                     "nodes": nodes,
                 }}}}}))
@@ -259,7 +325,9 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 if comment_state_file:
                     with open(comment_state_file, "w", encoding="utf-8") as handle:
                         handle.write(str(comment_count + 1))
-                if scenario in {"clean_comment", "clean_comment_changes_requested"}:
+                if scenario in {"clean_comment", "clean_comment_changes_requested"} or (
+                    scenario == "final_clean_comment_disappears" and comment_count < 2
+                ):
                     nodes = [{
                         "author": {"login": "chatgpt-codex-connector"},
                         "body": "Codex Review: Didn't find any major issues\\n\\n**Reviewed commit:** `" + expected_sha[:10] + "`",
@@ -312,7 +380,9 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     nodes = []
                     has_next = False
                     cursor = None
-                print(json.dumps({"data": {"repository": {"pullRequest": {"comments": {
+                print(json.dumps({"data": {"repository": {"pullRequest": {
+                    "headRefOid": expected_sha,
+                    "comments": {
                     "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
                     "nodes": nodes,
                 }}}}}))
@@ -398,20 +468,32 @@ def test_watcher_ignores_unresolved_non_codex_thread(tmp_path: Path) -> None:
     assert "threads=0" in result.stdout
 
 
-def test_watcher_reports_ready_without_current_head_codex_review(tmp_path: Path) -> None:
+def test_watcher_keeps_missing_current_head_codex_review_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="no_review")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "ACTIONABLE" not in result.stdout
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
-def test_watcher_treats_wrong_review_identity_as_diagnostic_only(tmp_path: Path) -> None:
+def test_watcher_surfaces_conflict_before_missing_review(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="no_review_dirty")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
+    assert "merge-state=DIRTY" in result.stdout
+
+
+def test_watcher_keeps_wrong_review_identity_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="helper_review")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
@@ -431,12 +513,42 @@ def test_watcher_blocks_on_outdated_unresolved_codex_thread(tmp_path: Path) -> N
     assert "threads=1" in result.stdout
 
 
-def test_watcher_does_not_block_on_changes_requested_review_without_threads(tmp_path: Path) -> None:
+def test_watcher_surfaces_exact_head_changes_requested_review(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="changes_requested_review")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
+
+
+def test_watcher_uses_latest_exact_head_codex_review_state(tmp_path: Path) -> None:
+    requested_then_clean = _run_watcher(tmp_path, scenario="changes_requested_then_clean")
+
+    assert requested_then_clean.returncode == 0, requested_then_clean.stdout + requested_then_clean.stderr
+    assert "MERGE-READY" in requested_then_clean.stdout
+    assert "ACTIONABLE: exact-head review requests changes" not in requested_then_clean.stdout
+
+
+def test_watcher_latest_exact_head_change_request_remains_actionable(tmp_path: Path) -> None:
+    clean_then_requested = _run_watcher(tmp_path, scenario="clean_then_changes_requested")
+
+    assert clean_then_requested.returncode == 0, clean_then_requested.stdout + clean_then_requested.stderr
+    assert "MERGE-READY" not in clean_then_requested.stdout
+    assert "ACTIONABLE: exact-head review requests changes" in clean_then_requested.stdout
+
+
+@pytest.mark.parametrize("scenario", ["review_missing_submitted_at", "review_malformed_submitted_at"])
+def test_watcher_rejects_exact_head_review_without_valid_submission_time(
+    tmp_path: Path,
+    scenario: str,
+) -> None:
+    result = _run_watcher(tmp_path, scenario=scenario)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
 
 
 def test_watcher_accepts_current_head_codex_clean_comment(tmp_path: Path) -> None:
@@ -455,28 +567,30 @@ def test_watcher_finds_clean_comment_after_pagination(tmp_path: Path) -> None:
     assert "attestation-pages=3" in result.stdout
 
 
-def test_watcher_treats_wrong_author_clean_comment_as_diagnostic_only(tmp_path: Path) -> None:
+def test_watcher_keeps_wrong_author_clean_comment_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="wrong_author_clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
-def test_watcher_treats_stale_clean_comment_as_diagnostic_only(tmp_path: Path) -> None:
+def test_watcher_keeps_stale_clean_comment_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="stale_clean_comment", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
 
 
-def test_watcher_changes_requested_decision_is_diagnostic_when_threads_clear(tmp_path: Path) -> None:
+def test_watcher_blocks_changes_requested_decision_when_threads_clear(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="clean_comment_changes_requested", sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
-    assert "ACTIONABLE" not in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
     assert "decision=CHANGES_REQUESTED" in result.stdout
 
 
@@ -506,38 +620,42 @@ def test_watcher_finds_current_head_codex_review_after_pagination(tmp_path: Path
     assert "attestation-pages=3" in result.stdout
 
 
-def test_watcher_treats_malformed_review_pagination_as_diagnostic_only(tmp_path: Path) -> None:
+def test_watcher_keeps_malformed_review_pagination_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="review_graphql_errors")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
 
-def test_watcher_treats_malformed_review_page_info_as_diagnostic_only(tmp_path: Path) -> None:
+def test_watcher_keeps_malformed_review_page_info_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="review_malformed_page_info")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
 
-def test_watcher_treats_malformed_comment_pagination_as_diagnostic_only(tmp_path: Path) -> None:
+def test_watcher_keeps_malformed_comment_pagination_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="comment_graphql_errors")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
 
-def test_watcher_treats_malformed_comment_page_info_as_diagnostic_only(tmp_path: Path) -> None:
+def test_watcher_keeps_malformed_comment_page_info_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="comment_malformed_page_info")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
     assert "ACTIONABLE" not in result.stdout
     assert "attestations-complete=false" in result.stdout
 
@@ -550,20 +668,76 @@ def test_watcher_revalidates_head_before_reporting_ready(tmp_path: Path) -> None
     assert "HEAD-MOVED: head-a -> head-b" in result.stdout
 
 
-def test_watcher_does_not_block_final_decision_change_when_threads_clear(tmp_path: Path) -> None:
+def test_watcher_revalidates_head_after_collecting_final_evidence(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="head_moves_during_final_evidence")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "HEAD-MOVED: head-a -> head-b" in result.stdout
+
+
+def test_watcher_rejects_same_head_review_change_during_final_evidence(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="same_head_review_changes_during_final_evidence")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "review evidence changed during final observation" in result.stdout
+
+
+def test_watcher_rejects_clean_comment_disappearance_during_final_evidence(tmp_path: Path) -> None:
+    result = _run_watcher(
+        tmp_path,
+        scenario="final_clean_comment_disappears",
+        sha="a" * 40,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "review evidence changed during final observation" in result.stdout
+
+
+def test_watcher_rejects_head_move_during_final_review_recheck(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="head_moves_during_final_review_recheck")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING: final-read" in result.stdout
+
+
+def test_watcher_blocks_final_decision_change_when_threads_clear(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="final_decision_changes")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
-    assert "ACTIONABLE: final-read" not in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "ACTIONABLE: final-read" in result.stdout
 
 
-def test_watcher_does_not_block_final_review_disappearance(tmp_path: Path) -> None:
+def test_watcher_reads_final_threads_after_final_review_attestation(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="final_review_adds_thread")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "ACTIONABLE: final-read" in result.stdout
+    assert "threads=1" in result.stdout
+
+
+def test_watcher_keeps_final_review_disappearance_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="final_review_disappears")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "MERGE-READY" in result.stdout
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING: final-read" in result.stdout
     assert "ACTIONABLE: final-read" not in result.stdout
+
+
+def test_watcher_surfaces_final_thread_before_missing_review(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="final_review_disappears_with_thread")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING: final-read" not in result.stdout
+    assert "ACTIONABLE: final-read" in result.stdout
+    assert "threads=1" in result.stdout
 
 
 def test_watcher_revalidates_required_checks_before_reporting_ready(tmp_path: Path) -> None:
