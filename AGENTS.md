@@ -615,6 +615,18 @@ or name why the referenced callers are unaffected. The hints are
 advisory rather than blocking because outside references can be valid,
 but silently ignoring them recreates the diff-only review gap.
 
+Keep local verification incremental. During implementation, run the fail-first
+regression, the affected test file or direct callers, and applicable cheap
+static checks. Do not run a broad local suite merely to duplicate a required CI
+job that runs the same command. Broad local suites remain required when a
+package gauntlet above names them, the Review Contract requires pre-push broad
+evidence for a high-risk change, CI is unavailable, the behavior depends on a
+local-only environment, or the operator asks for them. A documentation- or
+PR-metadata-only follow-up does not invalidate earlier code-test evidence when a
+recorded diff from the tested commit proves that executable code, tests,
+dependencies, configuration, workflows, generated contracts, and test inputs
+are unchanged.
+
 Before calling a slice done, reconstruct the diff cold as if someone else
 wrote it. Read the changed files and report, with `file:line` citations:
 
@@ -629,15 +641,17 @@ change, missing contract item, or forbidden touch remains. Put the cold
 reconstruction in the PR body under `## Cold diff reconstruction` so the
 reviewer can audit the builder's self-check.
 
-GitHub Actions still runs the same wrapper after the PR opens. Treat CI
-as the final enforcement layer, not the first reviewer.
+GitHub Actions still runs the same wrapper after the PR opens. Treat CI as the
+exact published-head enforcement layer, not a reason to duplicate every broad
+check locally.
 
-For normal interactive PR work, after opening or updating a PR, the builder
-does **not** wait for CI, automated review, or human review comments. Report
-the PR URL, the local verification already run, and any immediately visible PR
-status, then stop. The operator will tell the builder when checks are green or
-when review comments are ready to inspect. Only resume PR inspection, comment
-handling, or merge decisions after that operator signal.
+For normal interactive PR work, after opening or updating a PR, inspect the
+exact-head CI and review state once. If either is pending, record that state,
+report the PR URL and local verification already run, then stop. Do not call
+`wait_agent`, `wait`, `list_agents`, `gh run watch`, watcher agents, or
+equivalent status checks to observe the same state again. Only resume PR
+inspection, comment handling, or merge decisions after an operator, webhook,
+or external non-model wake signal; take one fresh snapshot on that activation.
 
 ### 3c.1. Long-running coding task PR watcher
 
@@ -650,10 +664,9 @@ must keep the PR moving instead of halting until the operator notices CI.
 For long-running coding tasks, first record which builder surface owns the PR:
 
 - **Claude Code native mode:** use Claude Code's PR subscription/review
-  reactivity plus its 30-minute polling. Record that as the push/review-event
-  hook and timer/polling path in this session's state file. Do not require a
-  local systemd `atlas-pr-watch` timer for Claude Code unless the operator
-  explicitly asks for the local watcher too.
+  reactivity. A platform-scheduled later activation may take one fresh state
+  snapshot, but the active model session must not remain in a polling loop.
+  Record the subscription or external schedule in the session's state file.
 - **Codex/local CLI mode:** a desktop notification or `atlas-pr-watch` run does
   not wake an agent by itself. True autonomous resume requires an external wake
   bridge that starts or resumes a Codex run with the watcher state and a prompt
@@ -666,36 +679,33 @@ For long-running coding tasks, after each PR open or push:
 1. Subscribe the session to its owned PR in this session's state file. Record the
    PR number, branch, head SHA, checks URL, review/reconciliation URL or
    commands, builder surface, wake bridge or native subscription path,
-   ready-state handoff command, polling cadence, next wake/poll time, and the
-   exact action to take when checks turn green or comments appear. If the
+   ready-state handoff command, and the exact action to take when checks turn
+   green or comments appear. If the
    operator grants standing merge authorization for the active builder, record
    the authorization source and scheduled-ready-only merge condition there too.
    The watcher process itself never receives merge authority.
 2. Configure the wake path for that builder surface:
-   - in Claude Code native mode, subscribe to the owned PR and poll every
-     **30 minutes** using Claude Code's native behavior;
+   - in Claude Code native mode, subscribe to the owned PR; any scheduled wake
+     occurs outside the active model turn and produces only one state snapshot;
    - in Codex/local CLI mode, use an external wake bridge if one exists; if no
      bridge exists, record `Wake bridge: unavailable` and treat
      `atlas-pr-watch` output as a handoff for the next active agent only.
-   A push/review-event hook must not reuse the scheduled green-confirmation
-   command in a way that can grant merge permission, and an operator-only
-   notification is not a builder wake hook.
-3. Any local watcher/timer must exit fast after recording state. Do not keep an
-   in-chat `sleep` loop or active polling process alive just to wait for green
-   CI.
-4. On each wake, refresh the PR head, CI/check status, review-thread status,
-   live reconciliation, and merge-conflict state before deciding anything.
-5. If checks are red or review comments are actionable, summarize the current
+   An operator-only notification is not a builder wake hook.
+3. Immediately after each PR open or push, take one combined exact-head snapshot
+   of CI, review threads, reconciliation, and mergeability. If anything is
+   pending, record the state and end the turn. Do not repeatedly call
+   `wait_agent`, `wait`, `list_agents`, `gh run watch`, watcher agents, or an
+   equivalent status command.
+4. On each later operator/webhook/external-wake activation, take one fresh
+   combined snapshot. If the state is still pending or unchanged, update the
+   handoff and end the turn again. The absence of an exact-head review is
+   pending, not proof of zero findings.
+5. If checks are red, inspect the failed job once. If review comments are
+   actionable, read the current threads once. Summarize the current
    blocker, fix the upstream/root cause inside the current slice, push, resolve
-   fixed threads, update the PR body/reconciliation record, and leave the wake
-   hooks armed for the next push/review/timer event.
-6. If checks are still pending, record the last observed status and next timer
-   wake time in this session's state file; do not ask the operator to babysit
-   green and do not burn compute by waiting inside the chat turn.
-7. Push/review-event wakes are attention-only. Even if a push/review-event wake
-   observes green checks, record readiness and wait for the scheduled 30-minute
-   Claude poll or Codex/local wake-bridge confirmation before merging.
-8. If the scheduled poll/wake reports all required checks green, all
+   fixed threads, update the PR body/reconciliation record, and return to the
+   single-snapshot rule after the next push.
+6. If the snapshot reports all required checks green, all
    review/reconciliation gates clean, and merge-conflict/mergeability state
    clean, the active builder follows the merge rules for the current arc.
    `live-reconciliation` is the Codex review gate: unresolved Codex review
@@ -703,7 +713,7 @@ For long-running coding tasks, after each PR open or push:
    Codex/local watcher mode, first surface that state with
    `scripts/report_pr_watcher_state.py`. If the operator has not authorized the
    active builder to merge for this arc, report readiness and wait.
-9. After merge, tear down only the owned worktree/branch, archive the plan as
+7. After merge, tear down only the owned worktree/branch, archive the plan as
    required, sync from `origin/main`, and continue to the next approved slice
    if the arc says to continue. The merge itself is the signal to pick up the
    next slice; do not start the next slice before the owned PR is merged or
