@@ -49,8 +49,10 @@ that cannot pass its own admission checks.
   shell final-read order does not bind review evidence to a later thread
   snapshot, both classifiers prioritize pending review evidence over a definite
   negative merge state, the final shell read still prioritizes missing review
-  over its other actionable facts, and both review paginators collapse
-  `CHANGES_REQUESTED` into the same zero-attestation result as no review.
+  over its other actionable facts, both review paginators collapse
+  `CHANGES_REQUESTED` into the same zero-attestation result as no review, and
+  the shell watcher checks the armed head before rather than after collecting
+  its expanded final evidence snapshot.
 - Correct fix must touch/change: make every mandatory session instruction use
   subscription/external wake plus one snapshot per model activation; require the
   activation source to satisfy the recorded merge authorization; make the shell
@@ -63,9 +65,10 @@ that cannot pass its own admission checks.
   review-pending; preserve exact-head change-request state through both
   producers and the versioned readiness proof; reduce ordered exact-head formal
   reviews to the connector's latest submitted state; enumerate every changed
-  boundary caller/input disposition; and make the explicit local current-body
-  override authoritative only for the current PR while preserving GitHub
-  peer-overlap discovery.
+  boundary caller/input disposition; bind the shell final-evidence snapshot to
+  the armed head with a post-collection head check; and make the explicit local
+  current-body override authoritative only for the current PR while preserving
+  GitHub peer-overlap discovery.
 - Must not change: watcher infrastructure remains read-only and never gains
   merge authority; external non-model timers may still collect state; required
   CI, thread pagination, ownership, mergeability, and reconciliation gates stay
@@ -95,6 +98,9 @@ Max files: 14
    shared readiness proof.
 7. Reduce exact-head formal reviews to the connector's latest submitted state
    and enumerate each changed readiness-boundary caller/input disposition.
+8. Revalidate the armed head after the shell watcher collects every final
+   review, thread, merge, and check fact so a mixed-head snapshot cannot report
+   merge readiness.
 
 ### Review Contract
 
@@ -142,6 +148,9 @@ Max files: 14
   13. `tests/test_watch_owned_pr.py` and `tests/test_pr_watcher.py` prove the
       latest submitted exact-head formal Codex review controls the gate:
       requested-then-clean is accepted, while clean-then-requested is blocked.
+  14. `tests/test_watch_owned_pr.py` proves a head change during final evidence
+      collection emits `HEAD-MOVED` and never `MERGE-READY`; the Python producer
+      remains covered by its existing post-review head-mismatch check.
 - Reachability proof: the real shell/Python watcher entrypoints consume mocked
   GitHub snapshots in their existing focused test suites; observable output is
   `MERGE-READY` versus pending/actionable and ready versus pending/attention
@@ -181,6 +190,10 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - Attestation disappears with no actionable fact: preserved as review-pending.
   - Attestation disappears while a thread/check/conflict becomes actionable:
     intentionally changed to actionable before review-pending.
+  - Head remains the armed SHA through all final evidence collection: preserved
+    as eligible for final classification.
+  - Head changes while final evidence is collected: intentionally changed to
+    `HEAD-MOVED`, never merge-ready or actionable on the mixed snapshot.
 - Boundary path/seam: paginated GitHub reviews -> Python version-1 readiness
   proof -> Python watcher state.
   - Complete exact-head sequence ending clean: intentionally changed to
@@ -276,6 +289,10 @@ producers classify it as actionable/attention and the versioned proof validator
 rejects any snapshot carrying it. The paginators reduce ordered exact-head
 formal reviews to the connector's latest submitted state, so a later clean
 review clears an earlier request while the opposite order remains blocking.
+After every final review, thread, merge, and check fact is collected, the shell
+watcher re-reads the PR head and rejects the whole observation as `HEAD-MOVED`
+when it no longer matches the armed SHA. The Python producer already performs
+the equivalent post-review head comparison.
 
 The instruction set distinguishes active model turns from external state
 collectors: external timers/webhooks may wake a session, but the session takes
@@ -306,6 +323,11 @@ Parked hardening: none.
 
 ## Verification
 
+- Fail-first: a head transition during final shell evidence collection still
+  emitted `MERGE-READY` (`1 failed`) before moving the head check.
+- Focused before/during-final-evidence head-move regressions - `2 passed`.
+- `uv run pytest -q tests/test_watch_owned_pr.py` - `34 passed` after the
+  post-collection head revalidation fix.
 - Fail-first: four targeted regressions failed in the declared readiness class
   before implementation (`4 failed`).
 - Fail-first: the final-read interleaving and both conflict-precedence probes
@@ -330,7 +352,7 @@ Parked hardening: none.
   tests/test_codex_wake_bridge.py tests/test_pr_watcher.py
   tests/test_report_pr_watcher_state.py tests/test_watch_owned_pr.py` - all
   checks passed.
-- `python scripts/check_diff_budget.py --additions 1009 --body-file
+- `python scripts/check_diff_budget.py --additions 1048 --body-file
   /tmp/atlas-agent-efficiency-pr-body.md` - override accepted.
 - `uv run ruff format --check ...` - not applied: it would bulk-reformat all
   six existing touched Python files, including unrelated baseline formatting.
@@ -357,14 +379,14 @@ Parked hardening: none.
 | `CLAUDE.md` | 18 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 14 |
 | `docs/long_running_session_watcher_handoff.md` | 87 |
-| `plans/PR-Agent-Efficiency-Rules.md` | 370 |
+| `plans/PR-Agent-Efficiency-Rules.md` | 392 |
 | `scripts/audit_pr_session_drift.py` | 27 |
 | `scripts/codex_wake_bridge.py` | 17 |
 | `scripts/pr_watcher.py` | 93 |
-| `scripts/watch_owned_pr.sh` | 80 |
+| `scripts/watch_owned_pr.sh` | 84 |
 | `tests/test_audit_pr_session_drift.py` | 58 |
 | `tests/test_codex_wake_bridge.py` | 24 |
 | `tests/test_pr_watcher.py` | 158 |
 | `tests/test_report_pr_watcher_state.py` | 19 |
-| `tests/test_watch_owned_pr.py` | 176 |
-| **Total** | **1227** |
+| `tests/test_watch_owned_pr.py` | 191 |
+| **Total** | **1268** |

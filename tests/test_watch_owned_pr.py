@@ -83,6 +83,10 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
         expected_sha = os.environ.get("SHA", "head-a")
         state_file = os.environ.get("WATCHER_STATE_FILE", "")
         if args[:2] == ["api", "repos/owner/repo/pulls/7"]:
+            if scenario == "head_moves_during_final_evidence":
+                marker = state_file + ".final-evidence" if state_file else ""
+                print("head-b" if marker and os.path.exists(marker) else "head-a")
+                raise SystemExit(0)
             if scenario == "head_moves_before_ready":
                 count = 0
                 if state_file and os.path.exists(state_file):
@@ -103,6 +107,9 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
             if check_state_file:
                 with open(check_state_file, "w", encoding="utf-8") as handle:
                     handle.write(str(check_count + 1))
+            if scenario == "head_moves_during_final_evidence" and check_count > 0 and state_file:
+                with open(state_file + ".final-evidence", "w", encoding="utf-8") as handle:
+                    handle.write("moved")
             status = "in_progress" if scenario == "final_required_check_reruns" and check_count > 0 else "completed"
             conclusion = None if status == "in_progress" else "success"
             contexts = (
@@ -634,6 +641,14 @@ def test_watcher_keeps_malformed_comment_page_info_pending(tmp_path: Path) -> No
 
 def test_watcher_revalidates_head_before_reporting_ready(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="head_moves_before_ready")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "HEAD-MOVED: head-a -> head-b" in result.stdout
+
+
+def test_watcher_revalidates_head_after_collecting_final_evidence(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="head_moves_during_final_evidence")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
