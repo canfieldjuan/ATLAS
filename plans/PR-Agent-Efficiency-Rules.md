@@ -17,6 +17,10 @@ watcher classifiers let a missing review hide an already-known merge conflict.
 A later exact-head review then exposed the same precedence split in the shell's
 final-read path and showed that both producers discard an exact-head
 `CHANGES_REQUESTED` review state when the aggregate PR decision is empty.
+The next exact-head review showed that the new change-request signal is latched
+across every historical review on the same commit instead of being reduced to
+the connector's latest formal review state. It also showed that the boundary
+declaration names caller groups without dispositioning each caller/input shape.
 The corrected plan-required body then exposed a pre-push deadlock:
 `--current-pr-body-file` validates the intended body but the session-drift audit
 also validates the stale GitHub body for the same branch, while `open_pr.sh`
@@ -57,9 +61,11 @@ that cannot pass its own admission checks.
   before review-pending state; prove the positive and negative sides in focused
   watcher, bridge, and reporter tests; make final-read actionable facts precede
   review-pending; preserve exact-head change-request state through both
-  producers and the versioned readiness proof; and make the explicit local
-  current-body override authoritative only for the current PR while preserving
-  GitHub peer-overlap discovery.
+  producers and the versioned readiness proof; reduce ordered exact-head formal
+  reviews to the connector's latest submitted state; enumerate every changed
+  boundary caller/input disposition; and make the explicit local current-body
+  override authoritative only for the current PR while preserving GitHub
+  peer-overlap discovery.
 - Must not change: watcher infrastructure remains read-only and never gains
   merge authority; external non-model timers may still collect state; required
   CI, thread pagination, ownership, mergeability, and reconciliation gates stay
@@ -87,6 +93,8 @@ Max files: 14
 6. Surface every final-read actionable fact before review-pending and propagate
    exact-head Codex `CHANGES_REQUESTED` states through both producers and the
    shared readiness proof.
+7. Reduce exact-head formal reviews to the connector's latest submitted state
+   and enumerate each changed readiness-boundary caller/input disposition.
 
 ### Review Contract
 
@@ -131,6 +139,9 @@ Max files: 14
       `tests/test_codex_wake_bridge.py` prove an exact-head Codex
       `CHANGES_REQUESTED` review is actionable and blocks readiness even when
       aggregate `reviewDecision` is empty.
+  13. `tests/test_watch_owned_pr.py` and `tests/test_pr_watcher.py` prove the
+      latest submitted exact-head formal Codex review controls the gate:
+      requested-then-clean is accepted, while clean-then-requested is blocked.
 - Reachability proof: the real shell/Python watcher entrypoints consume mocked
   GitHub snapshots in their existing focused test suites; observable output is
   `MERGE-READY` versus pending/actionable and ready versus pending/attention
@@ -149,21 +160,58 @@ Required when this diff changes a guard, validator, normalizer, resolver,
 router/classifier, or admission boundary. Name each changed boundary path or
 seam in the enumeration; otherwise write "N/A - no boundary change."
 
-- Boundary path/seam: GitHub review evidence -> watcher state/output -> shared
-  readiness validator -> reporter/wake classification -> active-builder merge
-  decision.
-- Replaced-path behaviors: zero or incomplete exact-head review evidence changes
-  from ready/diagnostic to pending or attention; valid complete evidence remains
-  ready; scheduled-ready-only authorization remains unavailable to other wakes.
-- Guard-relevant fields: `codex_reviews_complete`,
-  `codex_review_pages_fetched`, `codex_head_review_count`,
-  `codex_changes_requested`, `reviewDecision`, and activation source, plus the
-  ordering of review and thread snapshots and the priority of every actionable
-  final-read fact over missing-review pending state.
-- Caller x input shape: shell watcher GraphQL pages, Python watcher version-1
-  readiness dict, wake bridge, reporter, and active-builder instruction flow.
-- Boundary path/seam: explicit local current-body file -> current-PR body
-  validation, while other GitHub PRs remain inputs to collision detection.
+- Boundary path/seam: GitHub formal review/comment evidence -> shell initial
+  watcher decision.
+  - Complete exact-head formal sequence ending in `COMMENTED`/`APPROVED`:
+    intentionally changed to one effective clean attestation;
+    requested-then-clean is accepted.
+  - Complete exact-head formal sequence ending in `CHANGES_REQUESTED`:
+    intentionally changed to actionable even when aggregate `reviewDecision` is
+    empty; clean-then-requested is blocked.
+  - No exact-head formal review plus one valid exact-head clean top-level Codex
+    comment: preserved as a clean attestation.
+  - Missing, wrong-author, stale-head, incomplete, or malformed review evidence:
+    rejected to review-pending and never merge-ready.
+- Boundary path/seam: final formal review snapshot -> later thread/check/merge
+  snapshot -> shell final watcher decision.
+  - Latest effective formal review clean with every later actionable fact clear:
+    preserved as merge-ready.
+  - Latest effective formal review requests changes: intentionally changed to
+    actionable independent of aggregate decision.
+  - Attestation disappears with no actionable fact: preserved as review-pending.
+  - Attestation disappears while a thread/check/conflict becomes actionable:
+    intentionally changed to actionable before review-pending.
+- Boundary path/seam: paginated GitHub reviews -> Python version-1 readiness
+  proof -> Python watcher state.
+  - Complete exact-head sequence ending clean: intentionally changed to
+    `codex_head_review_count >= 1`, `codex_changes_requested=false`, and otherwise
+    eligible for ready.
+  - Complete exact-head sequence ending requested: intentionally changed to
+    `codex_changes_requested=true` and attention.
+  - No exact-head attestation: intentionally changed to pending.
+  - Missing/malformed submission timestamp or incomplete pagination: rejected
+    to attention with incomplete/error evidence.
+- Boundary path/seam: version-1 readiness proof -> wake bridge classification.
+  - Scheduled source plus complete matching proof, positive attestation, literal
+    `codex_changes_requested=false`, and clean checks/threads/merge:
+    intentionally changed to scheduled-ready, still subject to live merge guards.
+  - Scheduled source plus missing/malformed/true change-request evidence or any
+    contradictory proof: rejected to attention with no merge authority.
+  - Event source with any watcher state: preserved as event attention/no-op and
+    cannot consume scheduled-ready-only authorization.
+- Boundary path/seam: version-1 readiness proof -> reporter classification.
+  - Complete safe proof: intentionally changed to ready.
+  - Missing/malformed/true review evidence: intentionally changed to attention
+    with explicit readiness blockers.
+- Boundary path/seam: activation source -> active-builder merge instruction.
+  - Scheduled-ready activation matching recorded authorization: preserved as
+    eligible to run live merge guards, not itself authorized to merge.
+  - Immediate, manual, event, unknown, or mismatched activation: rejected from
+    scheduled-ready-only merge authorization.
+- Boundary path/seam: explicit local body -> current-PR body audit.
+  - Valid explicit body plus stale same-PR GitHub body: intentionally changed to
+    use the explicit body as current authority.
+  - Peer PR bodies and path/lane collisions: preserved and still audited.
 
 ### Deployed-config probing
 
@@ -225,7 +273,9 @@ and all other final-read actionable facts are classified before missing-review
 pending states. Both review paginators preserve an exact-head Codex
 `CHANGES_REQUESTED` signal independently of the aggregate PR decision; the
 producers classify it as actionable/attention and the versioned proof validator
-rejects any snapshot carrying it.
+rejects any snapshot carrying it. The paginators reduce ordered exact-head
+formal reviews to the connector's latest submitted state, so a later clean
+review clears an earlier request while the opposite order remains blocking.
 
 The instruction set distinguishes active model turns from external state
 collectors: external timers/webhooks may wake a session, but the session takes
@@ -264,6 +314,11 @@ Parked hardening: none.
   propagation, and proof-validation probes failed before this implementation
   (`6 failed, 31 passed`).
 - Focused regressions for those two root classes - `38 passed`.
+- Fail-first: effective-review ordering and missing-submission-time probes -
+  `4 failed, 2 passed` before implementation.
+- Focused effective-review regressions - `9 passed`.
+- `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py` -
+  `114 passed` after the effective-review fix.
 - `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py
   tests/test_codex_wake_bridge.py tests/test_report_pr_watcher_state.py` -
   `176 passed`.
@@ -275,6 +330,8 @@ Parked hardening: none.
   tests/test_codex_wake_bridge.py tests/test_pr_watcher.py
   tests/test_report_pr_watcher_state.py tests/test_watch_owned_pr.py` - all
   checks passed.
+- `python scripts/check_diff_budget.py --additions 1009 --body-file
+  /tmp/atlas-agent-efficiency-pr-body.md` - override accepted.
 - `uv run ruff format --check ...` - not applied: it would bulk-reformat all
   six existing touched Python files, including unrelated baseline formatting.
 - `bash -n scripts/watch_owned_pr.sh` - exit 0.
@@ -300,14 +357,14 @@ Parked hardening: none.
 | `CLAUDE.md` | 18 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 14 |
 | `docs/long_running_session_watcher_handoff.md` | 87 |
-| `plans/PR-Agent-Efficiency-Rules.md` | 313 |
+| `plans/PR-Agent-Efficiency-Rules.md` | 370 |
 | `scripts/audit_pr_session_drift.py` | 27 |
 | `scripts/codex_wake_bridge.py` | 17 |
-| `scripts/pr_watcher.py` | 76 |
-| `scripts/watch_owned_pr.sh` | 66 |
+| `scripts/pr_watcher.py` | 93 |
+| `scripts/watch_owned_pr.sh` | 80 |
 | `tests/test_audit_pr_session_drift.py` | 58 |
 | `tests/test_codex_wake_bridge.py` | 24 |
-| `tests/test_pr_watcher.py` | 83 |
+| `tests/test_pr_watcher.py` | 158 |
 | `tests/test_report_pr_watcher_state.py` | 19 |
-| `tests/test_watch_owned_pr.py` | 114 |
-| **Total** | **1002** |
+| `tests/test_watch_owned_pr.py` | 176 |
+| **Total** | **1227** |

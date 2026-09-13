@@ -6,6 +6,8 @@ import stat
 import subprocess
 import textwrap
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "watch_owned_pr.sh"
@@ -229,7 +231,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     }}}}}))
                     raise SystemExit(0)
                 elif scenario == "paginated_review" and "cursor=c2" not in joined:
-                    nodes = [{"author": {"login": "human"}, "commit": {"oid": expected_sha}, "state": "APPROVED"}]
+                    nodes = [{"author": {"login": "human"}, "commit": {"oid": expected_sha}, "state": "APPROVED", "submittedAt": "2026-07-27T00:00:00Z"}]
                     has_next = True
                     cursor = "c2"
                 elif scenario == "helper_review":
@@ -237,6 +239,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         "author": {"login": "codex-helper"},
                         "commit": {"oid": expected_sha},
                         "state": "COMMENTED",
+                        "submittedAt": "2026-07-27T00:00:00Z",
                     }]
                     has_next = False
                     cursor = None
@@ -245,7 +248,35 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         "author": {"login": "chatgpt-codex-connector"},
                         "commit": {"oid": expected_sha},
                         "state": "CHANGES_REQUESTED",
+                        "submittedAt": "2026-07-27T00:00:00Z",
                     }]
+                    has_next = False
+                    cursor = None
+                elif scenario in {"changes_requested_then_clean", "clean_then_changes_requested"}:
+                    states = (
+                        ["CHANGES_REQUESTED", "COMMENTED"]
+                        if scenario == "changes_requested_then_clean"
+                        else ["COMMENTED", "CHANGES_REQUESTED"]
+                    )
+                    nodes = [
+                        {
+                            "author": {"login": "chatgpt-codex-connector"},
+                            "commit": {"oid": expected_sha},
+                            "state": state,
+                            "submittedAt": f"2026-07-27T00:0{index}:00Z",
+                        }
+                        for index, state in enumerate(states)
+                    ]
+                    has_next = False
+                    cursor = None
+                elif scenario in {"review_missing_submitted_at", "review_malformed_submitted_at"}:
+                    nodes = [{
+                        "author": {"login": "chatgpt-codex-connector"},
+                        "commit": {"oid": expected_sha},
+                        "state": "COMMENTED",
+                    }]
+                    if scenario == "review_malformed_submitted_at":
+                        nodes[0]["submittedAt"] = "not-a-time"
                     has_next = False
                     cursor = None
                 else:
@@ -253,6 +284,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         "author": {"login": "chatgpt-codex-connector"},
                         "commit": {"oid": expected_sha},
                         "state": "COMMENTED",
+                        "submittedAt": "2026-07-27T00:00:00Z",
                     }]
                     has_next = False
                     cursor = None
@@ -461,6 +493,34 @@ def test_watcher_surfaces_exact_head_changes_requested_review(tmp_path: Path) ->
     assert "REVIEW-PENDING" not in result.stdout
     assert "ACTIONABLE" in result.stdout
     assert "codex-head-attestations=0" in result.stdout
+
+
+def test_watcher_uses_latest_exact_head_codex_review_state(tmp_path: Path) -> None:
+    requested_then_clean = _run_watcher(tmp_path, scenario="changes_requested_then_clean")
+
+    assert requested_then_clean.returncode == 0, requested_then_clean.stdout + requested_then_clean.stderr
+    assert "MERGE-READY" in requested_then_clean.stdout
+    assert "ACTIONABLE: exact-head review requests changes" not in requested_then_clean.stdout
+
+
+def test_watcher_latest_exact_head_change_request_remains_actionable(tmp_path: Path) -> None:
+    clean_then_requested = _run_watcher(tmp_path, scenario="clean_then_changes_requested")
+
+    assert clean_then_requested.returncode == 0, clean_then_requested.stdout + clean_then_requested.stderr
+    assert "MERGE-READY" not in clean_then_requested.stdout
+    assert "ACTIONABLE: exact-head review requests changes" in clean_then_requested.stdout
+
+
+@pytest.mark.parametrize("scenario", ["review_missing_submitted_at", "review_malformed_submitted_at"])
+def test_watcher_rejects_exact_head_review_without_valid_submission_time(
+    tmp_path: Path,
+    scenario: str,
+) -> None:
+    result = _run_watcher(tmp_path, scenario=scenario)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" in result.stdout
 
 
 def test_watcher_accepts_current_head_codex_clean_comment(tmp_path: Path) -> None:

@@ -139,6 +139,7 @@ def _review_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = 
                                 "author": {"login": "chatgpt-codex-connector"},
                                 "commit": {"oid": "head-a"},
                                 "state": "COMMENTED",
+                                "submittedAt": "2026-07-27T00:00:00Z",
                             }
                         ],
                         "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
@@ -970,6 +971,7 @@ def test_exact_head_changes_requested_review_requires_attention(
                                 "author": {"login": "chatgpt-codex-connector"},
                                 "commit": {"oid": "head-a"},
                                 "state": "CHANGES_REQUESTED",
+                                "submittedAt": "2026-07-27T00:00:00Z",
                             }
                         ]
                     )
@@ -982,6 +984,77 @@ def test_exact_head_changes_requested_review_requires_attention(
     assert status["readiness"]["codex_head_review_count"] == 0
     assert status["readiness"]["codex_changes_requested"] is True
     assert "exact-head Codex review requests changes" in wake_bridge.readiness_blockers(status)
+
+
+@pytest.mark.parametrize(
+    ("states", "expected_state", "expected_changes_requested"),
+    [
+        (("CHANGES_REQUESTED", "COMMENTED"), "ready_for_human_merge", False),
+        (("COMMENTED", "CHANGES_REQUESTED"), "attention", True),
+    ],
+)
+def test_latest_exact_head_codex_review_state_controls_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    states: tuple[str, str],
+    expected_state: str,
+    expected_changes_requested: bool,
+) -> None:
+    nodes = [
+        {
+            "author": {"login": "chatgpt-codex-connector"},
+            "commit": {"oid": "head-a"},
+            "state": state,
+            "submittedAt": f"2026-07-27T00:0{index}:00Z",
+        }
+        for index, state in enumerate(states)
+    ]
+
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(review_pages=[_response(_review_page(nodes))]),
+    )
+
+    assert status["state"] == expected_state
+    assert status["readiness"]["codex_changes_requested"] is expected_changes_requested
+
+
+@pytest.mark.parametrize(
+    ("submitted_at", "expected_error"),
+    [
+        (None, "submittedAt is missing"),
+        ("not-a-time", "submittedAt is malformed"),
+        ("2026-07-27T00:00:00", "submittedAt has no timezone"),
+    ],
+)
+def test_exact_head_codex_review_with_invalid_submission_time_is_attention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    submitted_at: str | None,
+    expected_error: str,
+) -> None:
+    review = {
+        "author": {"login": "chatgpt-codex-connector"},
+        "commit": {"oid": "head-a"},
+        "state": "COMMENTED",
+    }
+    if submitted_at is not None:
+        review["submittedAt"] = submitted_at
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[
+                _response(
+                    _review_page([review])
+                )
+            ]
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert expected_error in status["codex_reviews_error"]
 
 
 def test_unresolved_non_codex_thread_does_not_block_ready_state(
@@ -1730,7 +1803,7 @@ def test_installed_entrypoint_writes_consumer_accepted_snapshot(tmp_path: Path) 
             elif args[:2] == ["api", "graphql"]:
                 query = " ".join(args)
                 if "reviews(first:100" in query:
-                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviews": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}, "commit": {"oid": "head-a"}, "state": "COMMENTED"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
+                    payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "reviews": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}, "commit": {"oid": "head-a"}, "state": "COMMENTED", "submittedAt": "2026-07-27T00:00:00Z"}], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 elif "comments(first:100" in query:
                     payload = {"data": {"repository": {"pullRequest": {"headRefOid": "head-a", "comments": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}}}}}
                 elif "comments(first:1)" in query:

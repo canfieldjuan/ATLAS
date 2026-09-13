@@ -117,7 +117,7 @@ query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
     pullRequest(number:$pr){
       reviews(first:100, after:$cursor){
         pageInfo{ hasNextPage endCursor }
-        nodes{ author{ login } commit{ oid } state }
+        nodes{ author{ login } commit{ oid } state submittedAt }
       }
     }
   }
@@ -666,6 +666,8 @@ def _fetch_codex_head_reviews(
     pages = 0
     matches = 0
     changes_requested = False
+    latest_review: tuple[dt.datetime, int, str] | None = None
+    review_sequence = 0
     for _ in range(MAX_REVIEW_PAGES):
         command = [
             "gh",
@@ -718,6 +720,7 @@ def _fetch_codex_head_reviews(
                 return matches, pages, changes_requested, False, f"review {index} author/commit is malformed"
             login = author.get("login")
             oid = commit.get("oid")
+            submitted_at = node.get("submittedAt")
             if login is not None and not isinstance(login, str):
                 return matches, pages, changes_requested, False, f"review {index} author login is malformed"
             if oid is not None and not isinstance(oid, str):
@@ -725,10 +728,22 @@ def _fetch_codex_head_reviews(
             if state is not None and not isinstance(state, str):
                 return matches, pages, changes_requested, False, f"review {index} state is malformed"
             if _is_codex_login(login) and oid == head_sha:
-                if state == "CHANGES_REQUESTED":
-                    changes_requested = True
-                elif state in {"COMMENTED", "APPROVED"}:
-                    matches += 1
+                if not isinstance(state, str):
+                    return matches, pages, changes_requested, False, f"review {index} state is missing"
+                if not isinstance(submitted_at, str) or not submitted_at:
+                    return matches, pages, changes_requested, False, f"review {index} submittedAt is missing"
+                try:
+                    submitted_time = dt.datetime.fromisoformat(submitted_at.replace("Z", "+00:00"))
+                except ValueError:
+                    return matches, pages, changes_requested, False, f"review {index} submittedAt is malformed"
+                if submitted_time.tzinfo is None:
+                    return matches, pages, changes_requested, False, f"review {index} submittedAt has no timezone"
+                review_sequence += 1
+                candidate = (submitted_time, review_sequence, state)
+                if latest_review is None or candidate[:2] > latest_review[:2]:
+                    latest_review = candidate
+                    matches = int(state in {"COMMENTED", "APPROVED"})
+                    changes_requested = state == "CHANGES_REQUESTED"
         has_next = page_info.get("hasNextPage")
         if not isinstance(has_next, bool):
             return matches, pages, changes_requested, False, "GraphQL review hasNextPage must be boolean"

@@ -139,7 +139,7 @@ for i in $(seq 0 "$CYCLES"); do
   MORE=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
   # Fail closed when more thread pages exist than we fetched.
   [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"
-  REVIEW_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ reviews(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } commit{ oid } state } } } } }'
+  REVIEW_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ reviews(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } commit{ oid } state submittedAt } } } } }'
   COMMENT_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ comments(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } body bodyText } } } } }'
   REVIEW_NODES='[]'
   REVIEW_CURSOR=''
@@ -207,8 +207,12 @@ for i in $(seq 0 "$CYCLES"); do
     COMMENT_CURSOR=$(echo "$COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.endCursor // empty')
     [ -n "$COMMENT_CURSOR" ] || { REVIEWS_COMPLETE=false; break; }
   done
-  CODEX_FORMAL_REVIEWS=$(echo "$REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
-  CODEX_CHANGE_REQUESTS=$(echo "$REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") == "CHANGES_REQUESTED"))] | length')
+  if [ "$REVIEWS_COMPLETE" = "true" ] && ! echo "$REVIEW_NODES" | jq -e --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha))] | all(.[]; ((.state | type) == "string") and ((.submittedAt | type) == "string") and ((try (.submittedAt | fromdateiso8601) catch null) != null))' >/dev/null; then
+    REVIEWS_COMPLETE=false
+  fi
+  CODEX_EFFECTIVE_REVIEW=$(echo "$REVIEW_NODES" | jq -c --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.submittedAt | type) == "string"))] | sort_by(.submittedAt) | last // {}')
+  CODEX_FORMAL_REVIEWS=$(echo "$CODEX_EFFECTIVE_REVIEW" | jq 'if ((.state // "") | IN("COMMENTED","APPROVED")) then 1 else 0 end')
+  CODEX_CHANGE_REQUESTS=$(echo "$CODEX_EFFECTIVE_REVIEW" | jq 'if ((.state // "") == "CHANGES_REQUESTED") then 1 else 0 end')
   CODEX_CLEAN_COMMENTS=$(echo "$COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
   CODEX_HEAD_REVIEWS=$((CODEX_FORMAL_REVIEWS + CODEX_CLEAN_COMMENTS))
   # --paginate + re-wrap: required contexts beyond the first 100 runs stay visible
@@ -313,8 +317,12 @@ for i in $(seq 0 "$CYCLES"); do
       FINAL_COMMENT_CURSOR=$(echo "$FINAL_COMMENT_PAGE" | jq -r '.data.repository.pullRequest.comments.pageInfo.endCursor // empty')
       [ -n "$FINAL_COMMENT_CURSOR" ] || { FINAL_REVIEWS_COMPLETE=false; break; }
     done
-    FINAL_CODEX_FORMAL_REVIEWS=$(echo "$FINAL_REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
-    FINAL_CODEX_CHANGE_REQUESTS=$(echo "$FINAL_REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") == "CHANGES_REQUESTED"))] | length')
+    if [ "$FINAL_REVIEWS_COMPLETE" = "true" ] && ! echo "$FINAL_REVIEW_NODES" | jq -e --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha))] | all(.[]; ((.state | type) == "string") and ((.submittedAt | type) == "string") and ((try (.submittedAt | fromdateiso8601) catch null) != null))' >/dev/null; then
+      FINAL_REVIEWS_COMPLETE=false
+    fi
+    FINAL_CODEX_EFFECTIVE_REVIEW=$(echo "$FINAL_REVIEW_NODES" | jq -c --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.submittedAt | type) == "string"))] | sort_by(.submittedAt) | last // {}')
+    FINAL_CODEX_FORMAL_REVIEWS=$(echo "$FINAL_CODEX_EFFECTIVE_REVIEW" | jq 'if ((.state // "") | IN("COMMENTED","APPROVED")) then 1 else 0 end')
+    FINAL_CODEX_CHANGE_REQUESTS=$(echo "$FINAL_CODEX_EFFECTIVE_REVIEW" | jq 'if ((.state // "") == "CHANGES_REQUESTED") then 1 else 0 end')
     FINAL_CODEX_CLEAN_COMMENTS=$(echo "$FINAL_COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
     FINAL_CODEX_HEAD_REVIEWS=$((FINAL_CODEX_FORMAL_REVIEWS + FINAL_CODEX_CLEAN_COMMENTS))
     # Read threads after review attestations so a newly submitted review cannot
