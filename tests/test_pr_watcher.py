@@ -126,11 +126,18 @@ def _thread_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = 
     }
 
 
-def _review_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = False, cursor: str | None = None) -> dict[str, Any]:
+def _review_page(
+    nodes: list[dict[str, Any]] | None = None,
+    *,
+    head: str = "head-a",
+    has_next: bool = False,
+    cursor: str | None = None,
+) -> dict[str, Any]:
     return {
         "data": {
             "repository": {
                 "pullRequest": {
+                    "headRefOid": head,
                     "reviews": {
                         "nodes": nodes
                         if nodes is not None
@@ -150,11 +157,18 @@ def _review_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = 
     }
 
 
-def _comment_page(nodes: list[dict[str, Any]] | None = None, *, has_next: bool = False, cursor: str | None = None) -> dict[str, Any]:
+def _comment_page(
+    nodes: list[dict[str, Any]] | None = None,
+    *,
+    head: str = "head-a",
+    has_next: bool = False,
+    cursor: str | None = None,
+) -> dict[str, Any]:
     return {
         "data": {
             "repository": {
                 "pullRequest": {
+                    "headRefOid": head,
                     "comments": {
                         "nodes": nodes or [],
                         "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
@@ -1051,6 +1065,31 @@ def test_same_head_review_change_during_collection_requires_attention(
     assert "review evidence changed during watcher observation" in status["codex_reviews_error"]
 
 
+def test_head_move_during_final_review_recheck_requires_attention(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clean = {
+        "author": {"login": "chatgpt-codex-connector"},
+        "commit": {"oid": "head-a"},
+        "state": "COMMENTED",
+        "submittedAt": "2026-07-27T00:00:00Z",
+    }
+
+    status = _produce(
+        tmp_path,
+        monkeypatch,
+        FakeRun(
+            review_pages=[_response(_review_page([clean]))],
+            post_review_pages=[_response(_review_page([clean], head="head-b"))],
+        ),
+    )
+
+    assert status["state"] == "attention"
+    assert status["readiness"]["codex_reviews_complete"] is False
+    assert "review snapshot head changed" in status["codex_reviews_error"]
+
+
 @pytest.mark.parametrize(
     ("submitted_at", "expected_error"),
     [
@@ -1336,7 +1375,7 @@ def test_codex_clean_comment_attests_current_head(
         monkeypatch,
         FakeRun(
             pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
-            review_pages=[_response(_review_page(nodes=[]))],
+            review_pages=[_response(_review_page(nodes=[], head=head))],
             comment_pages=[
                 _response(
                     _comment_page(
@@ -1346,7 +1385,8 @@ def test_codex_clean_comment_attests_current_head(
                                 "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
                                 "bodyText": "",
                             }
-                        ]
+                        ],
+                        head=head,
                     )
                 )
             ],
@@ -1368,7 +1408,7 @@ def test_authorless_comment_is_ignored_for_codex_attestation(
         monkeypatch,
         FakeRun(
             pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
-            review_pages=[_response(_review_page(nodes=[]))],
+            review_pages=[_response(_review_page(nodes=[], head=head))],
             comment_pages=[
                 _response(
                     _comment_page(
@@ -1378,7 +1418,8 @@ def test_authorless_comment_is_ignored_for_codex_attestation(
                                 "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
                                 "bodyText": "",
                             }
-                        ]
+                        ],
+                        head=head,
                     )
                 )
             ],
@@ -1401,9 +1442,9 @@ def test_codex_comment_pagination_reaches_later_current_head_attestation(
         monkeypatch,
         FakeRun(
             pr_responses=[_response(_pr(head=head)), _response(_pr(head=head)), _response(_pr(head=head))],
-            review_pages=[_response(_review_page(nodes=[]))],
+            review_pages=[_response(_review_page(nodes=[], head=head))],
             comment_pages=[
-                _response(_comment_page(has_next=True, cursor="comment-cursor")),
+                _response(_comment_page(head=head, has_next=True, cursor="comment-cursor")),
                 _response(
                     _comment_page(
                         [
@@ -1412,7 +1453,8 @@ def test_codex_comment_pagination_reaches_later_current_head_attestation(
                                 "body": "Codex Review: Didn't find any major issues\n\n**Reviewed commit:** `aaaaaaaaaa`",
                                 "bodyText": "",
                             }
-                        ]
+                        ],
+                        head=head,
                     )
                 ),
             ],

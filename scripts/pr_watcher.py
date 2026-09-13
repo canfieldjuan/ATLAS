@@ -115,6 +115,7 @@ REVIEWS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$pr){
+      headRefOid
       reviews(first:100, after:$cursor){
         pageInfo{ hasNextPage endCursor }
         nodes{ author{ login } commit{ oid } state submittedAt }
@@ -128,6 +129,7 @@ COMMENTS_QUERY = """
 query($owner:String!,$name:String!,$pr:Int!,$cursor:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$pr){
+      headRefOid
       comments(first:100, after:$cursor){
         pageInfo{ hasNextPage endCursor }
         nodes{ author{ login } body bodyText }
@@ -712,6 +714,9 @@ def _fetch_codex_head_reviews(
         data = payload.get("data")
         repository = data.get("repository") if isinstance(data, dict) else None
         pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+        observed_head = pull_request.get("headRefOid") if isinstance(pull_request, dict) else None
+        if observed_head != head_sha:
+            return result(False, "review snapshot head changed during watcher observation")
         reviews = pull_request.get("reviews") if isinstance(pull_request, dict) else None
         if reviews is None:
             return result(False, "GraphQL reviews envelope is missing")
@@ -802,6 +807,9 @@ def _fetch_codex_head_reviews(
         data = payload.get("data")
         repository = data.get("repository") if isinstance(data, dict) else None
         pull_request = repository.get("pullRequest") if isinstance(repository, dict) else None
+        observed_head = pull_request.get("headRefOid") if isinstance(pull_request, dict) else None
+        if observed_head != head_sha:
+            return result(False, "review snapshot head changed during watcher observation")
         comments = pull_request.get("comments") if isinstance(pull_request, dict) else None
         if comments is None:
             return result(False, "GraphQL comments envelope is missing")

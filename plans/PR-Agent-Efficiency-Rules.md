@@ -25,6 +25,10 @@ The corrected plan-required body then exposed a pre-push deadlock:
 `--current-pr-body-file` validates the intended body but the session-drift audit
 also validates the stale GitHub body for the same branch, while `open_pr.sh`
 correctly refuses to update that body until the new head is pushed.
+The latest exact-head review exposed two remaining contradictions in the same
+merge gate: the final stability recheck performs review network reads after its
+last unbound head read, and the mandatory overnight workflow exempts docs-only
+PRs from the exact-head review presence the executable gate requires.
 
 These are policy and merge-readiness failures in the current slice, not optional
 hardening. Fixing only the cited sentences would leave the executable watcher
@@ -54,7 +58,10 @@ that cannot pass its own admission checks.
   the shell watcher checks the armed head before rather than after collecting
   its expanded final evidence snapshot. Both producers then validate only head
   identity, so a summary-only formal review can change on the same head after
-  the accepted review snapshot without invalidating readiness.
+  the accepted review snapshot without invalidating readiness. The stability
+  rechecks themselves then fetch mutable review evidence after their last head
+  observation without binding the returned evidence to that head, and the
+  overnight workflow preserves a docs-only bypass of the exact-head gate.
 - Correct fix must touch/change: make every mandatory session instruction use
   subscription/external wake plus one snapshot per model activation; require the
   activation source to satisfy the recorded merge authorization; make the shell
@@ -72,7 +79,8 @@ that cannot pass its own admission checks.
   current-body override authoritative only for the current PR while preserving
   GitHub peer-overlap discovery; and require the complete exact-head formal
   review snapshot to remain stable across each producer's final evidence
-  interval.
+  interval; require each paginated review/comment response to identify the
+  armed head; and remove the overnight docs-only review-presence exemption.
 - Must not change: watcher infrastructure remains read-only and never gains
   merge authority; external non-model timers may still collect state; required
   CI, thread pagination, ownership, mergeability, and reconciliation gates stay
@@ -83,7 +91,7 @@ that cannot pass its own admission checks.
 Ownership lane: atlas-agent-efficiency-policy
 Slice phase: workflow/process
 
-Max files: 14
+Max files: 15
 
 1. Replace model-driven polling instructions with one-snapshot activation and
    preserve the scheduled-ready-only authorization boundary.
@@ -108,6 +116,10 @@ Max files: 14
 9. Revalidate the complete exact-head formal-review snapshot after final
    evidence collection in both producers so a same-head review transition
    cannot inherit stale clean readiness.
+10. Bind every review/comment page in both producers to the armed head so the
+    final stability recheck cannot validate old-head evidence after a push.
+11. Make the overnight direct caller require exact-head review evidence for
+    documentation-only PRs just like every other owned PR.
 
 ### Review Contract
 
@@ -161,13 +173,19 @@ Max files: 14
   15. `tests/test_watch_owned_pr.py` and `tests/test_pr_watcher.py` prove a
       same-head clean-to-`CHANGES_REQUESTED` transition during final evidence
       collection cannot reach merge readiness in either producer.
+  16. `tests/test_watch_owned_pr.py` and `tests/test_pr_watcher.py` prove a head
+      move during the final review stability recheck cannot reach ready in
+      either producer.
+  17. `docs/OVERNIGHT_ARC_WORKFLOW.md` requires complete exact-head Codex review
+      evidence for documentation-only and code PRs alike.
 - Reachability proof: the real shell/Python watcher entrypoints consume mocked
   GitHub snapshots in their existing focused test suites; observable output is
   `MERGE-READY` versus pending/actionable and ready versus pending/attention
   state/report buckets.
-- Affected surfaces: builder instructions, session-state handoff, shell watcher,
-  Python watcher, wake-bridge readiness validation, reporter classification, and
-  their focused tests, and the pre-push cross-session drift audit.
+- Affected surfaces: builder and overnight instructions, session-state handoff,
+  shell watcher, Python watcher, wake-bridge readiness validation, reporter
+  classification, their focused tests, and the pre-push cross-session drift
+  audit.
 - Risk areas: premature merge readiness, suppressed actionable review/check/
   conflict evidence, stale/incomplete review evidence, mismatched wake
   authorization, accidental model polling, and watcher merge authority.
@@ -207,6 +225,8 @@ seam in the enumeration; otherwise write "N/A - no boundary change."
   - Head stays fixed but the complete exact-head formal-review snapshot changes:
     intentionally changed to unstable/incomplete review evidence and never
     merge-ready.
+  - A paginated review/comment response identifies any head other than the armed
+    SHA: intentionally rejected as incomplete evidence and never merge-ready.
 - Boundary path/seam: paginated GitHub reviews -> Python version-1 readiness
   proof -> Python watcher state.
   - Complete exact-head sequence ending clean: intentionally changed to
@@ -268,6 +288,7 @@ fallback changes; otherwise write "N/A - no guard/config boundary change."
 
 - `AGENTS.md`
 - `CLAUDE.md`
+- `docs/OVERNIGHT_ARC_WORKFLOW.md`
 - `docs/SESSION_STATE_TEMPLATE.md`
 - `docs/long_running_session_watcher_handoff.md`
 - `plans/PR-Agent-Efficiency-Rules.md`
@@ -309,6 +330,10 @@ the equivalent post-review head comparison.
 Both producers also collect the complete exact-head formal-review snapshot on
 both sides of their final thread/check/head observations. A changed snapshot is
 not classified from either side; it fails closed as unstable review evidence.
+Every review and clean-comment page also returns `headRefOid`, which must equal
+the armed head before the page contributes evidence. The overnight workflow
+applies that same exact-head requirement to documentation-only PRs rather than
+treating a green reconciliation check as review presence.
 
 The instruction set distinguishes active model turns from external state
 collectors: external timers/webhooks may wake a session, but the session takes
@@ -338,15 +363,25 @@ and lane overlap.
   review collection as attention and stores the diagnostic in its status JSON,
   so this is deferred under the operator's no-more-hardening instruction unless
   an observed operator handoff cannot identify the cause.
+- The shell's final review-stability pagination does not add a repeated-cursor
+  guard or page cap. A syntactically valid GitHub response that repeats a
+  nonempty cursor can prevent the watcher from returning, but cannot produce a
+  false ready result; this resource-hardening case is deferred under the
+  operator's no-more-hardening instruction.
 
-Parked hardening: attention-handoff diagnostic projection only; no readiness,
-review, or merge-safety behavior is deferred.
+Parked hardening: attention-handoff diagnostic projection and shell final-review
+recheck pagination bounds; no false-readiness behavior is deferred.
 
 ## Verification
 
 - Fail-first: same-head clean-to-change-request review transitions reached ready
   in both producers (`2 failed`) before stability revalidation.
 - Focused same-head review-transition regressions - `2 passed`.
+- Fail-first: a head move during each producer's final review recheck still
+  reached ready (`2 failed`).
+- Focused head-bound final-review recheck regressions - `2 passed`.
+- `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py` -
+  `119 passed` with head-bound review/comment pages in both producers.
 - `uv run pytest -q tests/test_watch_owned_pr.py tests/test_pr_watcher.py` -
   `117 passed` after bracketing final evidence with complete review snapshots.
 - Fail-first: a head transition during final shell evidence collection still
@@ -403,16 +438,17 @@ review, or merge-safety behavior is deferred.
 |---|---:|
 | `AGENTS.md` | 86 |
 | `CLAUDE.md` | 18 |
+| `docs/OVERNIGHT_ARC_WORKFLOW.md` | 10 |
 | `docs/SESSION_STATE_TEMPLATE.md` | 14 |
 | `docs/long_running_session_watcher_handoff.md` | 87 |
-| `plans/PR-Agent-Efficiency-Rules.md` | 418 |
+| `plans/PR-Agent-Efficiency-Rules.md` | 454 |
 | `scripts/audit_pr_session_drift.py` | 27 |
 | `scripts/codex_wake_bridge.py` | 17 |
-| `scripts/pr_watcher.py` | 134 |
-| `scripts/watch_owned_pr.sh` | 132 |
+| `scripts/pr_watcher.py` | 142 |
+| `scripts/watch_owned_pr.sh` | 147 |
 | `tests/test_audit_pr_session_drift.py` | 58 |
 | `tests/test_codex_wake_bridge.py` | 24 |
-| `tests/test_pr_watcher.py` | 197 |
+| `tests/test_pr_watcher.py` | 257 |
 | `tests/test_report_pr_watcher_state.py` | 19 |
-| `tests/test_watch_owned_pr.py` | 209 |
-| **Total** | **1440** |
+| `tests/test_watch_owned_pr.py` | 230 |
+| **Total** | **1590** |

@@ -79,11 +79,11 @@ overnight deltas:
   reviewer boundary probe BEFORE pushing -- both error directions (fail-open
   AND over-reject), boundary values, at least one negative test. Cheaper than
   a review round.
-- **Merge:** required checks green + 0 unresolved Codex connector threads +
-  clean tree + local==remote -> merge, teardown, next slice. Documentation-only
-  PRs use the same open-thread gate: do not hold them for Codex review presence
-  when `live-reconciliation` is green for the current head. Log for the report;
-  do not ping the operator per merge.
+- **Merge:** required checks green + complete exact-head Codex review evidence +
+  0 unresolved Codex connector threads + clean tree + local==remote -> merge,
+  teardown, next slice. Documentation-only PRs use the same exact-head review
+  and open-thread gates; `live-reconciliation` alone is not review presence.
+  Log for the report; do not ping the operator per merge.
 - **Compaction recovery:** the `CLAUDE.md` compact instructions preserve the
   overnight baton. First acts after any compaction: re-read this doc, verify
   the baton against `git`/`gh` reality, re-arm the watcher.

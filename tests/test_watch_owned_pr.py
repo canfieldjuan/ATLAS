@@ -220,6 +220,11 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 if review_state_file:
                     with open(review_state_file, "w", encoding="utf-8") as handle:
                         handle.write(str(review_count + 1))
+                observed_head = (
+                    "head-b"
+                    if scenario == "head_moves_during_final_review_recheck" and review_count > 1
+                    else expected_sha
+                )
                 if scenario in {"no_review", "no_review_dirty", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment"}:
                     nodes = []
                     has_next = False
@@ -305,7 +310,9 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     }]
                     has_next = False
                     cursor = None
-                print(json.dumps({"data": {"repository": {"pullRequest": {"reviews": {
+                print(json.dumps({"data": {"repository": {"pullRequest": {
+                    "headRefOid": observed_head,
+                    "reviews": {
                     "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
                     "nodes": nodes,
                 }}}}}))
@@ -371,7 +378,9 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                     nodes = []
                     has_next = False
                     cursor = None
-                print(json.dumps({"data": {"repository": {"pullRequest": {"comments": {
+                print(json.dumps({"data": {"repository": {"pullRequest": {
+                    "headRefOid": expected_sha,
+                    "comments": {
                     "pageInfo": {"hasNextPage": has_next, "endCursor": cursor},
                     "nodes": nodes,
                 }}}}}))
@@ -671,6 +680,14 @@ def test_watcher_rejects_same_head_review_change_during_final_evidence(tmp_path:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
     assert "review evidence changed during final observation" in result.stdout
+
+
+def test_watcher_rejects_head_move_during_final_review_recheck(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="head_moves_during_final_review_recheck")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING: final-read" in result.stdout
 
 
 def test_watcher_blocks_final_decision_change_when_threads_clear(tmp_path: Path) -> None:

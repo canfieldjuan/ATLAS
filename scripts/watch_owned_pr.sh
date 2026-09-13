@@ -139,8 +139,8 @@ for i in $(seq 0 "$CYCLES"); do
   MORE=$(echo "$ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
   # Fail closed when more thread pages exist than we fetched.
   [ "$MORE" = "true" ] && UNRES="${UNRES}+unfetched-pages"
-  REVIEW_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ reviews(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } commit{ oid } state submittedAt } } } } }'
-  COMMENT_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ comments(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } body bodyText } } } } }'
+  REVIEW_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ headRefOid reviews(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } commit{ oid } state submittedAt } } } } }'
+  COMMENT_QUERY='query($owner:String!,$name:String!,$pr:Int!,$cursor:String){ repository(owner:$owner,name:$name){ pullRequest(number:$pr){ headRefOid comments(first:100, after:$cursor){ pageInfo{ hasNextPage endCursor } nodes{ author{ login } body bodyText } } } } }'
   REVIEW_NODES='[]'
   REVIEW_CURSOR=''
   REVIEW_PAGES=0
@@ -149,9 +149,10 @@ for i in $(seq 0 "$CYCLES"); do
     REVIEW_ARGS=(gh api graphql -f query="$REVIEW_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
     [ -n "$REVIEW_CURSOR" ] && REVIEW_ARGS+=(-f cursor="$REVIEW_CURSOR")
     REVIEW_PAGE=$(GH_TOKEN="$TOK" "${REVIEW_ARGS[@]}" 2>/dev/null) || { REVIEWS_COMPLETE=false; break; }
-    if ! echo "$REVIEW_PAGE" | jq -e '
+    if ! echo "$REVIEW_PAGE" | jq -e --arg sha "$SHA" '
         (((.errors // []) | length) == 0)
         and ((.data.repository.pullRequest | type) == "object")
+        and (.data.repository.pullRequest.headRefOid == $sha)
         and ((.data.repository.pullRequest.reviews | type) == "object")
         and ((.data.repository.pullRequest.reviews.nodes | type) == "array")
         and ((.data.repository.pullRequest.reviews.pageInfo | type) == "object")
@@ -181,9 +182,10 @@ for i in $(seq 0 "$CYCLES"); do
     COMMENT_ARGS=(gh api graphql -f query="$COMMENT_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
     [ -n "$COMMENT_CURSOR" ] && COMMENT_ARGS+=(-f cursor="$COMMENT_CURSOR")
     COMMENT_PAGE=$(GH_TOKEN="$TOK" "${COMMENT_ARGS[@]}" 2>/dev/null) || { REVIEWS_COMPLETE=false; break; }
-    if ! echo "$COMMENT_PAGE" | jq -e '
+    if ! echo "$COMMENT_PAGE" | jq -e --arg sha "$SHA" '
         (((.errors // []) | length) == 0)
         and ((.data.repository.pullRequest | type) == "object")
+        and (.data.repository.pullRequest.headRefOid == $sha)
         and ((.data.repository.pullRequest.comments | type) == "object")
         and ((.data.repository.pullRequest.comments.nodes | type) == "array")
         and ((.data.repository.pullRequest.comments.pageInfo | type) == "object")
@@ -257,9 +259,10 @@ for i in $(seq 0 "$CYCLES"); do
       FINAL_REVIEW_ARGS=(gh api graphql -f query="$REVIEW_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
       [ -n "$FINAL_REVIEW_CURSOR" ] && FINAL_REVIEW_ARGS+=(-f cursor="$FINAL_REVIEW_CURSOR")
       FINAL_REVIEW_PAGE=$(GH_TOKEN="$TOK" "${FINAL_REVIEW_ARGS[@]}" 2>/dev/null) || { FINAL_REVIEWS_COMPLETE=false; break; }
-      if ! echo "$FINAL_REVIEW_PAGE" | jq -e '
+      if ! echo "$FINAL_REVIEW_PAGE" | jq -e --arg sha "$SHA" '
           (((.errors // []) | length) == 0)
           and ((.data.repository.pullRequest | type) == "object")
+          and (.data.repository.pullRequest.headRefOid == $sha)
           and ((.data.repository.pullRequest.reviews | type) == "object")
           and ((.data.repository.pullRequest.reviews.nodes | type) == "array")
           and ((.data.repository.pullRequest.reviews.pageInfo | type) == "object")
@@ -289,9 +292,10 @@ for i in $(seq 0 "$CYCLES"); do
       FINAL_COMMENT_ARGS=(gh api graphql -f query="$COMMENT_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
       [ -n "$FINAL_COMMENT_CURSOR" ] && FINAL_COMMENT_ARGS+=(-f cursor="$FINAL_COMMENT_CURSOR")
       FINAL_COMMENT_PAGE=$(GH_TOKEN="$TOK" "${FINAL_COMMENT_ARGS[@]}" 2>/dev/null) || { FINAL_REVIEWS_COMPLETE=false; break; }
-      if ! echo "$FINAL_COMMENT_PAGE" | jq -e '
+      if ! echo "$FINAL_COMMENT_PAGE" | jq -e --arg sha "$SHA" '
           (((.errors // []) | length) == 0)
           and ((.data.repository.pullRequest | type) == "object")
+          and (.data.repository.pullRequest.headRefOid == $sha)
           and ((.data.repository.pullRequest.comments | type) == "object")
           and ((.data.repository.pullRequest.comments.nodes | type) == "array")
           and ((.data.repository.pullRequest.comments.pageInfo | type) == "object")
@@ -359,9 +363,10 @@ for i in $(seq 0 "$CYCLES"); do
         FINAL_RECHECK_REVIEW_ARGS=(gh api graphql -f query="$REVIEW_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR")
         [ -n "$FINAL_RECHECK_REVIEW_CURSOR" ] && FINAL_RECHECK_REVIEW_ARGS+=(-f cursor="$FINAL_RECHECK_REVIEW_CURSOR")
         FINAL_RECHECK_REVIEW_PAGE=$(GH_TOKEN="$TOK" "${FINAL_RECHECK_REVIEW_ARGS[@]}" 2>/dev/null) || { FINAL_RECHECK_REVIEWS_COMPLETE=false; break; }
-        if ! echo "$FINAL_RECHECK_REVIEW_PAGE" | jq -e '
+        if ! echo "$FINAL_RECHECK_REVIEW_PAGE" | jq -e --arg sha "$SHA" '
             (((.errors // []) | length) == 0)
             and ((.data.repository.pullRequest | type) == "object")
+            and (.data.repository.pullRequest.headRefOid == $sha)
             and ((.data.repository.pullRequest.reviews | type) == "object")
             and ((.data.repository.pullRequest.reviews.nodes | type) == "array")
             and ((.data.repository.pullRequest.reviews.pageInfo | type) == "object")
