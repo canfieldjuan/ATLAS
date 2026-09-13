@@ -233,6 +233,9 @@ for i in $(seq 0 "$CYCLES"); do
   if [ "$DECISION" = "CHANGES_REQUESTED" ]; then
     echo "ACTIONABLE: exact-head review requests changes -> reconcile/fix, push, re-arm"; exit 0
   fi
+  if [ "$MERGEABLE" = "CONFLICTING" ] || [ "$MSTATE" = "DIRTY" ]; then
+    echo "ACTIONABLE: mergeable=$MERGEABLE merge-state=$MSTATE -> resolve merge conflict before review readiness"; exit 0
+  fi
   if [ "$REVIEWS_COMPLETE" != "true" ] || [ "$CODEX_HEAD_REVIEWS" -lt 1 ]; then
     echo "REVIEW-PENDING: complete exact-head Codex review evidence is not available"
     continue
@@ -243,24 +246,6 @@ for i in $(seq 0 "$CYCLES"); do
      && { [ "$MSTATE" = "CLEAN" ] || [ "$MSTATE" = "UNSTABLE" ]; }; then
     CUR=$(GH_TOKEN="$TOK" gh api "repos/$REPO/pulls/$PR" --jq '.head.sha' 2>/dev/null) || { echo "cycle $i: API error before readiness, retrying"; continue; }
     if [ "$CUR" != "$SHA" ]; then echo "HEAD-MOVED: ${SHA:0:9} -> ${CUR:0:9} (new push; reconcile + re-arm on new head)"; exit 0; fi
-    FINAL_ST=$(GH_TOKEN="$TOK" gh api graphql -f query="$THREAD_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR" 2>/dev/null)
-    if ! echo "$FINAL_ST" | jq -e '
-        (((.errors // []) | length) == 0)
-        and ((.data.repository.pullRequest | type) == "object")
-        and ((.data.repository.pullRequest.reviewThreads | type) == "object")
-        and ((.data.repository.pullRequest.reviewThreads.nodes | type) == "array")
-        and ((.data.repository.pullRequest.reviewThreads.pageInfo | type) == "object")
-        and ((.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
-      ' >/dev/null 2>&1; then
-      echo "cycle $i: final GraphQL reviewThreads snapshot incomplete/malformed, retrying"
-      continue
-    fi
-    FINAL_DECISION=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
-    FINAL_MERGEABLE=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.mergeable')
-    FINAL_MSTATE=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"')
-    FINAL_UNRES=$(echo "$FINAL_ST" | jq --argjson codex "$CODEX_LOGINS_JSON" '[.data.repository.pullRequest.reviewThreads.nodes[]? | select((.isResolved==false) and ((((.comments.nodes[0].author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null))] | length')
-    FINAL_MORE=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
-    [ "$FINAL_MORE" = "true" ] && FINAL_UNRES="${FINAL_UNRES}+unfetched-pages"
     FINAL_REVIEW_NODES='[]'
     FINAL_REVIEW_CURSOR=''
     FINAL_REVIEW_PAGES=0
@@ -330,6 +315,26 @@ for i in $(seq 0 "$CYCLES"); do
     FINAL_CODEX_FORMAL_REVIEWS=$(echo "$FINAL_REVIEW_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | select(((((.author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null) and ((.commit.oid // "") == $sha) and ((.state // "") | IN("COMMENTED","APPROVED")))] | length')
     FINAL_CODEX_CLEAN_COMMENTS=$(echo "$FINAL_COMMENT_NODES" | jq --arg sha "$SHA" --argjson codex "$CODEX_LOGINS_JSON" '[.[]? | ((.body // .bodyText // "") as $body | ((.author.login // "") | ascii_downcase) as $login | select(($codex | index($login)) != null) | select(($body | ascii_downcase | contains("didn'\''t find any major issues"))) | ((try ($body | capture("\\*\\*Reviewed commit:\\*\\*\\s*`(?<reviewed>[0-9a-fA-F]{10,40})`").reviewed) catch "") | ascii_downcase) as $reviewed | select(($reviewed | length) > 0 and ($sha | startswith($reviewed))))] | length')
     FINAL_CODEX_HEAD_REVIEWS=$((FINAL_CODEX_FORMAL_REVIEWS + FINAL_CODEX_CLEAN_COMMENTS))
+    # Read threads after review attestations so a newly submitted review cannot
+    # be accepted without also observing the inline threads created with it.
+    FINAL_ST=$(GH_TOKEN="$TOK" gh api graphql -f query="$THREAD_QUERY" -f owner="$OWNER" -f name="$NAME" -F pr="$PR" 2>/dev/null)
+    if ! echo "$FINAL_ST" | jq -e '
+        (((.errors // []) | length) == 0)
+        and ((.data.repository.pullRequest | type) == "object")
+        and ((.data.repository.pullRequest.reviewThreads | type) == "object")
+        and ((.data.repository.pullRequest.reviewThreads.nodes | type) == "array")
+        and ((.data.repository.pullRequest.reviewThreads.pageInfo | type) == "object")
+        and ((.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage | type) == "boolean")
+      ' >/dev/null 2>&1; then
+      echo "cycle $i: final GraphQL reviewThreads snapshot incomplete/malformed, retrying"
+      continue
+    fi
+    FINAL_DECISION=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.reviewDecision // "NONE"')
+    FINAL_MERGEABLE=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.mergeable')
+    FINAL_MSTATE=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.mergeStateStatus // "UNKNOWN"')
+    FINAL_UNRES=$(echo "$FINAL_ST" | jq --argjson codex "$CODEX_LOGINS_JSON" '[.data.repository.pullRequest.reviewThreads.nodes[]? | select((.isResolved==false) and ((((.comments.nodes[0].author.login // "") | ascii_downcase) as $login | $codex | index($login)) != null))] | length')
+    FINAL_MORE=$(echo "$FINAL_ST" | jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage')
+    [ "$FINAL_MORE" = "true" ] && FINAL_UNRES="${FINAL_UNRES}+unfetched-pages"
     FINAL_CR=$(GH_TOKEN="$TOK" gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" 2>/dev/null | jq -s '{check_runs:[.[].check_runs[]]}')
     FINAL_REQLATEST=$(echo "$FINAL_CR" | jq --argjson app "$REQ_APP_ID" '[.check_runs[]|select(.app.id==$app)]|group_by(.name)|map(sort_by(.started_at)|last)')
     FINAL_REQRED=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")))]|length')

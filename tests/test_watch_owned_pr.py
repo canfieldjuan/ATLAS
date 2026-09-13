@@ -160,7 +160,18 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                         },
                     }}}}))
                     raise SystemExit(0)
-                if scenario == "copilot_thread":
+                if scenario == "final_review_adds_thread":
+                    review_state_file = state_file + ".reviews" if state_file else ""
+                    review_count = 0
+                    if review_state_file and os.path.exists(review_state_file):
+                        with open(review_state_file, "r", encoding="utf-8") as handle:
+                            review_count = int(handle.read() or "0")
+                    nodes = ([{
+                        "isResolved": False,
+                        "isOutdated": False,
+                        "comments": {"nodes": [{"author": {"login": "chatgpt-codex-connector"}}]},
+                    }] if review_count > 1 else [])
+                elif scenario == "copilot_thread":
                     nodes = [{
                         "isResolved": False,
                         "isOutdated": False,
@@ -183,8 +194,8 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 print(json.dumps({"data": {"repository": {"pullRequest": {
                     "state": "OPEN",
                     "merged": False,
-                    "mergeable": "MERGEABLE",
-                    "mergeStateStatus": "CLEAN",
+                    "mergeable": "CONFLICTING" if scenario == "no_review_dirty" else "MERGEABLE",
+                    "mergeStateStatus": "DIRTY" if scenario == "no_review_dirty" else "CLEAN",
                     "reviewDecision": review_decision,
                     "reviewThreads": {
                         "pageInfo": {"hasNextPage": False},
@@ -200,7 +211,7 @@ def _run_watcher(tmp_path: Path, *, scenario: str, sha: str = "head-a") -> subpr
                 if review_state_file:
                     with open(review_state_file, "w", encoding="utf-8") as handle:
                         handle.write(str(review_count + 1))
-                if scenario in {"no_review", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment"}:
+                if scenario in {"no_review", "no_review_dirty", "clean_comment", "paginated_clean_comment", "wrong_author_clean_comment", "stale_clean_comment"}:
                     nodes = []
                     has_next = False
                     cursor = None
@@ -407,6 +418,16 @@ def test_watcher_keeps_missing_current_head_codex_review_pending(tmp_path: Path)
     assert "codex-head-attestations=0" in result.stdout
 
 
+def test_watcher_surfaces_conflict_before_missing_review(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="no_review_dirty")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "REVIEW-PENDING" not in result.stdout
+    assert "ACTIONABLE" in result.stdout
+    assert "merge-state=DIRTY" in result.stdout
+
+
 def test_watcher_keeps_wrong_review_identity_pending(tmp_path: Path) -> None:
     result = _run_watcher(tmp_path, scenario="helper_review")
 
@@ -565,6 +586,15 @@ def test_watcher_blocks_final_decision_change_when_threads_clear(tmp_path: Path)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "MERGE-READY" not in result.stdout
     assert "ACTIONABLE: final-read" in result.stdout
+
+
+def test_watcher_reads_final_threads_after_final_review_attestation(tmp_path: Path) -> None:
+    result = _run_watcher(tmp_path, scenario="final_review_adds_thread")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "MERGE-READY" not in result.stdout
+    assert "ACTIONABLE: final-read" in result.stdout
+    assert "threads=1" in result.stdout
 
 
 def test_watcher_keeps_final_review_disappearance_pending(tmp_path: Path) -> None:

@@ -383,19 +383,21 @@ def test_post_review_metadata_blocks_readiness_on_changes_requested(
 
 
 def test_classify_review_readiness_grammar_invariant() -> None:
-    # Grammar axes: review tokens x proof containers x decision key families.
+    # Grammar axes: review tokens x proof containers x decision key families x merge states.
     complete_options = (False, True)
     attestation_counts = (0, 1)
     review_decisions = ("", "CHANGES_REQUESTED")
     pending_options = (False, True)
+    merge_states = ("CLEAN", "DIRTY")
 
-    for reviews_complete, review_count, decision, has_pending in product(
+    for reviews_complete, review_count, decision, has_pending, merge_state in product(
         complete_options,
         attestation_counts,
         review_decisions,
         pending_options,
+        merge_states,
     ):
-        if not reviews_complete or decision == "CHANGES_REQUESTED":
+        if not reviews_complete or decision == "CHANGES_REQUESTED" or merge_state != "CLEAN":
             contract_oracle = "attention"
         elif review_count < 1 or has_pending:
             contract_oracle = "pending"
@@ -403,7 +405,7 @@ def test_classify_review_readiness_grammar_invariant() -> None:
             contract_oracle = "ready_for_human_merge"
 
         actual = watcher._classify(
-            pr=_pr(decision=decision),
+            pr=_pr(decision=decision, merge=merge_state),
             errors=[],
             unsafe_auto_merge=False,
             head_mismatch=False,

@@ -898,6 +898,7 @@ def _classify(
         or unresolved_threads
         or pr.get("isDraft") is not False
         or pr.get("reviewDecision") == "CHANGES_REQUESTED"
+        or pr.get("mergeStateStatus") == "DIRTY"
     ):
         return "attention"
     if review_changed:
