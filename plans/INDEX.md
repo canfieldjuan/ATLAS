@@ -1,6 +1,6 @@
 # Plan archive index
 
-1548 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
+1549 archived plan doc(s). Merged plan docs are moved under `archive/` and listed below; once the archive sweep has run, the `plans/` root holds only in-flight slices.
 
 - [PR-ASR-Pip-Audit-Egg-Fragment](archive/PR-ASR-Pip-Audit-Egg-Fragment.md) - lane: security/workflow | phase: Production hardening
 - [PR-ASR-Requirements-Audit-Pin](archive/PR-ASR-Requirements-Audit-Pin.md) - lane: security/workflow | phase: Production hardening
@@ -9,6 +9,7 @@
 - [PR-Affiliate-Partner-Drift-Check](archive/PR-Affiliate-Partner-Drift-Check.md)
 - [PR-Affiliate-Partner-Drift-Qualified-Names](archive/PR-Affiliate-Partner-Drift-Qualified-Names.md)
 - [PR-Affiliate-Partner-Migrations](archive/PR-Affiliate-Partner-Migrations.md)
+- [PR-Agent-Efficiency-Rules](archive/PR-Agent-Efficiency-Rules.md) - lane: atlas-agent-efficiency-policy | phase: workflow/process
 - [PR-Agents-Md-Framework](archive/PR-Agents-Md-Framework.md)
 - [PR-Agents-Md-Routing-Section](archive/PR-Agents-Md-Routing-Section.md)
 - [PR-Agents-Mechanical-Enforcement-Audit](archive/PR-Agents-Mechanical-Enforcement-Audit.md) - lane: workflow/agents-enforcement-audit | phase: Workflow/process
