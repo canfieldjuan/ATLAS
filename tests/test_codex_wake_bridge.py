@@ -279,6 +279,11 @@ def test_github_read_errors_override_scheduled_ready(
             {},
             "unresolved review threads remain: 1",
         ),
+        ({"codex_reviews_complete": False}, {}, "Codex review pagination is incomplete"),
+        ({"codex_review_pages_fetched": 0}, {}, "Codex review pages fetched must be at least 1"),
+        ({"codex_review_pages_fetched": "1"}, {}, "Codex review pages fetched must be at least 1"),
+        ({"codex_head_review_count": 0}, {}, "exact-head Codex review count must be at least 1"),
+        ({"codex_head_review_count": "1"}, {}, "exact-head Codex review count must be at least 1"),
         (
             {"review_decision": "APPROVED"},
             {},
@@ -360,6 +365,9 @@ def test_malformed_readiness_objects_fail_closed(
         ("readiness", "review_decision", "review decision evidence is missing"),
         ("pr", "reviewDecision", "review decision evidence is missing"),
         ("readiness", "merge_state_status", "merge state must be CLEAN"),
+        ("readiness", "codex_reviews_complete", "Codex review pagination is incomplete"),
+        ("readiness", "codex_review_pages_fetched", "Codex review pages fetched must be at least 1"),
+        ("readiness", "codex_head_review_count", "exact-head Codex review count must be at least 1"),
     ],
 )
 def test_missing_readiness_evidence_fails_closed(
@@ -375,7 +383,7 @@ def test_missing_readiness_evidence_fails_closed(
     assert expected in bridge.readiness_blockers(status)
 
 
-def test_codex_review_attestation_is_not_required_for_ready_state(
+def test_codex_review_attestation_is_required_for_ready_state(
     tmp_path: Path,
 ) -> None:
     _config_dir, state_dir, watcher_id = _write_fixture(tmp_path)
@@ -383,10 +391,10 @@ def test_codex_review_attestation_is_not_required_for_ready_state(
     status["readiness"]["codex_head_review_count"] = 0
     status["readiness"]["docs_only_reconciliation_exemption"] = False
 
-    assert bridge.readiness_blockers(status) == []
+    assert "exact-head Codex review count must be at least 1" in bridge.readiness_blockers(status)
 
 
-def test_codex_review_attestation_error_is_diagnostic_for_ready_state(
+def test_codex_review_attestation_error_blocks_ready_state(
     tmp_path: Path,
 ) -> None:
     config_dir, state_dir, watcher_id = _write_fixture(
@@ -401,7 +409,7 @@ def test_codex_review_attestation_error_is_diagnostic_for_ready_state(
     status_path.write_text(json.dumps(status), encoding="utf-8")
 
     assert bridge.attention_blockers(status) == []
-    assert bridge.readiness_blockers(status) == []
+    assert "Codex review pagination is incomplete" in bridge.readiness_blockers(status)
 
     code = bridge.main([
         watcher_id,
@@ -415,9 +423,9 @@ def test_codex_review_attestation_error_is_diagnostic_for_ready_state(
 
     assert code == 0
     payload, prompt = _read_handoff(state_dir, watcher_id)
-    assert payload["wake_kind"] == "scheduled-ready"
+    assert payload["wake_kind"] == "attention"
     assert payload["actionable"] is True
-    assert "Scheduled green-confirmation wake" in prompt
+    assert "Do not merge" in prompt
 
 
 def test_malformed_status_fails_closed_to_attention_handoff(tmp_path: Path) -> None:

@@ -82,6 +82,24 @@ def test_reports_ready_as_manual_merge_decision(tmp_path: Path) -> None:
     assert "ready_for_human_merge PR" in result.stdout
 
 
+def test_ready_snapshot_without_exact_head_codex_review_reports_attention(
+    tmp_path: Path,
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    path = state_dir / "missing-review.json"
+    _write_state(path, state="ready_for_human_merge")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["readiness"]["codex_head_review_count"] = 0
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = _run(state_dir)
+
+    assert "Needs active-agent attention" in result.stdout
+    assert "Ready for active-agent merge decision" not in result.stdout
+    assert "exact-head Codex review count must be at least 1" in result.stdout
+
+
 def test_ready_snapshot_with_failure_details_reports_attention(tmp_path: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()

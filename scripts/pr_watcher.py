@@ -894,13 +894,15 @@ def _classify(
         return "attention"
     if (
         not threads_complete
+        or not reviews_complete
         or unresolved_threads
         or pr.get("isDraft") is not False
+        or pr.get("reviewDecision") == "CHANGES_REQUESTED"
     ):
         return "attention"
     if review_changed:
         return "review_changed"
-    if pending or required_pending:
+    if pending or required_pending or codex_head_review_count < 1:
         return "pending"
     if pr.get("mergeStateStatus") != "CLEAN":
         return "attention"

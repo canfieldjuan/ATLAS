@@ -5,8 +5,9 @@
 #   MERGED/CLOSED - PR reached terminal state (stop watching)
 #   HEAD-MOVED    - branch advanced past the SHA this watch was armed on
 #   ACTIONABLE    - red required context / unresolved Codex review threads
-#   MERGE-READY   - EVERY required context present and success +
-#                   0 unresolved Codex threads (no unfetched pages) + mergeable
+#   MERGE-READY   - EVERY required context present and success + complete
+#                   current-head Codex review evidence + 0 unresolved Codex
+#                   threads (no unfetched pages) + mergeable
 # Required contexts are read from origin/main's ci/gates.yml and the app pin is
 # read from origin/main's scripts/check_required_status_checks.py (trusted ref
 # -- the watched branch cannot weaken its own gate); MERGE-READY requires their
@@ -229,6 +230,13 @@ for i in $(seq 0 "$CYCLES"); do
   if [ "$REQRED" -gt 0 ] || [ "$UNRES" != "0" ]; then
     echo "ACTIONABLE: req-red=$REQRED codex-head-attestations=$CODEX_HEAD_REVIEWS threads=$UNRES decision=$DECISION -> reconcile/fix, push, re-arm"; exit 0
   fi
+  if [ "$DECISION" = "CHANGES_REQUESTED" ]; then
+    echo "ACTIONABLE: exact-head review requests changes -> reconcile/fix, push, re-arm"; exit 0
+  fi
+  if [ "$REVIEWS_COMPLETE" != "true" ] || [ "$CODEX_HEAD_REVIEWS" -lt 1 ]; then
+    echo "REVIEW-PENDING: complete exact-head Codex review evidence is not available"
+    continue
+  fi
   # Readiness is presence-based: every required context must be reporting
   # success (a not-yet-started context keeps this false, so no early race).
   if [ "$REQGREEN" -eq "$REQ_TOTAL" ] && [ "$REQUNSETTLED" -eq 0 ] && [ "$MERGEABLE" = "MERGEABLE" ] \
@@ -327,6 +335,13 @@ for i in $(seq 0 "$CYCLES"); do
     FINAL_REQRED=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("failure","cancelled","timed_out","action_required","stale","startup_failure")))]|length')
     FINAL_REQGREEN=$(echo "$FINAL_REQLATEST" | jq --argjson req "$REQ_JSON" '[.[]|select(.name as $n|$req|index($n))|select(.status=="completed" and (.conclusion|IN("success","neutral","skipped")))]|length')
     FINAL_REQUNSETTLED=$(echo "$FINAL_CR" | jq --argjson app "$REQ_APP_ID" --argjson req "$REQ_JSON" '[.check_runs[]|select(.app.id==$app)|select(.name as $n|$req|index($n))|select(.status!="completed")]|length')
+    if [ "$FINAL_DECISION" = "CHANGES_REQUESTED" ]; then
+      echo "ACTIONABLE: final-read exact-head review requests changes -> reconcile/fix, push, re-arm"; exit 0
+    fi
+    if [ "$FINAL_REVIEWS_COMPLETE" != "true" ] || [ "$FINAL_CODEX_HEAD_REVIEWS" -lt 1 ]; then
+      echo "REVIEW-PENDING: final-read complete exact-head Codex review evidence is not available"
+      continue
+    fi
     if [ "$FINAL_UNRES" != "0" ] || [ "$FINAL_MERGEABLE" != "MERGEABLE" ] \
        || { [ "$FINAL_MSTATE" != "CLEAN" ] && [ "$FINAL_MSTATE" != "UNSTABLE" ]; } \
        || [ "$FINAL_REQRED" -gt 0 ] || [ "$FINAL_REQGREEN" -ne "$REQ_TOTAL" ] || [ "$FINAL_REQUNSETTLED" -ne 0 ]; then

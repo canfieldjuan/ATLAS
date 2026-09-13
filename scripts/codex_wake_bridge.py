@@ -146,6 +146,15 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
     elif unresolved:
         blockers.append(f"unresolved review threads remain: {len(unresolved)}")
 
+    if proof.get("codex_reviews_complete") is not True:
+        blockers.append("Codex review pagination is incomplete")
+    review_pages = proof.get("codex_review_pages_fetched")
+    if not _non_negative_int(review_pages) or review_pages < 1:
+        blockers.append("Codex review pages fetched must be at least 1")
+    review_count = proof.get("codex_head_review_count")
+    if not _non_negative_int(review_count) or review_count < 1:
+        blockers.append("exact-head Codex review count must be at least 1")
+
     if "review_decision" not in proof or "reviewDecision" not in pr:
         blockers.append("review decision evidence is missing")
     else:
@@ -153,6 +162,8 @@ def readiness_blockers(status: dict[str, Any]) -> list[str]:
         pr_decision = str(pr.get("reviewDecision") or "").upper()
         if proof_decision != pr_decision:
             blockers.append("review decision does not match PR metadata")
+        if proof_decision == "CHANGES_REQUESTED":
+            blockers.append("review decision has open changes requested")
 
     proof_merge = proof.get("merge_state_status")
     pr_merge = pr.get("mergeStateStatus")

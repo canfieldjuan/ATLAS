@@ -707,7 +707,11 @@ For long-running coding tasks, after each PR open or push:
    single-snapshot rule after the next push.
 6. If the snapshot reports all required checks green, all
    review/reconciliation gates clean, and merge-conflict/mergeability state
-   clean, the active builder follows the merge rules for the current arc.
+   clean, the active builder follows the merge rules for the current arc only
+   when the current activation source satisfies the authorization recorded in
+   session state. `scheduled-ready-only` authority requires a scheduled wake;
+   an immediate post-push snapshot or event wake can record readiness but cannot
+   consume that authority.
    `live-reconciliation` is the Codex review gate: unresolved Codex review
    threads red it, and waived findings must be recorded in the PR body. In
    Codex/local watcher mode, first surface that state with

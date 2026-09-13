@@ -1202,13 +1202,13 @@ in `AGENTS.md`; the highlights:
 - **Open ready for review** by default. Do not open draft PRs unless the
   operator explicitly asks for a draft; automated review tools do not review
   draft PRs.
-- **Long-running coding tasks keep their own PR watcher.** Ordinary
-  interactive slices stop after opening/updating a PR and wait for the
+- **Long-running coding tasks keep their own PR wake path.** Ordinary
+  interactive slices stop after one post-push snapshot and wait for the
   operator. If the operator explicitly assigns a long-running/autonomous arc,
-  the builder records the owned PR watcher in that session's state file, polls
-  GitHub every 30 minutes for checks/reviews/reconciliation, resumes that
-  watcher after compaction, and continues the approved slice arc instead of
-  halting until the operator notices green. See `AGENTS.md` §3c.1.
+  the builder records its subscription or external non-model wake bridge in
+  that session's state file. Each model activation inspects the exact-head
+  checks/reviews/reconciliation once, acts on new evidence, and otherwise
+  records pending state and yields. See `AGENTS.md` §3c.1.
 - **Codex review reconciliation:** fix confirmed in-scope Codex findings, group
   duplicates, waive out-of-scope/speculative/NIT-only findings in the PR body,
   and resolve GitHub threads only after code/body evidence addresses them.
@@ -1521,10 +1521,10 @@ When compacting this conversation, preserve verbatim (do not summarize away):
   edit receipts, symptom, root cause, source trace, fix strategy, upstream files,
   symptom-only reason/follow-up when applicable, current failing check/comment,
   last useful log finding, next exact action, and do-not-redo notes.
-- For an explicitly assigned long-running coding task, the full **PR watcher**
+- For an explicitly assigned long-running coding task, the full **PR wake**
   baton: owned PR number, branch, latest head SHA, last observed check/review
-  state, next 30-minute poll time, and whether autonomous merge/next-slice
-  continuation is authorized.
+  state, subscription/external wake source, and whether that source satisfies
+  the recorded autonomous merge/next-slice authorization.
 - For an assigned **overnight arc** (`docs/OVERNIGHT_ARC_WORKFLOW.md`, AGENTS
   §3c.2), the full **overnight baton**: the arc task and its pre-flight
   contract (or contract issue #), authorization granted at pre-flight, current

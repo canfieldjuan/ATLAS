@@ -23,7 +23,7 @@ Current lane: <one sentence>
 Current task: <one sentence>
 Spark/subagent routing: used <what/why> | considered <why main/direct was better> | not applicable
 Builder surface: Claude Code native | Codex/local CLI | other <name>
-Wake mode: Claude native PR subscription + 30-minute poll | Codex wake bridge | local watcher state-only | none
+Wake mode: Claude native PR subscription | Codex wake bridge | local watcher state-only | none
 
 ## Owned Active PR
 
@@ -38,13 +38,13 @@ Ownership lane: <lane from plan>
 Allowed actions: inspect | update | report-ready | active-builder-merge-after-guarded-signal | none
 Standing merge authorization: <none | authorized active-builder merge by <operator/source> for <arc>; scheduled-ready-only; watcher merge forbidden>
 Push/review-event hook: <name and trigger | unavailable | none>
-Timer/poll hook: Claude native 30-minute poll | systemd/cron/webhook name | none
+Timer/poll hook: external systemd/cron/webhook name | none
 Wake bridge: Claude native subscription | <external Codex launch/resume bridge> | unavailable | none
 Ready-state handoff: scripts/report_pr_watcher_state.py | <other read-only reporter> | none
 Issue queue: #<issue number or none>
 Operator email: <email or none>
 Deferred decisions issue: #<issue number or none>
-Next timer wake: <timestamp or none>
+Next external wake: <timestamp/event or none>
 Last watcher state: <state/details or none>
 
 ## PRs This Session May Touch
@@ -113,11 +113,11 @@ Do-NOT-redo: <paths ruled out, checks already green, dead ends>
       Session May Touch" before inspecting comments, pushing updates, or
       merging.
 - [ ] Confirm `Builder surface` and `Wake mode` match the actual session. Claude
-      Code native sessions use Claude's PR subscription and 30-minute poll;
-      Codex/local sessions need an external wake bridge for true autonomous
-      resume.
+      Code native sessions use PR subscription; Codex/local sessions need an
+      external wake bridge for true autonomous resume. Each model activation
+      takes one exact-head snapshot and yields again on pending/unchanged state.
 - [ ] Confirm `Push/review-event hook`, `Timer/poll hook`, `Wake bridge`, `Next
-      timer wake`, and `Last watcher state` reflect the current long-running
+      external wake`, and `Last watcher state` reflect the current long-running
       setup before relying on autonomous wake-ups.
 - [ ] Run the ready-state handoff reporter before starting a new slice in a
       Codex/local watcher arc.
