@@ -128,12 +128,20 @@ Max files: 8
   - The thread id is read inside the wake lock, so two wakes cannot both start
     a thread -- settled by
     `tests/test_codex_wake_run.py::test_thread_id_is_read_inside_the_lock`.
-  - A resume that never reaches `thread.started` quarantines the stored id so
-    the next wake recovers to a fresh thread, instead of retrying a dead resume
-    forever -- settled by
-    `tests/test_codex_wake_run.py::test_failed_resume_with_no_thread_started_quarantines_the_id`,
-    `::test_next_wake_after_quarantine_starts_fresh`, and the negative case
-    `::test_failed_resume_that_did_attach_keeps_the_id`.
+  - Only a CONFIRMED missing session quarantines the stored id, so the next
+    wake recovers to a fresh thread instead of retrying a dead resume forever --
+    settled by
+    `tests/test_codex_wake_run.py::test_confirmed_missing_session_quarantines_the_id`
+    and `::test_next_wake_after_quarantine_starts_fresh`.
+  - The other side of that boundary: a transient pre-attach failure (network,
+    auth, config, empty stderr) KEEPS the id, because a wrong quarantine
+    permanently loses the arc -- settled by
+    `tests/test_codex_wake_run.py::test_transient_resume_failure_keeps_the_id`
+    and `::test_failed_resume_that_did_attach_keeps_the_id`.
+  - The thread id is persisted the moment `thread.started` is consumed, not at
+    end of turn, so a turn killed mid-flight still records the session Codex
+    already created -- settled by
+    `tests/test_codex_wake_run.py::test_thread_id_persists_when_the_turn_is_killed_mid_flight`.
   - The documented `CODEX_WAKE_COMMAND` is a runnable argv. The bridge
     `shlex.split`s it and never uses a shell, so the doc uses absolute paths --
     settled by `docs/long_running_session_watcher_handoff.md:127-135`.
@@ -293,12 +301,13 @@ exits 0, because a wake already in flight will observe the same PR state.
   already collapses a burst, but an unbounded drain loop would be a token sink
   of exactly the kind this slice exists to avoid. A prompt that does not fit is
   left queued for the next wake rather than discarded.
-- A failed resume is quarantined, not deleted. Only a resume that never reached
-  `thread.started` is treated as unusable; a turn that attached and then failed
-  keeps its id, because discarding it would throw away the arc on any ordinary
-  mid-turn error. The quarantined id is moved aside rather than removed so a
-  transient failure stays inspectable. The cost of a false positive is one lost
-  continuity; the cost of not doing it is a permanently wedged watcher.
+- Quarantine is keyed to a confirmed missing-session signature on stderr, not
+  to a nonzero exit. Codex reports it as
+  `no rollout found for thread id <uuid> (code -32600)`, which is why stderr is
+  captured to a file and inspected rather than streamed straight to the log. An
+  unrecognized pre-attach failure keeps the id and logs loudly, because a wrong
+  quarantine permanently loses the arc while keeping the id costs only a retry.
+  The quarantined id is moved aside rather than deleted so it stays inspectable.
 
 ## Deferred
 

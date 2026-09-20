@@ -416,20 +416,33 @@ def test_thread_id_is_read_inside_the_lock(tmp_path: Path, repo_dir: Path) -> No
     )
 
 
-def test_failed_resume_with_no_thread_started_quarantines_the_id(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """A cleared or foreign session must not wedge every future wake."""
-    fake = tmp_path / "fake-codex"
+# The exact stderr codex-cli 0.155.1 prints for a resume against an id it has
+# no rollout for. Captured from a real run, not invented.
+MISSING_SESSION_STDERR = (
+    "Error: thread/resume: thread/resume failed: no rollout found for thread id "
+    "01a0bfff-dead-7000-a000-000000000000 (code -32600)"
+)
+
+
+def _failing_codex(tmp_path: Path, *, stderr_text: str, name: str = "fake-codex") -> Path:
+    fake = tmp_path / name
     fake.write_text(
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "sys.stdin.read()\n"
-        "sys.stderr.write('error: session not found\\n')\n"
+        f"sys.stderr.write({stderr_text!r} + '\\n')\n"
         "sys.exit(1)\n",
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
+def test_confirmed_missing_session_quarantines_the_id(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A cleared or foreign session must not wedge every future wake."""
+    fake = _failing_codex(tmp_path, stderr_text=MISSING_SESSION_STDERR)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     thread_path = state_dir / "slice-123.codex-thread"
@@ -442,6 +455,38 @@ def test_failed_resume_with_no_thread_started_quarantines_the_id(
     assert stale.read_text(encoding="utf-8").strip() == THREAD_A
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
     assert "quarantined" in log_text
+    assert "no rollout found for thread" in log_text
+
+
+@pytest.mark.parametrize(
+    "stderr_text",
+    [
+        "Error: request failed: connection reset by peer",
+        "Error: unauthorized: refresh your credentials",
+        "Error: invalid config at ~/.codex/config.toml",
+        "",
+    ],
+)
+def test_transient_resume_failure_keeps_the_id(
+    tmp_path: Path, repo_dir: Path, stderr_text: str
+) -> None:
+    """A network, auth, or config failure must not discard a valid session.
+
+    Quarantining on any nonzero exit would permanently lose the PR arc this
+    runner exists to preserve, so only a confirmed missing session qualifies.
+    """
+    fake = _failing_codex(tmp_path, stderr_text=stderr_text)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 1
+
+    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
+    assert not (state_dir / "slice-123.codex-thread.stale").exists()
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "keeping the id" in log_text
 
 
 def test_next_wake_after_quarantine_starts_fresh(tmp_path: Path, repo_dir: Path) -> None:
@@ -449,12 +494,9 @@ def test_next_wake_after_quarantine_starts_fresh(tmp_path: Path, repo_dir: Path)
     state_dir.mkdir()
     (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
 
-    dead = tmp_path / "dead-codex"
-    dead.write_text(
-        "#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\nsys.exit(1)\n",
-        encoding="utf-8",
+    dead = _failing_codex(
+        tmp_path, stderr_text=MISSING_SESSION_STDERR, name="dead-codex"
     )
-    dead.chmod(dead.stat().st_mode | stat.S_IXUSR)
     assert _run(tmp_path, fake=dead, state_dir=state_dir) == 1
 
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
@@ -485,6 +527,47 @@ def test_failed_resume_that_did_attach_keeps_the_id(
 
     assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
     assert not (state_dir / "slice-123.codex-thread.stale").exists()
+
+
+def test_thread_id_persists_when_the_turn_is_killed_mid_flight(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Codex creates the session at thread.started, before the turn ends.
+
+    If the runner is killed, the unit stopped, or the host restarts between
+    those points, an unrecorded id means the next wake starts a second thread
+    and the arc is lost. So the id is written as soon as the event is consumed.
+    """
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, signal, sys\n"
+        "sys.stdin.read()\n"
+        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
+        "sys.stdout.flush()\n"
+        "os.kill(os.getpid(), signal.SIGKILL)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    state_dir = tmp_path / "state"
+
+    _run(tmp_path, fake=fake, state_dir=state_dir)
+
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A, "the id must survive a turn that never completed"
+
+
+def test_codex_stderr_is_recorded_in_the_log(tmp_path: Path, repo_dir: Path) -> None:
+    """stderr is captured for inspection, but must still reach the operator."""
+    fake = _failing_codex(tmp_path, stderr_text="Error: something went wrong")
+
+    assert _run(tmp_path, fake=fake) == 1
+
+    log_text = (tmp_path / "state" / "slice-123.codex-wake.log").read_text(
+        encoding="utf-8"
+    )
+    assert "codex stderr: Error: something went wrong" in log_text
 
 
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:

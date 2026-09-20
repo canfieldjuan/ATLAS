@@ -45,6 +45,19 @@ MAX_COALESCED_TURNS = 4
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
+# Codex reports a resume against an unknown session on stderr, not as a JSON
+# event. Verified against codex-cli 0.155.1, which prints:
+#   Error: thread/resume: thread/resume failed: no rollout found for thread
+#   id <uuid> (code -32600)
+# Quarantining is keyed to this signature specifically. A generic pre-attach
+# failure -- network, expired auth, bad local config -- must NOT discard a
+# valid id, because that permanently loses the arc this runner exists to keep.
+MISSING_SESSION_RE = re.compile(
+    r"no rollout found for thread|(?:thread|session|conversation) not found"
+    r"|no such (?:thread|session|conversation)",
+    re.IGNORECASE,
+)
+
 
 def _now() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
@@ -167,7 +180,9 @@ def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[s
 
 
 def _consume_events(
-    stream: Any, log_handle: Any
+    stream: Any,
+    log_handle: Any,
+    on_thread_started: Any = None,
 ) -> tuple[str | None, dict[str, Any] | None, str | None]:
     """Scan the JSONL event stream for the thread id, usage, and final message.
 
@@ -204,6 +219,13 @@ def _consume_events(
             candidate = event.get("thread_id")
             if isinstance(candidate, str) and valid_thread_id(candidate.strip()):
                 thread_id = candidate.strip()
+                # Persist immediately, not at end of turn. Codex has already
+                # created the session by this point; if the runner is killed,
+                # the unit stopped, or the host restarts before the turn ends,
+                # an unrecorded id means the next wake starts a second thread
+                # and the arc is lost.
+                if on_thread_started is not None:
+                    on_thread_started(thread_id)
         elif kind == "turn.completed":
             reported = event.get("usage")
             if isinstance(reported, dict):
@@ -258,57 +280,86 @@ def run_one_turn(
     _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
     _log(log_handle, "argv=" + " ".join(argv))
 
+    def _persist(new_id: str) -> None:
+        if new_id != thread_id:
+            write_thread_id(thread_path, new_id)
+            _log(log_handle, f"recorded thread id {new_id}")
+
     prompt_fd, prompt_name = tempfile.mkstemp(prefix="codex-wake-", suffix=".txt")
     prompt_file = Path(prompt_name)
+    # Codex reports a missing session on stderr, so it is captured rather than
+    # streamed straight to the log: the text has to be inspected before the
+    # stored id can be judged dead. It is appended to the log either way.
+    stderr_fd, stderr_name = tempfile.mkstemp(prefix="codex-wake-err-", suffix=".txt")
+    stderr_file = Path(stderr_name)
+    stderr_text = ""
     try:
         with os.fdopen(prompt_fd, "w", encoding="utf-8") as prompt_handle:
             prompt_handle.write(prompt)
         with prompt_file.open("r", encoding="utf-8") as stdin_handle:
-            try:
-                process = subprocess.Popen(
-                    argv,
-                    cwd=str(repo_dir),
-                    stdin=stdin_handle,
-                    stdout=subprocess.PIPE,
-                    stderr=log_handle,
-                    text=True,
-                )
-            except FileNotFoundError:
-                _log(log_handle, f"codex binary not found: {codex_bin}")
-                print(f"codex binary not found: {codex_bin}", file=sys.stderr)
-                return TurnResult(2, binary_missing=True)
-            with process:
-                observed_thread, usage, last_message = _consume_events(
-                    process.stdout, log_handle
-                )
-            exit_code = process.returncode
+            with os.fdopen(stderr_fd, "w", encoding="utf-8") as stderr_handle:
+                try:
+                    process = subprocess.Popen(
+                        argv,
+                        cwd=str(repo_dir),
+                        stdin=stdin_handle,
+                        stdout=subprocess.PIPE,
+                        stderr=stderr_handle,
+                        text=True,
+                    )
+                except FileNotFoundError:
+                    _log(log_handle, f"codex binary not found: {codex_bin}")
+                    print(f"codex binary not found: {codex_bin}", file=sys.stderr)
+                    return TurnResult(2, binary_missing=True)
+                with process:
+                    observed_thread, usage, last_message = _consume_events(
+                        process.stdout, log_handle, on_thread_started=_persist
+                    )
+                exit_code = process.returncode
+        try:
+            stderr_text = stderr_file.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            _log(log_handle, f"could not read codex stderr: {exc}")
+        if stderr_text.strip():
+            for line in stderr_text.splitlines():
+                if line.strip():
+                    _log(log_handle, f"codex stderr: {line.rstrip()}")
     finally:
-        try:
-            prompt_file.unlink()
-        except OSError as exc:
-            _log(log_handle, f"could not remove temp prompt file {prompt_file}: {exc}")
+        for temp in (prompt_file, stderr_file):
+            try:
+                temp.unlink()
+            except OSError as exc:
+                _log(log_handle, f"could not remove temp file {temp}: {exc}")
 
-    if observed_thread and observed_thread != thread_id:
-        write_thread_id(thread_path, observed_thread)
-        _log(log_handle, f"recorded thread id {observed_thread}")
-    elif thread_id is not None and observed_thread is None and exit_code != 0:
-        # A resume that never reached `thread.started` did not attach to the
-        # session: the store may have been cleared, or the id may have come from
-        # another machine. Leaving the id in place would make every future wake
-        # retry the same dead resume forever, so it is quarantined and the next
-        # wake starts fresh. Quarantine rather than delete, so a transient
-        # failure stays inspectable; the cost of a false positive is one lost
-        # continuity, versus a permanently wedged watcher.
-        stale_path = thread_path.with_name(thread_path.name + ".stale")
-        try:
-            os.replace(thread_path, stale_path)
-        except OSError as exc:
-            _log(log_handle, f"could not quarantine stale thread id: {exc}")
+    if thread_id is not None and observed_thread is None and exit_code != 0:
+        if MISSING_SESSION_RE.search(stderr_text):
+            # Confirmed: Codex says this session does not exist. Leaving the id
+            # in place would make every future wake retry the same dead resume,
+            # so it is quarantined and the next wake starts fresh. Quarantine
+            # rather than delete, so the id stays inspectable.
+            stale_path = thread_path.with_name(thread_path.name + ".stale")
+            try:
+                os.replace(thread_path, stale_path)
+            except OSError as exc:
+                _log(log_handle, f"could not quarantine missing-session id: {exc}")
+            else:
+                _log(
+                    log_handle,
+                    f"codex reports no such session; quarantined {thread_id} to "
+                    f"{stale_path}. The next wake starts fresh.",
+                )
         else:
+            # Unrecognized pre-attach failure: network, expired auth, bad local
+            # config, or a reworded missing-session error. Keep the id. A wrong
+            # quarantine permanently loses the arc, while keeping it costs only
+            # a retry on the next wake. Log loudly so a genuinely dead session
+            # that stops matching the signature is still visible.
             _log(
                 log_handle,
-                f"resume failed with no thread.started; quarantined {thread_id} "
-                f"to {stale_path}. The next wake starts fresh.",
+                f"resume of {thread_id} failed before attaching (exit {exit_code}) "
+                "and codex did not report a missing session; keeping the id. If "
+                "wakes keep failing this way, remove "
+                f"{thread_path} to force a fresh thread.",
             )
 
     if usage is not None:
