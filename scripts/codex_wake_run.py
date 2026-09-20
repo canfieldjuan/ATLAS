@@ -71,11 +71,15 @@ SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 # Quarantining is keyed to this signature specifically. A generic pre-attach
 # failure -- network, expired auth, bad local config -- must NOT discard a
 # valid id, because that permanently loses the arc this runner exists to keep.
-MISSING_SESSION_RE = re.compile(
-    r"no rollout found for thread|(?:thread|session|conversation) not found"
-    r"|no such (?:thread|session|conversation)",
-    re.IGNORECASE,
-)
+# Only the diagnostic Codex actually emits for an unknown session, verified
+# against codex-cli 0.155.1:
+#   Error: thread/resume: thread/resume failed: no rollout found for thread
+#   id <uuid> (code -32600)
+# An earlier version also accepted bare phrases like "session not found", which
+# an unrelated message such as "MCP server session not found" satisfies. That
+# threw away a valid thread over a failure that had nothing to do with it,
+# which is the exact loss quarantining exists to prevent.
+MISSING_SESSION_RE = re.compile(r"no rollout found for thread", re.IGNORECASE)
 
 
 def _now() -> str:
@@ -524,6 +528,18 @@ def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[s
     return argv
 
 
+def reports_missing_session(stderr_text: str, thread_id: str) -> bool:
+    """True only when Codex says THIS thread does not exist.
+
+    Both halves matter. The canonical phrase alone could come from an
+    unrelated subsystem, and the id alone appears in any echo of the failing
+    command, so quarantine requires the diagnostic naming the id it resumed.
+    """
+    if not MISSING_SESSION_RE.search(stderr_text):
+        return False
+    return thread_id.lower() in stderr_text.lower()
+
+
 def _consume_events(
     stream: Any,
     log_handle: Any,
@@ -662,6 +678,11 @@ def run_one_turn(
     def _persist(new_id: str) -> None:
         if new_id == thread_id:
             return
+        if thread_id is not None:
+            # A resume of one thread reporting another would silently redirect
+            # this arc and every later wake with it. Never write it; the turn
+            # is failed below instead.
+            return
         try:
             write_thread_id(thread_path, new_id)
         except OSError as exc:
@@ -733,7 +754,7 @@ def run_one_turn(
                 _log(log_handle, f"could not remove temp file {temp}: {exc}")
 
     if thread_id is not None and observed_thread is None and exit_code != 0:
-        if MISSING_SESSION_RE.search(stderr_text):
+        if reports_missing_session(stderr_text, thread_id):
             # Confirmed: Codex says this session does not exist. Leaving the id
             # in place would make every future wake retry the same dead resume,
             # so it is quarantined and the next wake starts fresh. Quarantine
@@ -798,6 +819,19 @@ def run_one_turn(
     if persist_failure:
         _log(log_handle, f"turn complete exit={EXIT_STATE_UNUSABLE}")
         return TurnResult(EXIT_STATE_UNUSABLE)
+
+    if (
+        thread_id is not None
+        and observed_thread is not None
+        and observed_thread != thread_id
+    ):
+        _log(
+            log_handle,
+            f"resume of {thread_id} reported thread {observed_thread}; keeping "
+            f"{thread_id} and failing this turn rather than switching arcs",
+        )
+        _log(log_handle, f"turn complete exit={EXIT_NO_THREAD_EVENT}")
+        return TurnResult(EXIT_NO_THREAD_EVENT)
 
     if exit_code == 0 and observed_thread is None:
         # Codex claimed success but never named a thread, so nothing was

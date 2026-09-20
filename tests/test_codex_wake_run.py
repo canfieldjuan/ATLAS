@@ -269,7 +269,9 @@ def test_thread_id_is_read_inside_the_lock(tmp_path: Path, repo_dir: Path) -> No
     would start a second thread and overwrite A's id, breaking the
     one-thread-per-watcher contract even though both respected the lock.
     """
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    # The fake reports the same id the wake resumes: this test is about lock
+    # ordering, and a mismatched id is refused by a separate rule.
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     thread_path = state_dir / "slice-123.codex-thread"
@@ -300,10 +302,17 @@ def test_thread_id_is_read_inside_the_lock(tmp_path: Path, repo_dir: Path) -> No
 
 # The exact stderr codex-cli 0.155.1 prints for a resume against an id it has
 # no rollout for. Captured from a real run, not invented.
-MISSING_SESSION_STDERR = (
-    "Error: thread/resume: thread/resume failed: no rollout found for thread id "
-    "01a0bfff-dead-7000-a000-000000000000 (code -32600)"
-)
+def missing_session_stderr(thread_id: str) -> str:
+    """The exact stderr codex-cli 0.155.1 prints for an unknown session.
+
+    Parameterized by thread id because quarantine now requires the diagnostic
+    to name the thread being resumed; a message about some other thread is not
+    evidence about this one.
+    """
+    return (
+        "Error: thread/resume: thread/resume failed: no rollout found for "
+        f"thread id {thread_id} (code -32600)"
+    )
 
 
 def _failing_codex(tmp_path: Path, *, stderr_text: str, name: str = "fake-codex") -> Path:
@@ -324,7 +333,7 @@ def test_confirmed_missing_session_quarantines_the_id(
     tmp_path: Path, repo_dir: Path
 ) -> None:
     """A cleared or foreign session must not wedge every future wake."""
-    fake = _failing_codex(tmp_path, stderr_text=MISSING_SESSION_STDERR)
+    fake = _failing_codex(tmp_path, stderr_text=missing_session_stderr(THREAD_A))
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     thread_path = state_dir / "slice-123.codex-thread"
@@ -377,7 +386,7 @@ def test_next_wake_after_quarantine_starts_fresh(tmp_path: Path, repo_dir: Path)
     (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
 
     dead = _failing_codex(
-        tmp_path, stderr_text=MISSING_SESSION_STDERR, name="dead-codex"
+        tmp_path, stderr_text=missing_session_stderr(THREAD_A), name="dead-codex"
     )
     assert _run(tmp_path, fake=dead, state_dir=state_dir) == 1
 
@@ -1189,6 +1198,90 @@ def test_a_symlinked_thread_file_is_judged_on_its_own(tmp_path: Path) -> None:
 
     assert stored is None
     assert reason is not None and "not a regular file" in reason
+
+
+@pytest.mark.parametrize(
+    "stderr_text",
+    [
+        "Error: MCP server session not found",
+        "Error: upstream session not found",
+        "Error: conversation not found in cache",
+        "Error: no such thread in the pool",
+        "Error: thread not found: retrying",
+    ],
+)
+def test_an_unrelated_not_found_does_not_quarantine(
+    tmp_path: Path, repo_dir: Path, stderr_text: str
+) -> None:
+    """Quarantine needs the canonical diagnostic, not any 'not found' text.
+
+    An earlier matcher accepted bare phrases, so an unrelated subsystem saying
+    "session not found" threw away a perfectly good thread. Losing the arc is
+    the exact harm quarantining exists to prevent.
+    """
+    fake = _failing_codex(tmp_path, stderr_text=stderr_text)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 1
+
+    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
+    assert not (state_dir / "slice-123.codex-thread.stale").exists()
+
+
+def test_reports_missing_session_requires_the_phrase_and_the_id() -> None:
+    """Both halves, because either alone appears in unrelated output."""
+    canonical = (
+        "Error: thread/resume: thread/resume failed: no rollout found for "
+        f"thread id {THREAD_A} (code -32600)"
+    )
+
+    assert runner.reports_missing_session(canonical, THREAD_A)
+    # The canonical phrase, but about a different thread.
+    assert not runner.reports_missing_session(canonical, THREAD_B)
+    # The id echoed by some other failure, without the diagnostic.
+    assert not runner.reports_missing_session(f"Error: timeout for {THREAD_A}", THREAD_A)
+    assert not runner.reports_missing_session("", THREAD_A)
+
+
+def test_a_resume_reporting_a_different_thread_is_refused(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a resume must come back as the thread it asked for.
+
+    Accepting a different id would silently redirect this arc and every later
+    wake with it, which breaks the one promise this runner makes.
+    """
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    exit_code = _run(tmp_path, fake=fake, state_dir=state_dir)
+
+    assert exit_code == runner.EXIT_NO_THREAD_EVENT
+    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A, (
+        "the stored arc must survive a mismatched resume"
+    )
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "rather than switching arcs" in log_text
+
+
+def test_a_fresh_turn_still_records_whatever_thread_it_started(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The other side: with nothing stored, any valid id is the arc."""
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    state_dir = tmp_path / "state"
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_B
 
 
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:

@@ -126,11 +126,18 @@ Max files: 10
   - The thread id is read inside the wake lock, so two wakes cannot both start
     a thread -- settled by
     `tests/test_codex_wake_run.py::test_thread_id_is_read_inside_the_lock`.
-  - Only a CONFIRMED missing session quarantines the stored id, so the next
-    wake recovers to a fresh thread instead of retrying a dead resume forever --
-    settled by
-    `tests/test_codex_wake_run.py::test_confirmed_missing_session_quarantines_the_id`
-    and `::test_next_wake_after_quarantine_starts_fresh`.
+  - Only a CONFIRMED missing session quarantines the stored id, meaning the
+    canonical diagnostic naming that exact thread, so an unrelated "not found"
+    from another subsystem cannot discard a valid arc -- settled by
+    `tests/test_codex_wake_run.py::test_confirmed_missing_session_quarantines_the_id`,
+    `::test_next_wake_after_quarantine_starts_fresh`,
+    `::test_an_unrelated_not_found_does_not_quarantine`, and
+    `::test_reports_missing_session_requires_the_phrase_and_the_id`.
+  - A resume comes back as the thread it asked for, or the turn fails and the
+    stored id survives, so an arc cannot be silently redirected -- settled by
+    `tests/test_codex_wake_run.py::test_a_resume_reporting_a_different_thread_is_refused`
+    with the fresh-thread side
+    `::test_a_fresh_turn_still_records_whatever_thread_it_started`.
   - The other side of that boundary: a transient pre-attach failure (network,
     auth, config, empty stderr) KEEPS the id, because a wrong quarantine
     permanently loses the arc -- settled by
@@ -468,6 +475,16 @@ diagnostic writes never change a completed turn's outcome.
   pushed, or commented. Failing the wake because that copy could not be written
   would make the caller retry and repeat those side effects, so the failure is
   logged and the turn still reports success.
+- Quarantine requires the canonical diagnostic AND the id it names. An earlier
+  version also accepted bare phrases like "session not found", which an
+  unrelated message such as "MCP server session not found" satisfies, throwing
+  away a valid thread over a failure that had nothing to do with it. That is
+  the precise harm quarantining exists to prevent, so the matcher is now the
+  verified phrase plus the thread being resumed.
+- A resume must report the thread it asked for. Writing a different id would
+  redirect the arc and every later wake with it, so a mismatch keeps the stored
+  id and fails the turn. A fresh turn, with nothing stored, still records
+  whatever thread it starts.
 - Quarantine is keyed to a confirmed missing-session signature on stderr, not
   to a nonzero exit. Codex reports it as
   `no rollout found for thread id <uuid> (code -32600)`, which is why stderr is
