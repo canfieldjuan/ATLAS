@@ -38,8 +38,8 @@ installed, tested runner that resumes one persistent Codex thread per watcher.
 thing that is installed today: "Do not recreate a watcher from ad hoc local
 source."
 
-**Over the 400 LOC budget, deliberately.** The diff is 1738 diff lines, of
-which 794 are tests and 381 are this plan. Runtime code is 508 lines
+**Over the 400 LOC budget, deliberately.** The diff is 1875 diff lines, of
+which 877 are tests and 384 are this plan. Runtime code is 559 lines
 across three files.
 The reason this slice is test-heavy rather than divisible is the defect itself:
 the thing being replaced failed silently for months because no test pinned the
@@ -371,14 +371,14 @@ Run on this branch before push:
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +659 |
-| `scripts/codex_wake_run.py` | +484 |
-| `plans/PR-Codex-Thread-Resume-Wake.md` | +381 |
+| `tests/test_codex_wake_run.py` | +742 |
+| `scripts/codex_wake_run.py` | +535 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | +384 |
 | `tests/test_audit_pr_watcher_safety.py` | +89 |
 | `docs/long_running_session_watcher_handoff.md` | +51 / -4 |
 | `tests/test_install_codex_wake_bridge.py` | +46 |
 | `scripts/install_codex_wake_bridge.py` | +13 |
 | `scripts/audit_pr_watcher_safety.py` | +11 |
-| **Total** | **1738** |
+| **Total** | **1875** |
 
 Over the 400 LOC soft cap. Runtime code is 508 lines; the remainder is tests (794), this plan (381), and docs (51). The growth over the first push is six Codex review findings and their regression tests, all fixed rather than waived.
