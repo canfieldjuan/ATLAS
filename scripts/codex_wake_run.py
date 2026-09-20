@@ -203,6 +203,7 @@ def run_wake(
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
 
+    # Dry run only reports; the real read happens under the lock below.
     thread_id, ignored_reason = read_thread_id(thread_path)
 
     if dry_run:
@@ -237,6 +238,14 @@ def run_wake(
                 # this one would have, so dropping this wake loses nothing.
                 _log(log_handle, f"skipped: a Codex wake is already running for {watcher_id}")
                 return 0
+
+            # Re-read under the lock. Reading before acquiring it leaves a
+            # stale-read interleaving: this process can read "no thread" while
+            # another holds the lock, that one records a new id and releases,
+            # and this one then acquires the lock still holding None, starts a
+            # second thread, and overwrites the id. One thread per watcher is
+            # the contract, so the read has to be inside the critical section.
+            thread_id, ignored_reason = read_thread_id(thread_path)
 
             if ignored_reason:
                 _log(log_handle, f"starting fresh thread: {ignored_reason}")
@@ -284,6 +293,26 @@ def run_wake(
             if observed_thread and observed_thread != thread_id:
                 write_thread_id(thread_path, observed_thread)
                 _log(log_handle, f"recorded thread id {observed_thread}")
+            elif thread_id is not None and observed_thread is None and exit_code != 0:
+                # A resume that never reached `thread.started` did not attach to
+                # the session: the store may have been cleared, or the id may
+                # have come from another machine. Leaving the id in place would
+                # make every future wake retry the same dead resume forever, so
+                # it is quarantined and the next wake starts fresh. Quarantine
+                # rather than delete, so a transient failure is still
+                # inspectable; the cost of a false positive is one lost
+                # continuity, versus a permanently wedged watcher.
+                stale_path = thread_path.with_name(thread_path.name + ".stale")
+                try:
+                    os.replace(thread_path, stale_path)
+                except OSError as exc:
+                    _log(log_handle, f"could not quarantine stale thread id: {exc}")
+                else:
+                    _log(
+                        log_handle,
+                        f"resume failed with no thread.started; quarantined "
+                        f"{thread_id} to {stale_path}. The next wake starts fresh.",
+                    )
 
             if usage is not None:
                 _log(log_handle, "usage=" + json.dumps(usage, sort_keys=True))

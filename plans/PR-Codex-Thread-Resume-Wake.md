@@ -120,9 +120,22 @@ Slice phase: Workflow/process
     operator is away is auditable afterwards -- settled by
     `tests/test_codex_wake_run.py::test_agent_message_is_recorded_for_the_absent_operator`
     and `::test_long_agent_message_is_truncated_in_the_log_but_kept_in_full`.
-  - The safety audit scans the runner and fails on a merge command in it --
-    settled by
-    `tests/test_audit_pr_watcher_safety.py::test_fails_on_codex_wake_runner_with_merge_command`.
+  - The safety audit scans both the repo source and the INSTALLED runner, and
+    fails on a merge command in either -- settled by
+    `tests/test_audit_pr_watcher_safety.py::test_fails_on_codex_wake_runner_with_merge_command`
+    and `::test_fails_on_installed_wake_runner_with_merge_command`.
+  - The thread id is read inside the wake lock, so two wakes cannot both start
+    a thread -- settled by
+    `tests/test_codex_wake_run.py::test_thread_id_is_read_inside_the_lock`.
+  - A resume that never reaches `thread.started` quarantines the stored id so
+    the next wake recovers to a fresh thread, instead of retrying a dead resume
+    forever -- settled by
+    `tests/test_codex_wake_run.py::test_failed_resume_with_no_thread_started_quarantines_the_id`,
+    `::test_next_wake_after_quarantine_starts_fresh`, and the negative case
+    `::test_failed_resume_that_did_attach_keeps_the_id`.
+  - The documented `CODEX_WAKE_COMMAND` is a runnable argv. The bridge
+    `shlex.split`s it and never uses a shell, so the doc uses absolute paths --
+    settled by `docs/long_running_session_watcher_handoff.md:127-135`.
 - Reachability proof: entrypoint is
   `atlas-pr-webhook-receiver -> atlas-pr-watch-event -> codex_wake_bridge.py
   --source event -> CODEX_WAKE_COMMAND`. Observable effect is a Codex turn
@@ -258,6 +271,12 @@ exits 0, because a wake already in flight will observe the same PR state.
 - Opening the wake log and lock is guarded: a background wake whose state
   directory is unwritable exits 2 with a message rather than a traceback nobody
   is present to read.
+- A failed resume is quarantined, not deleted. Only a resume that never reached
+  `thread.started` is treated as unusable; a turn that attached and then failed
+  keeps its id, because discarding it would throw away the arc on any ordinary
+  mid-turn error. The quarantined id is moved aside rather than removed so a
+  transient failure stays inspectable. The cost of a false positive is one lost
+  continuity; the cost of not doing it is a permanently wedged watcher.
 
 ## Deferred
 

@@ -161,6 +161,7 @@ def build_findings(
     *,
     watcher_bin: Path,
     watcher_wrapper: Path,
+    watcher_runner: Path,
     config_dir: Path,
     systemd_dir: Path,
     repo_only: bool,
@@ -171,6 +172,9 @@ def build_findings(
     if not repo_only:
         findings.extend(audit_watcher_source(watcher_bin))
         findings.extend(audit_watcher_source(watcher_wrapper))
+        # The installed runner is the executable the bridge actually invokes;
+        # auditing only the repo copy would pass a drifted installed file.
+        findings.extend(audit_watcher_source(watcher_runner))
         findings.extend(audit_configs(config_dir))
         findings.extend(audit_systemd_units(systemd_dir))
     return findings
@@ -203,6 +207,11 @@ def _parser() -> argparse.ArgumentParser:
         default=Path.home() / ".local" / "bin" / "atlas-pr-watch-and-wake",
     )
     parser.add_argument(
+        "--watcher-runner",
+        type=Path,
+        default=Path.home() / ".local" / "bin" / "atlas-codex-wake-run",
+    )
+    parser.add_argument(
         "--config-dir",
         type=Path,
         default=Path.home() / ".config" / "atlas-pr-watchers",
@@ -221,6 +230,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.repo_root.resolve(),
         watcher_bin=args.watcher_bin.expanduser(),
         watcher_wrapper=args.watcher_wrapper.expanduser(),
+        watcher_runner=args.watcher_runner.expanduser(),
         config_dir=args.config_dir.expanduser(),
         systemd_dir=args.systemd_dir.expanduser(),
         repo_only=args.repo_only,

@@ -275,6 +275,114 @@ def test_concurrent_wake_is_skipped(tmp_path: Path, repo_dir: Path) -> None:
     assert "already running" in log_text
 
 
+def test_thread_id_is_read_inside_the_lock(tmp_path: Path, repo_dir: Path) -> None:
+    """Regression for the stale-read interleaving.
+
+    Process B reads the thread file before A has written it, A records a new
+    id and releases, then B acquires the lock. If B used its pre-lock read it
+    would start a second thread and overwrite A's id, breaking the
+    one-thread-per-watcher contract even though both respected the lock.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    lock_path = state_dir / "slice-123.codex-wake.lock"
+
+    # Stand in for "A finished while B was blocked": the id appears after B
+    # would have taken its pre-lock read, but before B can take the lock.
+    real_flock = fcntl.flock
+
+    def flock_then_publish(fileno: int, operation: int) -> None:
+        real_flock(fileno, operation)
+        if operation & fcntl.LOCK_EX and not thread_path.exists():
+            thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    original = runner.fcntl.flock
+    runner.fcntl.flock = flock_then_publish
+    try:
+        assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+    finally:
+        runner.fcntl.flock = original
+        lock_path.unlink(missing_ok=True)
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert argv[:3] == ["exec", "resume", THREAD_A], (
+        "the wake must use the id published before it took the lock"
+    )
+
+
+def test_failed_resume_with_no_thread_started_quarantines_the_id(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A cleared or foreign session must not wedge every future wake."""
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.read()\n"
+        "sys.stderr.write('error: session not found\\n')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 1
+
+    assert not thread_path.exists()
+    stale = state_dir / "slice-123.codex-thread.stale"
+    assert stale.read_text(encoding="utf-8").strip() == THREAD_A
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "quarantined" in log_text
+
+
+def test_next_wake_after_quarantine_starts_fresh(tmp_path: Path, repo_dir: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
+
+    dead = tmp_path / "dead-codex"
+    dead.write_text(
+        "#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\nsys.exit(1)\n",
+        encoding="utf-8",
+    )
+    dead.chmod(dead.stat().st_mode | stat.S_IXUSR)
+    assert _run(tmp_path, fake=dead, state_dir=state_dir) == 1
+
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv, "the wake after a quarantine must start fresh"
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_B
+
+
+def test_failed_resume_that_did_attach_keeps_the_id(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Only a resume that never attached is quarantined.
+
+    A turn that started and then failed still owns a usable thread; discarding
+    it would throw away the arc on any ordinary mid-turn error.
+    """
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A, exit_code=4)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 4
+
+    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
+    assert not (state_dir / "slice-123.codex-thread.stale").exists()
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 

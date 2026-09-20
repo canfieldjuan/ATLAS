@@ -126,8 +126,13 @@ the bridge only writes handoff files. To launch a local command, pass
 session's watcher config. Use the installed runner, not a bare `codex exec`:
 
 ```bash
-CODEX_WAKE_COMMAND="${HOME}/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <repo-dir>"
+CODEX_WAKE_COMMAND="/home/<you>/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir /home/<you>/path/to/repo"
 ```
+
+Use absolute paths here. The bridge does not run this through a shell: it
+`shlex.split`s the value and hands the argv straight to `subprocess.run`, so a
+`${HOME}` or `~` in the command stays literal and the wake dies with
+`FileNotFoundError` instead of starting a Codex turn.
 
 The command receives the generated prompt on stdin. The prompt text is not
 interpolated into a shell command. Do not use no-approval/full-filesystem Codex
