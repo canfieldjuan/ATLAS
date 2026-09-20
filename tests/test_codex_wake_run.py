@@ -503,125 +503,79 @@ def test_lock_timeout_reports_failure_rather_than_dropping_the_wake(
     assert "gave up" in log_text
 
 
-def test_a_wake_skips_only_after_a_newer_one_completed(
+def test_every_wake_that_gets_the_lock_runs_its_prompt(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """Skipping requires proof a successor finished, not that one started."""
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    # A wake triggered after this one already completed a turn.
-    runner._atomic_write(
-        state_dir / "slice-123.codex-wake.completed", f"{time.time_ns() + 10**12}\n"
-    )
+    """There is no skip path, so no state can suppress a wake.
 
-    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
-
-    assert not record.exists(), "a wake covered by a completed newer turn must skip"
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "already completed a turn" in log_text
-
-
-def test_a_newer_wake_that_never_ran_does_not_suppress_this_one(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Regression for the stamp-then-die interleaving.
-
-    A wake that records itself and is killed before taking the lock leaves no
-    completion. If a start stamp were treated as proof of a successor, this
-    wake would skip and BOTH prompts would be lost.
+    Burst coalescing was removed: it was an optimization this slice never
+    required, and every version of it turned out to be able to drop a wake
+    under some interleaving or clock change. Serializing on the lock makes the
+    invariant checkable in one sentence.
     """
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    # Everything a killed successor could have left behind: a lock file it
-    # opened, and no completion record.
-    (state_dir / "slice-123.codex-wake.lock").write_text("", encoding="utf-8")
+    # Anything a previous design might have used to suppress this wake.
+    for name in (
+        "slice-123.codex-wake.completed",
+        "slice-123.codex-wake.generation",
+        "slice-123.codex-wake.pending",
+    ):
+        (state_dir / name).write_text(f"{time.time_ns() + 10**12}\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
-    assert record.exists(), "no completion means no successor; this wake must run"
+    assert record.exists(), "no leftover state may suppress a wake"
 
 
-def test_a_failed_newer_turn_does_not_license_a_skip(
+def test_a_backward_clock_cannot_suppress_a_wake(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """A turn that failed processed nothing, so it records no completion."""
-    failing = _failing_codex(tmp_path, stderr_text="Error: boom", name="failing-codex")
-    state_dir = tmp_path / "state"
+    """Regression for the wall-clock ordering defect.
 
-    assert _run(tmp_path, fake=failing, state_dir=state_dir) == 1
-
-    assert not (state_dir / "slice-123.codex-wake.completed").exists()
-
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
-    assert record.exists()
-
-
-def test_a_successful_turn_records_its_completion(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-
-    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
-
-    recorded, reason = runner.read_completed_stamp(
-        state_dir / "slice-123.codex-wake.completed"
-    )
-    assert reason is None
-    assert recorded > 0
-
-
-def test_an_unreadable_completion_stamp_makes_the_wake_run(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Every failure of the stamp file must cost a turn, never drop one."""
+    An earlier design compared `time.time_ns()` stamps, so a completion
+    recorded before a backward clock correction would silently skip the wake
+    carrying the newer review prompt. Nothing orders wakes by time any more.
+    """
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
+    future = time.time_ns() + 60 * 10**9
     (state_dir / "slice-123.codex-wake.completed").write_text(
-        "not a number at all", encoding="utf-8"
+        f"{future}\n", encoding="utf-8"
     )
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir, prompt="the newest prompt") == 0
+
+    assert json.loads(record.read_text(encoding="utf-8"))["stdin"] == "the newest prompt"
+
+
+def test_an_unwritable_audit_path_does_not_fail_a_completed_turn(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression for the post-turn audit write.
+
+    Codex may already have edited files, pushed, or commented. Failing the wake
+    because the diagnostic copy of its message could not be written would make
+    the caller retry and repeat those side effects.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    # An unwritable audit path: replaced by a directory.
+    (state_dir / "slice-123.codex-wake.last.md").mkdir()
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
-    assert record.exists(), "a wake that cannot prove it is covered must run"
+    assert record.exists(), "the turn must still have run"
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "not an integer" in log_text
-
-
-@pytest.mark.parametrize(
-    ("stored", "expect_reason"),
-    [("", False), ("   ", False), ("not-a-number", True), ("x" * 200, True)],
-)
-def test_read_completed_stamp_degrades_to_zero_and_says_why(
-    tmp_path: Path, stored: str, expect_reason: bool
-) -> None:
-    path = tmp_path / "completed"
-    path.write_text(stored, encoding="utf-8")
-
-    stamp, reason = runner.read_completed_stamp(path)
-
-    assert stamp == 0
-    assert (reason is not None) == expect_reason
-
-
-def test_read_completed_stamp_of_a_missing_file_is_silent(tmp_path: Path) -> None:
-    stamp, reason = runner.read_completed_stamp(tmp_path / "absent")
-
-    assert stamp == 0
-    assert reason is None
-
-
-def test_record_completed_stamp_keeps_the_newest(tmp_path: Path) -> None:
-    path = tmp_path / "completed"
-
-    runner.record_completed_stamp(path, 500)
-    runner.record_completed_stamp(path, 100)
-
-    assert runner.read_completed_stamp(path)[0] == 500
+    assert "not being failed for this" in log_text
+    # The message still reaches the operator through the log.
+    assert "agent message: ok" in log_text
 
 
 def test_zero_exit_without_a_thread_event_is_a_protocol_failure(

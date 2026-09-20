@@ -49,13 +49,6 @@ EXIT_LOCK_TIMEOUT = 75
 # id there is nothing to resume, so reporting success would silently forfeit
 # the continuity this runner exists to provide.
 EXIT_NO_THREAD_EVENT = 76
-# A stamp file holding the start time of the last wake that COMPLETED a turn.
-# It is both written and read while holding the wake lock, so a skip is only
-# ever taken against a newer wake that demonstrably finished. A wake that is
-# killed before it takes the lock records no completion, so nobody skips for
-# it. Every failure of this file -- unreadable, corrupt, a clock jump -- reads
-# as "no newer completion", which makes the reader run.
-MAX_STAMP_FILE_BYTES = 64
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
@@ -136,45 +129,6 @@ def _atomic_write(path: Path, text: str) -> None:
 def write_thread_id(path: Path, thread_id: str) -> None:
     """Persist atomically so a killed wake cannot leave a partial id."""
     _atomic_write(path, thread_id + "\n")
-
-
-def read_completed_stamp(path: Path) -> tuple[int, str | None]:
-    """Return (start stamp of the last completed wake, reason_degraded).
-
-    Unreadable or malformed content reads as 0, which tells the caller that no
-    newer wake has finished and makes it run. That direction is deliberate: an
-    extra turn is recoverable, a skipped turn is a lost review event. The
-    reason is returned rather than discarded so a corrupt stamp file shows up
-    in the wake log instead of quietly costing a turn every time.
-    """
-    if not path.exists():
-        return 0, None
-    try:
-        if path.stat().st_size > MAX_STAMP_FILE_BYTES:
-            return 0, "completion stamp file is too large; running this wake"
-        raw = path.read_text(encoding="utf-8").strip()
-    except OSError as exc:
-        return 0, f"could not read completion stamp ({exc}); running this wake"
-    except UnicodeDecodeError:
-        return 0, "completion stamp is not valid UTF-8; running this wake"
-    if not raw:
-        return 0, None
-    try:
-        return int(raw), None
-    except ValueError:
-        return 0, f"completion stamp {raw[:40]!r} is not an integer; running this wake"
-
-
-def record_completed_stamp(path: Path, stamp: int) -> None:
-    """Record that a wake which started at `stamp` finished a turn.
-
-    Called only while holding the wake lock, and only after a turn that
-    succeeded. A failed turn deliberately records nothing: it processed no
-    prompt, so it must not license an older wake to skip.
-    """
-    current, _reason = read_completed_stamp(path)
-    if stamp > current:
-        _atomic_write(path, f"{stamp}\n")
 
 
 def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[str]:
@@ -387,14 +341,25 @@ def run_one_turn(
         _log(log_handle, "usage=" + json.dumps(usage, sort_keys=True))
 
     if last_message is not None:
-        # Full text goes to its own file so the log stays scannable.
-        last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
-        last_path.write_text(last_message + "\n", encoding="utf-8")
         summary = " ".join(last_message.split())
         if len(summary) > 500:
             summary = summary[:500] + " [truncated]"
         _log(log_handle, f"agent message: {summary}")
-        _log(log_handle, f"full agent message written to {last_path}")
+        # Everything past this point is diagnostics about a turn that already
+        # happened. Codex may have edited files, pushed, or commented, so a
+        # failure to record that must not turn a completed turn into a reported
+        # failure: the caller would retry and repeat real side effects.
+        last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
+        try:
+            last_path.write_text(last_message + "\n", encoding="utf-8")
+        except OSError as exc:
+            _log(
+                log_handle,
+                f"could not write the agent message to {last_path}: {exc}; "
+                "the turn itself completed and is not being failed for this",
+            )
+        else:
+            _log(log_handle, f"full agent message written to {last_path}")
     else:
         _log(log_handle, "no agent message in this turn")
 
@@ -429,7 +394,6 @@ def run_wake(
     thread_path = state_dir / f"{watcher_id}.codex-thread"
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
-    completed_path = state_dir / f"{watcher_id}.codex-wake.completed"
 
     if dry_run:
         thread_id, ignored_reason = read_thread_id(thread_path)
@@ -448,10 +412,6 @@ def run_wake(
         return 2
 
     with log_handle:
-        # Taken before contending for the lock, so ordering between wakes
-        # reflects when each was triggered rather than when each won the lock.
-        my_stamp = time.time_ns()
-
         try:
             lock_handle = lock_path.open("w", encoding="utf-8")
         except OSError as exc:
@@ -492,24 +452,6 @@ def run_wake(
                 )
                 return EXIT_LOCK_TIMEOUT
 
-            # Skip only against a newer wake that has DEMONSTRABLY finished.
-            # A start stamp is not proof that a successor exists: a wake can
-            # stamp itself and be killed before ever taking the lock, and
-            # skipping for it would drop both prompts. This file is written
-            # under the lock after a successful turn and read here under the
-            # same lock, so a skip means a wake triggered after this one has
-            # already processed a strictly newer snapshot of the same PR.
-            completed, stamp_reason = read_completed_stamp(completed_path)
-            if stamp_reason:
-                _log(log_handle, stamp_reason)
-            if completed > my_stamp:
-                _log(
-                    log_handle,
-                    "a newer wake already completed a turn while this one "
-                    "waited for the lock; skipping",
-                )
-                return 0
-
             result = run_one_turn(
                 watcher_id=watcher_id,
                 repo_dir=repo_dir,
@@ -520,8 +462,6 @@ def run_wake(
                 codex_bin=codex_bin,
                 log_handle=log_handle,
             )
-            if result.exit_code == 0:
-                record_completed_stamp(completed_path, my_stamp)
             _log(log_handle, f"wake complete exit={result.exit_code}")
             return result.exit_code
 

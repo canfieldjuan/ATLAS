@@ -157,16 +157,13 @@ Max files: 10
   - A wake that never gets the lock exits non-zero instead of reporting a
     success it did not perform -- settled by
     `tests/test_codex_wake_run.py::test_lock_timeout_reports_failure_rather_than_dropping_the_wake`.
-  - A wake skips only against a newer wake that has DEMONSTRABLY completed a
-    turn, so a successor killed before it took the lock cannot suppress it --
-    settled by
-    `tests/test_codex_wake_run.py::test_a_wake_skips_only_after_a_newer_one_completed`,
-    `::test_a_newer_wake_that_never_ran_does_not_suppress_this_one`, and
-    `::test_a_failed_newer_turn_does_not_license_a_skip`.
-  - Every failure of the completion stamp costs a redundant turn rather than a
-    dropped wake -- settled by
-    `tests/test_codex_wake_run.py::test_an_unreadable_completion_stamp_makes_the_wake_run`
-    and `::test_read_completed_stamp_degrades_to_zero_and_says_why`.
+  - There is no skip path at all, so no file, stamp, or clock change can
+    suppress a wake -- settled by
+    `tests/test_codex_wake_run.py::test_every_wake_that_gets_the_lock_runs_its_prompt`
+    and `::test_a_backward_clock_cannot_suppress_a_wake`.
+  - A post-turn audit-write failure does not overturn a completed turn, so a
+    caller cannot be driven to repeat real side effects -- settled by
+    `tests/test_codex_wake_run.py::test_an_unwritable_audit_path_does_not_fail_a_completed_turn`.
   - The real-entrypoint smoke actually runs in CI, rather than being skipped by
     a marker -- settled by `tests/test_codex_wake_end_to_end.py` carrying no
     pytest marker, and by its enrollment in
@@ -330,16 +327,24 @@ exits 0, because a wake already in flight will observe the same PR state.
   made strand-free by adding checks; waiting removes the second file, so the
   lock is the only shared state and the invariant is one line: every wake that
   acquires the lock runs the prompt it was given.
-- Burst coalescing skips on proof of completion, not on proof of intent. An
-  earlier version compared start stamps, which was wrong: a wake can record
-  itself and be killed before it ever takes the lock, and an older wake
-  skipping for that ghost would drop both prompts. The recorded value is now
-  the start stamp of the last wake that FINISHED a turn, written under the lock
-  after a successful turn and read under the same lock. A skip therefore means
-  a wake triggered later already processed a strictly newer snapshot of the
-  same PR. A failed turn records nothing, because it processed nothing. Every
-  failure of that file -- unreadable, corrupt, clock jump -- reads as "no newer
-  completion", so it costs a redundant turn and cannot drop a wake.
+- **Burst coalescing is removed, deliberately.** It was never part of this
+  slice's requirement: the operator asked for a wake that costs nothing while
+  idle, and serializing on the lock already delivers that. It was an
+  optimization added in response to a review finding, and it went on to produce
+  five consecutive rounds of correctness findings -- dropped events on
+  contention, a read-then-unlink claim race, the window between a final queue
+  check and the unlock, a start stamp treated as proof of a successor, and
+  finally wall-clock regression reversing wake order. Each fix was real and
+  each introduced the next question, which is the AGENTS 3k.2 signal to delete
+  the mechanism rather than harden it again. Ordering wakes correctly needs a
+  monotonic, reboot-aware, same-host clock, which is more machinery than the
+  optimization is worth here. Removing it leaves no skip path, so no file,
+  stamp, or clock change can suppress a wake. The cost is stated in Deferred.
+- Post-turn writes are diagnostics and never change the turn's outcome. By the
+  time the agent message is recorded, Codex may already have edited files,
+  pushed, or commented. Failing the wake because that copy could not be written
+  would make the caller retry and repeat those side effects, so the failure is
+  logged and the turn still reports success.
 - Quarantine is keyed to a confirmed missing-session signature on stderr, not
   to a nonzero exit. Codex reports it as
   `no rollout found for thread id <uuid> (code -32600)`, which is why stderr is
@@ -367,10 +372,14 @@ merge path.
   above are the starting point for choosing that threshold. Tracked as
   follow-up, not fixed here, because picking a ceiling needs data from a real
   multi-day arc rather than a three-turn probe.
-- Cross-host stamps. The completion stamp uses `time.time_ns()`, which is
-  comparable only on one machine. Every consumer of a given watcher id runs on
-  the operator's host today, so this is correct as built; a multi-host watcher
-  would need a different ordering source.
+- Burst coalescing, if measurement shows it is worth it. Without it, N review
+  comments arriving together cost N serialized turns instead of one. Idle cost
+  is unchanged at zero, which is the property this slice was asked for. A
+  correct coalescer needs a monotonic, reboot-aware ordering source rather than
+  wall time, and a skip predicate based on completed work rather than intent;
+  both were attempted here and are recorded above as the reason it was removed.
+  The wake log records per-turn token usage, so the real cost of a burst can be
+  measured before rebuilding it.
 - Enabling the timers. `atlas-pr-watch@.timer` and
   `atlas-pr-watch-event@.timer` have no symlinks under
   `~/.config/systemd/user/timers.target.wants/`, so no instance is enabled
