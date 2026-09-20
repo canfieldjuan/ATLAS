@@ -123,16 +123,56 @@ The bridge reads the watcher config and JSON state, then writes:
 The Markdown file is the prompt for a resumed or `codex exec` run. By default
 the bridge only writes handoff files. To launch a local command, pass
 `--run-command` explicitly, or add a quoted `CODEX_WAKE_COMMAND` line to that
-session's watcher config:
+session's watcher config. Use the installed runner, not a bare `codex exec`:
 
 ```bash
-CODEX_WAKE_COMMAND="codex exec -C <repo-dir> -"
+CODEX_WAKE_COMMAND="${HOME}/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <repo-dir>"
 ```
 
 The command receives the generated prompt on stdin. The prompt text is not
 interpolated into a shell command. Do not use no-approval/full-filesystem Codex
 flags in this config unless the watched PR, watcher config, and PR metadata are
 all trusted; watcher-sourced text is treated as untrusted prompt input.
+
+### Why the runner, not a bare `codex exec`
+
+`atlas-codex-wake-run` is the installed copy of `scripts/codex_wake_run.py`. It
+exists because a bare `codex exec` per wake starts a **fresh thread**: the
+woken agent has no memory of the arc it is continuing, and the operator pays
+full cold-start context on every wake. The runner keeps one Codex thread per
+watcher id, recorded at
+`~/.local/state/atlas-pr-watchers/<session-id>.codex-thread`, and resumes it.
+
+It also pins the argv to what the installed Codex actually accepts. The
+hand-written local script this replaces passed `--ask-for-approval`, which
+current Codex rejects outright, so every wake it ever attempted failed with
+`error: unexpected argument '--ask-for-approval' found` and nothing surfaced
+that. Because the runner is installed and drift-checked by
+`scripts/install_codex_wake_bridge.py --check`, and its argv shape is pinned by
+`tests/test_codex_wake_run.py`, that class of silent breakage is now caught.
+
+Two details the runner encodes, verified against codex-cli 0.155.1: `codex exec`
+accepts `-C/--cd` and `-s/--sandbox` but `codex exec resume` accepts neither, so
+the working directory is passed as the subprocess cwd and the sandbox as
+`-c sandbox_mode="<value>"`, which both subcommands take. The sandbox defaults
+to `workspace-write` rather than full access, because the wake prompt is built
+from PR and review text that this document already classifies as untrusted.
+
+Verify wiring without spending tokens:
+
+```bash
+~/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <repo-dir> --dry-run
+```
+
+Each wake appends its mode, argv, and the turn's token usage to
+`~/.local/state/atlas-pr-watchers/<session-id>.codex-wake.log`, so wake cost is
+readable rather than inferred. Concurrent wakes are serialized by a lock; a
+wake that arrives while one is in flight logs and exits, because the in-flight
+wake observes the same PR state.
+
+A merged PR leaves its `.codex-thread` file behind. Remove it during the
+post-merge teardown in AGENTS 3c.1 so the next PR on that watcher id does not
+resume a finished arc.
 
 Wake-source rules:
 

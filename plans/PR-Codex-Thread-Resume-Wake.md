@@ -38,6 +38,15 @@ installed, tested runner that resumes one persistent Codex thread per watcher.
 thing that is installed today: "Do not recreate a watcher from ad hoc local
 source."
 
+**Over the 400 LOC budget, deliberately.** The diff is 1088 lines, of which 459
+are tests and 252 are this plan. Runtime code is 335 lines across four files.
+The reason this slice is test-heavy rather than divisible is the defect itself:
+the thing being replaced failed silently for months because no test pinned the
+argv it invoked. Shipping the runner without the argv-shape, malformed-input,
+concurrency, and installer-drift tests would reproduce the exact failure mode
+this slice exists to close. Splitting runner and tests across two PRs would
+leave a window where the same silence is possible.
+
 ### Problem-derived contract
 
 - Root cause: the Codex wake path terminates in an untracked local script that
@@ -104,7 +113,15 @@ Slice phase: Workflow/process
     `python scripts/audit_pr_watcher_safety.py` in Verification.
   - `scripts/install_codex_wake_bridge.py --check` reports the runner as a
     tracked, drift-checked file -- settled by
-    `tests/test_install_codex_wake_bridge.py::test_check_detects_runner_drift`.
+    `tests/test_install_codex_wake_bridge.py::test_check_detects_runner_drift`
+    and `::test_check_reports_a_missing_runner`.
+  - Each wake records the agent's final message, so a wake that runs while the
+    operator is away is auditable afterwards -- settled by
+    `tests/test_codex_wake_run.py::test_agent_message_is_recorded_for_the_absent_operator`
+    and `::test_long_agent_message_is_truncated_in_the_log_but_kept_in_full`.
+  - The safety audit scans the runner and fails on a merge command in it --
+    settled by
+    `tests/test_audit_pr_watcher_safety.py::test_fails_on_codex_wake_runner_with_merge_command`.
 - Reachability proof: entrypoint is
   `atlas-pr-webhook-receiver -> atlas-pr-watch-event -> codex_wake_bridge.py
   --source event -> CODEX_WAKE_COMMAND`. Observable effect is a Codex turn
@@ -113,8 +130,11 @@ Slice phase: Workflow/process
   `<id>.codex-wake.log`. The runner's `--dry-run` prints the exact argv without
   spending tokens, which is how the operator verifies wiring.
 - Affected surfaces: `scripts/codex_wake_run.py` (new),
-  `scripts/install_codex_wake_bridge.py`, `tests/test_codex_wake_run.py` (new),
+  `scripts/install_codex_wake_bridge.py`, `scripts/audit_pr_watcher_safety.py`
+  (one line: the runner joins `REPO_WATCHER_SOURCES` so the merge-authority
+  scan covers it), `tests/test_codex_wake_run.py` (new),
   `tests/test_install_codex_wake_bridge.py`,
+  `tests/test_audit_pr_watcher_safety.py`,
   `docs/long_running_session_watcher_handoff.md`.
 - Risk areas: argv drift against a future Codex CLI; thread-id file tampering
   feeding argv; concurrent wakes from a burst of review comments; a resumed
@@ -159,7 +179,15 @@ stored thread id. That is an admission boundary.
 
 ### Files touched
 
-- TODO: run `python scripts/sync_pr_plan.py plans/PR-Codex-Thread-Resume-Wake.md` after implementation.
+- `scripts/codex_wake_run.py` (new) -- the runner.
+- `scripts/install_codex_wake_bridge.py` -- install and drift-check it.
+- `scripts/audit_pr_watcher_safety.py` -- one line, scan scope.
+- `tests/test_codex_wake_run.py` (new) -- argv shape, thread round trip,
+  malformed-id admission, concurrency, wake record.
+- `tests/test_install_codex_wake_bridge.py` -- runner install and drift.
+- `tests/test_audit_pr_watcher_safety.py` -- runner merge-authority scan.
+- `docs/long_running_session_watcher_handoff.md` -- the wake command operators
+  configure, and why it is the runner.
 
 ## Mechanism
 
@@ -223,9 +251,15 @@ merge path.
   behind, and the next PR reusing that watcher id would resume a stale arc.
   Teardown belongs with the existing post-merge teardown step in AGENTS 3c.1,
   not here. Unlocked by a follow-up slice that extends teardown.
-- Context growth over a long arc. A thread resumed across many wakes grows
-  until Codex auto-compacts. A per-thread turn or token ceiling that forks a
-  fresh thread would bound it; needs a measured threshold first.
+- Context growth over a long arc. A thread resumed across many wakes grows.
+  Measured on this machine across three real wakes on one thread, `input_tokens`
+  per turn ran 29,605 then 59,237 then 88,909, with `cached_input_tokens`
+  reaching 29,602 by the third. The growth is roughly linear in turns, and cache
+  offsets the repeat but does not remove it from the plan's usage. A per-thread
+  turn or token ceiling that forks a fresh thread would bound it; the numbers
+  above are the starting point for choosing that threshold. Tracked as
+  follow-up, not fixed here, because picking a ceiling needs data from a real
+  multi-day arc rather than a three-turn probe.
 - Enabling the timers. `atlas-pr-watch@.timer` and
   `atlas-pr-watch-event@.timer` have no symlinks under
   `~/.config/systemd/user/timers.target.wants/`, so no instance is enabled
@@ -238,15 +272,48 @@ Parked hardening: none.
 
 ## Verification
 
-- Pending before push: `pytest tests/test_codex_wake_run.py
-  tests/test_install_codex_wake_bridge.py tests/test_codex_wake_bridge.py
-  tests/test_audit_pr_watcher_safety.py -q`; `python
-  scripts/audit_pr_watcher_safety.py`; `bash scripts/check_ascii_python.sh`;
-  `python scripts/codex_wake_run.py --watcher-id probe --repo-dir . --dry-run`
-  against both a fresh and a seeded thread-id file.
+Run on this branch before push:
+
+- `pytest tests/test_codex_wake_run.py tests/test_install_codex_wake_bridge.py
+  tests/test_codex_wake_bridge.py tests/test_audit_pr_watcher_safety.py
+  tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py -q`
+  -- **234 passed**.
+- `python scripts/audit_pr_watcher_safety.py` -- exit 0, "watcher
+  docs/config/source grant no merge authority".
+- Negative probe of that audit: appending `gh pr merge --delete-branch` to the
+  runner made it exit 1 and name `scripts/codex_wake_run.py`, so the scan
+  detects rather than merely passing. Reverted; the durable version of that
+  probe is `test_fails_on_codex_wake_runner_with_merge_command`.
+- `bash scripts/check_ascii_python.sh` -- exit 0.
+- `--dry-run` against the real CLI printed
+  `codex exec --json -c sandbox_mode="read-only" -` for the fresh path and
+  `codex exec resume <id> --json -c sandbox_mode="read-only" -` for the seeded
+  path, with cwd set to the repo dir on both.
+- End-to-end against the **real** `codex-cli 0.155.1`, three wakes on one
+  watcher id: wake 1 started a thread and recorded
+  `01a0bfdf-c300-7e40-aff1-2c4c1949a2a9`; wakes 2 and 3 resumed that same id;
+  wake 3 was asked for a codeword stored in wake 1 and answered `ANVIL-3392`.
+  That is the continuity proof -- the argv the runner builds is accepted by the
+  installed binary, and the resumed thread carries the arc.
+- `python scripts/install_codex_wake_bridge.py --check` now reports
+  `content drift: ~/.local/bin/atlas-codex-wake-run`, which is the broken local
+  script this slice replaces becoming visible to tooling for the first time.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| **Total** | **0** |
+| `tests/test_codex_wake_run.py` | 385 |
+| `scripts/codex_wake_run.py` | 321 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | 252 |
+| `tests/test_install_codex_wake_bridge.py` | 46 |
+| `docs/long_running_session_watcher_handoff.md` | 44 |
+| `tests/test_audit_pr_watcher_safety.py` | 28 |
+| `scripts/install_codex_wake_bridge.py` | 13 |
+| `scripts/audit_pr_watcher_safety.py` | 1 |
+| **Total** | **1088** |
+
+Over the 400 LOC soft cap. Runtime code is 335 lines; the remainder is tests
+(459) and this plan (252). Justified in *Why this slice exists*: the defect
+being fixed was invisible precisely because nothing pinned the invoked argv, so
+the tests are the fix, not packaging around it.

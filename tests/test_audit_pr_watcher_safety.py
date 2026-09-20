@@ -240,3 +240,31 @@ def test_repo_watcher_source_status_only_passes(tmp_path: Path) -> None:
     result = _run(tmp_path, "--repo-root", str(repo), "--repo-only")
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_fails_on_codex_wake_runner_with_merge_command(tmp_path: Path) -> None:
+    """The wake runner is scanned too; it launches Codex and must stay merge-free."""
+    repo = _repo(tmp_path)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "codex_wake_run.py").write_text(
+        "#!/usr/bin/env python3\nsubprocess.run(['gh', 'pr', 'merge'])\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "--repo-root", str(repo), "--repo-only")
+
+    assert result.returncode == 1
+    assert "watcher executable must not contain PR merge/delete-branch commands" in result.stdout
+
+
+def test_codex_wake_runner_status_only_passes(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "codex_wake_run.py").write_text(
+        "#!/usr/bin/env python3\nargv = ['codex', 'exec', 'resume']\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "--repo-root", str(repo), "--repo-only")
+
+    assert result.returncode == 0, result.stdout + result.stderr

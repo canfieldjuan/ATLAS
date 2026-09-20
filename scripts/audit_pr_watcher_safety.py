@@ -26,6 +26,7 @@ REPO_DOCS = (
 # including --repo-only, because they ship with the checkout).
 REPO_WATCHER_SOURCES = (
     "scripts/watch_owned_pr.sh",
+    "scripts/codex_wake_run.py",
 )
 
 TRUTHY = {"1", "true", "yes", "on", "enabled"}
