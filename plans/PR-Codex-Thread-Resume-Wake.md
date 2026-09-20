@@ -215,6 +215,12 @@ Max files: 10
     traceback, even though it is touched before the log and lock exist --
     settled by
     `tests/test_codex_wake_run.py::test_an_unusable_state_directory_exits_cleanly`.
+  - A thread path that is a FIFO, a directory, or a link to one is refused
+    without ever being opened, so a wake cannot block holding the lock --
+    settled by
+    `tests/test_codex_wake_run.py::test_a_special_thread_file_is_rejected_without_being_opened`
+    and `::test_a_symlinked_thread_file_is_judged_on_its_own`, which hang
+    against the pre-fix code and pass in under a second after it.
   - A host without the kernel's parent-death signal logs that orphan protection
     is not in force rather than skipping it silently -- settled by
     `tests/test_codex_wake_run.py::test_parent_death_support_is_probed_in_the_parent`.

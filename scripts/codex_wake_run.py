@@ -23,6 +23,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import signal
 import subprocess
 import sys
@@ -407,10 +408,20 @@ def read_thread_id(path: Path) -> tuple[str | None, str | None]:
     wake: a wake that runs on a new thread still does the operator's work, but a
     wake that refuses to run loses the review event entirely.
     """
-    if not path.exists():
-        return None, None
+    # The type check has to come before the open, not after. A FIFO reports a
+    # zero size and blocks on open until a writer appears, so a later
+    # is_file() check never runs and the wake hangs holding the lock. lstat
+    # also means a symlink is judged on its own merits rather than its target.
     try:
-        if path.stat().st_size > MAX_THREAD_FILE_BYTES:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"could not inspect the stored thread id: {exc}"
+    if not stat.S_ISREG(info.st_mode):
+        return None, f"stored thread id at {path} is not a regular file"
+    try:
+        if info.st_size > MAX_THREAD_FILE_BYTES:
             return None, "stored thread id file is too large"
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -465,7 +476,13 @@ def thread_path_problem(path: Path) -> str | None:
     Codex has already edited files, pushed, or commented, and there is no
     resumable id to show for it, so every retry repeats that work.
     """
-    if path.exists() and not path.is_file():
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        info = None
+    except OSError as exc:
+        return f"cannot inspect {path}: {exc}"
+    if info is not None and not stat.S_ISREG(info.st_mode):
         return f"{path} exists but is not a regular file"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)

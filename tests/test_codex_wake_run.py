@@ -1147,6 +1147,50 @@ def test_drain_does_not_claim_to_cover_escaped_descendants() -> None:
     assert "cgroup" in doc or "systemd scope" in doc
 
 
+@pytest.mark.parametrize("shape", ["fifo", "directory"])
+def test_a_special_thread_file_is_rejected_without_being_opened(
+    tmp_path: Path, repo_dir: Path, shape: str
+) -> None:
+    """Regression: the type check must precede the open, not follow it.
+
+    A FIFO reports a zero size and blocks on open until a writer appears, so
+    a later is_file() check never runs. A real wake would hang holding the
+    wake lock and every later wake would wait or time out.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    target = state_dir / "slice-123.codex-thread"
+    if shape == "fifo":
+        os.mkfifo(target)
+    else:
+        target.mkdir()
+
+    # The read must return rather than block; pytest-timeout is not assumed,
+    # so a hang here shows up as the suite itself never finishing, which the
+    # wake log assertion below would never reach.
+    stored, reason = runner.read_thread_id(target)
+
+    assert stored is None
+    assert reason is not None and "not a regular file" in reason
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_STATE_UNUSABLE
+    assert not record.exists(), "Codex must not be launched"
+
+
+def test_a_symlinked_thread_file_is_judged_on_its_own(tmp_path: Path) -> None:
+    """lstat, so a link to a FIFO cannot smuggle the blocking open back in."""
+    fifo = tmp_path / "target-fifo"
+    os.mkfifo(fifo)
+    link = tmp_path / "slice-123.codex-thread"
+    link.symlink_to(fifo)
+
+    stored, reason = runner.read_thread_id(link)
+
+    assert stored is None
+    assert reason is not None and "not a regular file" in reason
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 
