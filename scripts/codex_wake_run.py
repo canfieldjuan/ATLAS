@@ -16,7 +16,6 @@ records what that turn cost.
 from __future__ import annotations
 
 import argparse
-import contextlib
 import datetime as dt
 import fcntl
 import json
@@ -112,6 +111,10 @@ def build_argv(
     working directory is passed as the subprocess cwd, and the sandbox as a
     generic `-c` config override -- and the two paths stay one shape.
     """
+    if sandbox not in SANDBOX_CHOICES:
+        # argparse already constrains the CLI, but build_argv is importable and
+        # this value is interpolated straight into argv.
+        raise ValueError(f"unknown sandbox mode: {sandbox!r}")
     argv = [codex_bin, "exec"]
     if thread_id is not None:
         argv.append("resume")
@@ -139,6 +142,11 @@ def _consume_events(
     thread_id: str | None = None
     usage: dict[str, Any] | None = None
     last_message: str | None = None
+    # Codex can interleave non-JSON lines into stdout. Skipping them is right,
+    # but skipping them silently makes a garbled stream look like a quiet one,
+    # so they are counted and reported once at the end of the turn.
+    unparsed = 0
+    first_unparsed = ""
     for line in stream:
         text = line.strip()
         if not text:
@@ -146,8 +154,14 @@ def _consume_events(
         try:
             event = json.loads(text)
         except json.JSONDecodeError:
+            unparsed += 1
+            if not first_unparsed:
+                first_unparsed = text[:200]
             continue
         if not isinstance(event, dict):
+            unparsed += 1
+            if not first_unparsed:
+                first_unparsed = text[:200]
             continue
         kind = event.get("type")
         if kind == "thread.started":
@@ -166,6 +180,11 @@ def _consume_events(
                     last_message = message
         elif kind == "error":
             _log(log_handle, f"codex error event: {text[:500]}")
+    if unparsed:
+        _log(
+            log_handle,
+            f"{unparsed} stdout line(s) were not JSON events; first: {first_unparsed}",
+        )
     return thread_id, usage, last_message
 
 
@@ -196,8 +215,21 @@ def run_wake(
         print("argv=" + " ".join(argv))
         return 0
 
-    with log_path.open("a", encoding="utf-8") as log_handle:
-        with lock_path.open("w", encoding="utf-8") as lock_handle:
+    try:
+        log_handle = log_path.open("a", encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot open wake log {log_path}: {exc}", file=sys.stderr)
+        return 2
+
+    with log_handle:
+        try:
+            lock_handle = lock_path.open("w", encoding="utf-8")
+        except OSError as exc:
+            _log(log_handle, f"cannot open wake lock {lock_path}: {exc}")
+            print(f"cannot open wake lock {lock_path}: {exc}", file=sys.stderr)
+            return 2
+
+        with lock_handle:
             try:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
@@ -214,11 +246,13 @@ def run_wake(
             _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
             _log(log_handle, "argv=" + " ".join(argv))
 
-            prompt_file = Path(
-                tempfile.mkstemp(prefix="codex-wake-", suffix=".txt")[1]
+            prompt_fd, prompt_name = tempfile.mkstemp(
+                prefix="codex-wake-", suffix=".txt"
             )
+            prompt_file = Path(prompt_name)
             try:
-                prompt_file.write_text(prompt, encoding="utf-8")
+                with os.fdopen(prompt_fd, "w", encoding="utf-8") as prompt_handle:
+                    prompt_handle.write(prompt)
                 with prompt_file.open("r", encoding="utf-8") as stdin_handle:
                     try:
                         process = subprocess.Popen(
@@ -239,8 +273,13 @@ def run_wake(
                         )
                     exit_code = process.returncode
             finally:
-                with contextlib.suppress(OSError):
+                try:
                     prompt_file.unlink()
+                except OSError as exc:
+                    _log(
+                        log_handle,
+                        f"could not remove temp prompt file {prompt_file}: {exc}",
+                    )
 
             if observed_thread and observed_thread != thread_id:
                 write_thread_id(thread_path, observed_thread)

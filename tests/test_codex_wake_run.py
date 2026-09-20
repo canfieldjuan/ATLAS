@@ -381,5 +381,67 @@ def test_dry_run_prints_argv_without_invoking_codex(
     assert "--json" in out
 
 
+def test_non_json_stdout_lines_are_counted_not_silently_dropped(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A garbled stream must not look identical to a quiet one."""
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdin.read()\n"
+        "print('warning: this line is not json')\n"
+        "print('[1, 2, 3]')\n"
+        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+    assert _run(tmp_path, fake=fake) == 0
+
+    log_text = (tmp_path / "state" / "slice-123.codex-wake.log").read_text(
+        encoding="utf-8"
+    )
+    assert "2 stdout line(s) were not JSON events" in log_text
+    assert "warning: this line is not json" in log_text
+    # The valid events around them are still processed.
+    assert (tmp_path / "state" / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A
+
+
+def test_build_argv_rejects_an_unknown_sandbox_mode() -> None:
+    """build_argv is importable and interpolates this value straight into argv."""
+    with pytest.raises(ValueError, match="unknown sandbox mode"):
+        runner.build_argv(codex_bin="codex", thread_id=None, sandbox="wide-open")
+
+    with pytest.raises(ValueError, match="unknown sandbox mode"):
+        runner.build_argv(codex_bin="codex", thread_id=THREAD_A, sandbox="")
+
+
+def test_unwritable_state_dir_exits_cleanly(tmp_path: Path, repo_dir: Path) -> None:
+    """A background wake must not surface a traceback when its log cannot open."""
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "slice-123.codex-wake.log").mkdir()  # an open("a") on a dir fails
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 2
+    assert not record.exists()
+
+
+def test_temp_prompt_file_is_cleaned_up(tmp_path: Path, repo_dir: Path) -> None:
+    import tempfile as _tempfile
+
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    before = set(Path(_tempfile.gettempdir()).glob("codex-wake-*.txt"))
+
+    assert _run(tmp_path, fake=fake) == 0
+
+    after = set(Path(_tempfile.gettempdir()).glob("codex-wake-*.txt"))
+    assert after <= before
+
+
 def test_missing_codex_binary_is_reported(tmp_path: Path, repo_dir: Path) -> None:
     assert _run(tmp_path, fake=tmp_path / "definitely-not-here") == 2

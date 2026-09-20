@@ -38,7 +38,7 @@ installed, tested runner that resumes one persistent Codex thread per watcher.
 thing that is installed today: "Do not recreate a watcher from ad hoc local
 source."
 
-**Over the 400 LOC budget, deliberately.** The diff is 1166 diff lines, of
+**Over the 400 LOC budget, deliberately.** The diff is 1267 diff lines, of
 which 459 are tests and 325 are this plan. Runtime code is 335 lines across
 three files.
 The reason this slice is test-heavy rather than divisible is the defect itself:
@@ -248,6 +248,16 @@ exits 0, because a wake already in flight will observe the same PR state.
 - `--dry-run` prints argv and exits without invoking Codex, so wiring can be
   verified for free. This matters specifically because the failure this slice
   fixes was invisible for months.
+- Non-JSON stdout lines are counted and reported once per turn rather than
+  skipped silently. Codex can interleave plain text into the event stream, and
+  skipping it quietly would make a garbled stream look identical to a quiet
+  one -- the same class of invisibility this slice exists to fix.
+- `build_argv` re-validates the sandbox value even though argparse already
+  constrains the CLI. The function is importable and the value is interpolated
+  straight into argv, so the guard belongs at the interpolation site.
+- Opening the wake log and lock is guarded: a background wake whose state
+  directory is unwritable exits 2 with a message rather than a traceback nobody
+  is present to read.
 
 ## Deferred
 
@@ -311,18 +321,18 @@ Run on this branch before push:
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +385 |
-| `plans/PR-Codex-Thread-Resume-Wake.md` | +325 |
-| `scripts/codex_wake_run.py` | +321 |
+| `tests/test_codex_wake_run.py` | +447 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | +338 |
+| `scripts/codex_wake_run.py` | +360 |
 | `tests/test_install_codex_wake_bridge.py` | +46 |
 | `docs/long_running_session_watcher_handoff.md` | +42 / -2 |
 | `tests/test_audit_pr_watcher_safety.py` | +28 |
 | `scripts/install_codex_wake_bridge.py` | +13 |
 | `scripts/audit_pr_watcher_safety.py` | +1 |
-| **Total** | **1166** |
+| **Total** | **1267** |
 
-Over the 400 LOC soft cap. Runtime code is 335 lines (runner 321, installer 13,
-audit 1); the remainder is tests (459), this plan (325), and docs (42).
+Over the 400 LOC soft cap. Runtime code is 374 lines (runner 360, installer 13,
+audit 1); the remainder is tests (521), this plan (338), and docs (42).
 Justified in *Why this slice exists*: the defect being fixed was invisible
 precisely because nothing pinned the invoked argv, so the tests are the fix,
 not packaging around it.
