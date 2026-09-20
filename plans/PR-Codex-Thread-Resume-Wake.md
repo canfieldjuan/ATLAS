@@ -38,8 +38,9 @@ installed, tested runner that resumes one persistent Codex thread per watcher.
 thing that is installed today: "Do not recreate a watcher from ad hoc local
 source."
 
-**Over the 400 LOC budget, deliberately.** The diff is 1088 lines, of which 459
-are tests and 252 are this plan. Runtime code is 335 lines across four files.
+**Over the 400 LOC budget, deliberately.** The diff is 1161 added lines, of
+which 459 are tests and 325 are this plan. Runtime code is 335 lines across
+three files.
 The reason this slice is test-heavy rather than divisible is the defect itself:
 the thing being replaced failed silently for months because no test pinned the
 argv it invoked. Shipping the runner without the argv-shape, malformed-input,
@@ -185,6 +186,7 @@ stored thread id. That is an admission boundary.
 
 ### Files touched
 
+- `plans/PR-Codex-Thread-Resume-Wake.md` (new) -- this plan.
 - `scripts/codex_wake_run.py` (new) -- the runner.
 - `scripts/install_codex_wake_bridge.py` -- install and drift-check it.
 - `scripts/audit_pr_watcher_safety.py` -- one line, scan scope.
@@ -307,19 +309,20 @@ Run on this branch before push:
 
 ## Estimated diff size
 
-| File | LOC |
+| File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | 385 |
-| `scripts/codex_wake_run.py` | 321 |
-| `plans/PR-Codex-Thread-Resume-Wake.md` | 252 |
-| `tests/test_install_codex_wake_bridge.py` | 46 |
-| `docs/long_running_session_watcher_handoff.md` | 44 |
-| `tests/test_audit_pr_watcher_safety.py` | 28 |
-| `scripts/install_codex_wake_bridge.py` | 13 |
-| `scripts/audit_pr_watcher_safety.py` | 1 |
-| **Total** | **1088** |
+| `tests/test_codex_wake_run.py` | +385 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | +325 |
+| `scripts/codex_wake_run.py` | +321 |
+| `tests/test_install_codex_wake_bridge.py` | +46 |
+| `docs/long_running_session_watcher_handoff.md` | +42 / -2 |
+| `tests/test_audit_pr_watcher_safety.py` | +28 |
+| `scripts/install_codex_wake_bridge.py` | +13 |
+| `scripts/audit_pr_watcher_safety.py` | +1 |
+| **Total** | **8 files, +1161 / -2** |
 
-Over the 400 LOC soft cap. Runtime code is 335 lines; the remainder is tests
-(459) and this plan (252). Justified in *Why this slice exists*: the defect
-being fixed was invisible precisely because nothing pinned the invoked argv, so
-the tests are the fix, not packaging around it.
+Over the 400 LOC soft cap. Runtime code is 335 lines (runner 321, installer 13,
+audit 1); the remainder is tests (459), this plan (325), and docs (42).
+Justified in *Why this slice exists*: the defect being fixed was invisible
+precisely because nothing pinned the invoked argv, so the tests are the fix,
+not packaging around it.
