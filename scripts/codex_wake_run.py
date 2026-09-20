@@ -167,12 +167,19 @@ def process_group_members(pgid: int, *, exclude_pid: int) -> list[int]:
 
 
 def drain_process_group(*, deadline_seconds: float, report: Any) -> None:
-    """Stop anything the turn left running, before the lock is released.
+    """Stop what the turn left running in this process group.
 
     The turn's own process exiting does not mean the turn is over. Codex can
     start a background command that outlives it, and returning here would
     release the wake lock while that command is still editing the checkout, so
     the next wake could overlap it.
+
+    This covers the supervisor's process group, which is what every ordinary
+    child and grandchild inherits. It does NOT cover a descendant that calls
+    `setsid` and deliberately leaves the group: nothing built from process
+    groups can, because leaving is the descendant's choice. Containment a
+    descendant cannot opt out of needs a cgroup or a systemd scope, which is
+    tracked separately and is not built here.
     """
     me = os.getpid()
     try:
@@ -341,6 +348,10 @@ def make_die_with_parent(expected_ppid: int) -> Any:
     turn against the same thread and the same checkout while the orphan is
     still editing files. A signal handler cannot cover that, because the
     runner may be SIGKILLed; PR_SET_PDEATHSIG is enforced by the kernel.
+
+    Covers the immediate child and, through the supervisor's process group,
+    the ordinary descendants it starts. A descendant that calls `setsid` to
+    leave that group is outside what this can reach; see `drain_process_group`.
 
     The flag alone leaves a window. It is set after fork, and if the runner
     dies in between, the kernel has already reparented this child and setting
@@ -792,7 +803,14 @@ def run_wake(
     codex_bin: str,
     dry_run: bool,
 ) -> int:
-    state_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        # Reached before the log exists, so stderr is the only channel. The
+        # runner promises a controlled diagnostic exit, and a traceback from
+        # the very first filesystem touch is not one.
+        print(f"cannot use the state directory {state_dir}: {exc}", file=sys.stderr)
+        return EXIT_STATE_UNUSABLE
     thread_path = state_dir / f"{watcher_id}.codex-thread"
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"

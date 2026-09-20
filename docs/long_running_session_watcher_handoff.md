@@ -182,6 +182,11 @@ may already have taken its snapshot of the PR and cannot see a review posted
 after that point. A wake that never gets the lock exits non-zero rather than
 reporting a success it did not perform.
 
+Each turn runs under a supervisor that leads its own process group, so the
+Codex process and the ordinary commands it starts do not outlive the wake lock.
+A descendant that calls `setsid` leaves that group and is not covered; issue
+#2526 tracks containment a descendant cannot opt out of.
+
 A merged PR leaves its `.codex-thread` file behind. Remove it during the
 post-merge teardown in AGENTS 3c.1 so the next PR on that watcher id does not
 resume a finished arc.

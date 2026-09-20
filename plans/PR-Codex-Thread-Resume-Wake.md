@@ -203,6 +203,14 @@ Max files: 10
     settled by
     `tests/test_codex_wake_run.py::test_supervisor_handlers_are_installed_before_the_spawn`
     and a before/after kill experiment recorded in Verification.
+  - Containment is claimed only for what process groups can actually deliver,
+    so nothing asserts a guarantee a descendant can opt out of -- settled by
+    `tests/test_codex_wake_run.py::test_drain_does_not_claim_to_cover_escaped_descendants`
+    and the Deferred entry pointing at issue #2526.
+  - An unusable state directory exits with a diagnostic rather than a
+    traceback, even though it is touched before the log and lock exist --
+    settled by
+    `tests/test_codex_wake_run.py::test_an_unusable_state_directory_exits_cleanly`.
   - A host without the kernel's parent-death signal logs that orphan protection
     is not in force rather than skipping it silently -- settled by
     `tests/test_codex_wake_run.py::test_parent_death_support_is_probed_in_the_parent`.
@@ -477,6 +485,15 @@ merge path.
   above are the starting point for choosing that threshold. Tracked as
   follow-up, not fixed here, because picking a ceiling needs data from a real
   multi-day arc rather than a three-turn probe.
+- **Containment a descendant cannot leave (issue #2526).** A descendant that
+  calls `setsid` leaves the supervisor's process group, and nothing built from
+  process groups can stop it, because leaving is the descendant's choice. The
+  lock is then released while that process still runs. This is not fixed here:
+  the real fix is a cgroup or a transient systemd scope, `systemd-run --user`
+  did not respond on the dev host during this slice, and doing it properly
+  likely replaces the hand-rolled supervisor rather than extending it. What
+  this slice does instead is stop claiming the guarantee, in the code, the plan
+  and the handoff doc, so the limit is visible rather than assumed.
 - Extracting turn lifetime into a reviewed component. Owning a Codex turn's
   lifetime has needed a supervisor, a process group, a parent-death signal, a
   reparent check, handler ordering around the spawn, and a drain on both the

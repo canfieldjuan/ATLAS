@@ -1047,6 +1047,52 @@ def test_supervisor_handlers_are_installed_before_the_spawn(
     assert len(installed) == 3, "all three termination signals must be covered first"
 
 
+@pytest.mark.parametrize("shape", ["under-a-file", "unwritable-parent"])
+def test_an_unusable_state_directory_exits_cleanly(
+    tmp_path: Path, repo_dir: Path, shape: str
+) -> None:
+    """The first filesystem touch must not be the one that tracebacks.
+
+    It happens before the log and lock exist, so it cannot rely on their
+    guards; the runner promises a controlled diagnostic exit either way.
+    """
+    if shape == "under-a-file":
+        blocker = tmp_path / "a-regular-file"
+        blocker.write_text("not a directory", encoding="utf-8")
+        state_dir = blocker / "state"
+    else:
+        parent = tmp_path / "locked"
+        parent.mkdir()
+        parent.chmod(0o500)
+        state_dir = parent / "state"
+
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    try:
+        assert (
+            _run(tmp_path, fake=fake, state_dir=state_dir)
+            == runner.EXIT_STATE_UNUSABLE
+        )
+    finally:
+        if shape == "unwritable-parent":
+            (tmp_path / "locked").chmod(0o700)
+
+    assert not record.exists(), "Codex must not be launched"
+
+
+def test_drain_does_not_claim_to_cover_escaped_descendants() -> None:
+    """The claim and the mechanism have to match.
+
+    A descendant that calls setsid leaves the process group, and nothing built
+    from process groups can stop it. Saying otherwise in the one place a
+    maintainer looks is how a false guarantee survives.
+    """
+    doc = runner.drain_process_group.__doc__ or ""
+
+    assert "setsid" in doc
+    assert "does NOT cover" in doc
+    assert "cgroup" in doc or "systemd scope" in doc
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 
