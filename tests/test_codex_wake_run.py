@@ -503,98 +503,125 @@ def test_lock_timeout_reports_failure_rather_than_dropping_the_wake(
     assert "gave up" in log_text
 
 
-def test_a_superseded_wake_skips_its_turn(
+def test_a_wake_skips_only_after_a_newer_one_completed(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """A newer wake covers an older one, so the older one need not spend a turn."""
+    """Skipping requires proof a successor finished, not that one started."""
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    generation = state_dir / "slice-123.codex-wake.generation"
-    # A newer wake stamped itself far in the future.
-    runner._atomic_write(generation, f"{time.time_ns() + 10**12}\n")
+    # A wake triggered after this one already completed a turn.
+    runner._atomic_write(
+        state_dir / "slice-123.codex-wake.completed", f"{time.time_ns() + 10**12}\n"
+    )
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
-    assert not record.exists(), "a superseded wake must not spend a turn"
+    assert not record.exists(), "a wake covered by a completed newer turn must skip"
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "superseded" in log_text
+    assert "already completed a turn" in log_text
 
 
-def test_an_unreadable_generation_file_makes_the_wake_run(
+def test_a_newer_wake_that_never_ran_does_not_suppress_this_one(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression for the stamp-then-die interleaving.
+
+    A wake that records itself and is killed before taking the lock leaves no
+    completion. If a start stamp were treated as proof of a successor, this
+    wake would skip and BOTH prompts would be lost.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    # Everything a killed successor could have left behind: a lock file it
+    # opened, and no completion record.
+    (state_dir / "slice-123.codex-wake.lock").write_text("", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    assert record.exists(), "no completion means no successor; this wake must run"
+
+
+def test_a_failed_newer_turn_does_not_license_a_skip(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A turn that failed processed nothing, so it records no completion."""
+    failing = _failing_codex(tmp_path, stderr_text="Error: boom", name="failing-codex")
+    state_dir = tmp_path / "state"
+
+    assert _run(tmp_path, fake=failing, state_dir=state_dir) == 1
+
+    assert not (state_dir / "slice-123.codex-wake.completed").exists()
+
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+    assert record.exists()
+
+
+def test_a_successful_turn_records_its_completion(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    recorded, reason = runner.read_completed_stamp(
+        state_dir / "slice-123.codex-wake.completed"
+    )
+    assert reason is None
+    assert recorded > 0
+
+
+def test_an_unreadable_completion_stamp_makes_the_wake_run(
     tmp_path: Path, repo_dir: Path
 ) -> None:
     """Every failure of the stamp file must cost a turn, never drop one."""
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    generation = state_dir / "slice-123.codex-wake.generation"
-    generation.write_text("not a number at all", encoding="utf-8")
+    (state_dir / "slice-123.codex-wake.completed").write_text(
+        "not a number at all", encoding="utf-8"
+    )
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
-    assert record.exists(), "a wake that cannot prove it is superseded must run"
+    assert record.exists(), "a wake that cannot prove it is covered must run"
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "not an integer" in log_text
 
 
 @pytest.mark.parametrize(
     ("stored", "expect_reason"),
     [("", False), ("   ", False), ("not-a-number", True), ("x" * 200, True)],
 )
-def test_read_generation_degrades_to_zero_and_says_why(
+def test_read_completed_stamp_degrades_to_zero_and_says_why(
     tmp_path: Path, stored: str, expect_reason: bool
 ) -> None:
-    path = tmp_path / "gen"
+    path = tmp_path / "completed"
     path.write_text(stored, encoding="utf-8")
 
-    stamp, reason = runner.read_generation(path)
+    stamp, reason = runner.read_completed_stamp(path)
 
     assert stamp == 0
     assert (reason is not None) == expect_reason
 
 
-def test_read_generation_of_a_missing_file_is_silent(tmp_path: Path) -> None:
-    stamp, reason = runner.read_generation(tmp_path / "absent")
+def test_read_completed_stamp_of_a_missing_file_is_silent(tmp_path: Path) -> None:
+    stamp, reason = runner.read_completed_stamp(tmp_path / "absent")
 
     assert stamp == 0
     assert reason is None
 
 
-def test_record_generation_keeps_the_newest(tmp_path: Path) -> None:
-    path = tmp_path / "gen"
+def test_record_completed_stamp_keeps_the_newest(tmp_path: Path) -> None:
+    path = tmp_path / "completed"
 
-    assert runner.record_generation(path, 500) is None
-    assert runner.record_generation(path, 100) is None
+    runner.record_completed_stamp(path, 500)
+    runner.record_completed_stamp(path, 100)
 
-    assert runner.read_generation(path)[0] == 500
-
-
-def test_record_generation_reports_a_corrupt_file_then_repairs_it(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "gen"
-    path.write_text("garbage", encoding="utf-8")
-
-    reason = runner.record_generation(path, 500)
-
-    assert reason is not None and "not an integer" in reason
-    assert runner.read_generation(path) == (500, None)
-
-
-def test_a_corrupt_stamp_file_is_reported_in_the_log(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    (state_dir / "slice-123.codex-wake.generation").write_text(
-        "garbage", encoding="utf-8"
-    )
-
-    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
-
-    assert record.exists()
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "not an integer" in log_text
+    assert runner.read_completed_stamp(path)[0] == 500
 
 
 def test_zero_exit_without_a_thread_event_is_a_protocol_failure(

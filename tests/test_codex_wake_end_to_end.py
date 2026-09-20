@@ -20,8 +20,6 @@ import stat
 import subprocess
 import sys
 
-import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "scripts" / "install_codex_wake_bridge.py"
@@ -95,7 +93,6 @@ def _watcher_status(head_sha: str) -> dict[str, object]:
     }
 
 
-@pytest.mark.integration
 def test_bridge_wakes_the_installed_runner_and_records_the_thread(
     tmp_path: Path,
 ) -> None:
@@ -181,7 +178,6 @@ def test_bridge_wakes_the_installed_runner_and_records_the_thread(
     assert "input_tokens" in log_text
 
 
-@pytest.mark.integration
 def test_second_bridge_wake_resumes_the_recorded_thread(tmp_path: Path) -> None:
     """The second event on the same PR must continue the arc, not restart it."""
     bin_dir = tmp_path / "bin"

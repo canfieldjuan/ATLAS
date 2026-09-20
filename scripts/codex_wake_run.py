@@ -49,11 +49,13 @@ EXIT_LOCK_TIMEOUT = 75
 # id there is nothing to resume, so reporting success would silently forfeit
 # the continuity this runner exists to provide.
 EXIT_NO_THREAD_EVENT = 76
-# A stamp file holding the newest wake's start time. Its only job is to let a
-# superseded wake skip its turn. Every failure mode of it -- a lost update, an
-# unreadable file, a clock that jumps -- costs one extra turn and can never
-# strand a wake, because a wake that cannot prove it is superseded runs.
-MAX_GENERATION_FILE_BYTES = 64
+# A stamp file holding the start time of the last wake that COMPLETED a turn.
+# It is both written and read while holding the wake lock, so a skip is only
+# ever taken against a newer wake that demonstrably finished. A wake that is
+# killed before it takes the lock records no completion, so nobody skips for
+# it. Every failure of this file -- unreadable, corrupt, a clock jump -- reads
+# as "no newer completion", which makes the reader run.
+MAX_STAMP_FILE_BYTES = 64
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
@@ -136,47 +138,43 @@ def write_thread_id(path: Path, thread_id: str) -> None:
     _atomic_write(path, thread_id + "\n")
 
 
-def read_generation(path: Path) -> tuple[int, str | None]:
-    """Return (newest recorded wake stamp, reason_degraded).
+def read_completed_stamp(path: Path) -> tuple[int, str | None]:
+    """Return (start stamp of the last completed wake, reason_degraded).
 
-    Unreadable or malformed content reads as 0, which makes the caller believe
-    it is the newest wake and run. That direction is deliberate: an extra turn
-    is recoverable, a skipped turn is a lost review event. The reason is
-    returned rather than discarded so a persistently corrupt stamp file shows
-    up in the wake log instead of quietly costing a turn every time.
+    Unreadable or malformed content reads as 0, which tells the caller that no
+    newer wake has finished and makes it run. That direction is deliberate: an
+    extra turn is recoverable, a skipped turn is a lost review event. The
+    reason is returned rather than discarded so a corrupt stamp file shows up
+    in the wake log instead of quietly costing a turn every time.
     """
     if not path.exists():
         return 0, None
     try:
-        if path.stat().st_size > MAX_GENERATION_FILE_BYTES:
-            return 0, "wake stamp file is too large; treating this wake as current"
+        if path.stat().st_size > MAX_STAMP_FILE_BYTES:
+            return 0, "completion stamp file is too large; running this wake"
         raw = path.read_text(encoding="utf-8").strip()
     except OSError as exc:
-        return 0, f"could not read wake stamp ({exc}); treating this wake as current"
+        return 0, f"could not read completion stamp ({exc}); running this wake"
     except UnicodeDecodeError:
-        return 0, "wake stamp is not valid UTF-8; treating this wake as current"
+        return 0, "completion stamp is not valid UTF-8; running this wake"
     if not raw:
         return 0, None
     try:
         return int(raw), None
     except ValueError:
-        return 0, f"wake stamp {raw[:40]!r} is not an integer; treating this wake as current"
+        return 0, f"completion stamp {raw[:40]!r} is not an integer; running this wake"
 
 
-def record_generation(path: Path, stamp: int) -> str | None:
-    """Record this wake's stamp, keeping the newest. Returns any read problem.
+def record_completed_stamp(path: Path, stamp: int) -> None:
+    """Record that a wake which started at `stamp` finished a turn.
 
-    Not synchronized. A lost update can only leave an older stamp on disk, and
-    an older stamp makes the next wake decide it is current and run. Every race
-    here costs at most one redundant turn; none of them can drop a wake.
-
-    Claiming repairs a corrupt stamp file, so this is the only place a problem
-    with it can be observed. The reason is returned rather than swallowed.
+    Called only while holding the wake lock, and only after a turn that
+    succeeded. A failed turn deliberately records nothing: it processed no
+    prompt, so it must not license an older wake to skip.
     """
-    current, reason = read_generation(path)
+    current, _reason = read_completed_stamp(path)
     if stamp > current:
         _atomic_write(path, f"{stamp}\n")
-    return reason
 
 
 def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[str]:
@@ -431,7 +429,7 @@ def run_wake(
     thread_path = state_dir / f"{watcher_id}.codex-thread"
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
-    generation_path = state_dir / f"{watcher_id}.codex-wake.generation"
+    completed_path = state_dir / f"{watcher_id}.codex-wake.completed"
 
     if dry_run:
         thread_id, ignored_reason = read_thread_id(thread_path)
@@ -450,14 +448,9 @@ def run_wake(
         return 2
 
     with log_handle:
-        # Claim a stamp before contending for the lock, so a wake that starts
-        # later can be recognized as newer by one that is still waiting. The
-        # read here is also the only chance to report a corrupt stamp file,
-        # since claiming repairs it.
+        # Taken before contending for the lock, so ordering between wakes
+        # reflects when each was triggered rather than when each won the lock.
         my_stamp = time.time_ns()
-        stamp_reason = record_generation(generation_path, my_stamp)
-        if stamp_reason:
-            _log(log_handle, stamp_reason)
 
         try:
             lock_handle = lock_path.open("w", encoding="utf-8")
@@ -499,17 +492,21 @@ def run_wake(
                 )
                 return EXIT_LOCK_TIMEOUT
 
-            # Skip a turn this wake has been superseded for. Each bridge prompt
-            # is a full PR snapshot, so a newer waiting wake strictly covers an
-            # older one. Deciding wrong here only costs a redundant turn.
-            newest, stamp_reason = read_generation(generation_path)
+            # Skip only against a newer wake that has DEMONSTRABLY finished.
+            # A start stamp is not proof that a successor exists: a wake can
+            # stamp itself and be killed before ever taking the lock, and
+            # skipping for it would drop both prompts. This file is written
+            # under the lock after a successful turn and read here under the
+            # same lock, so a skip means a wake triggered after this one has
+            # already processed a strictly newer snapshot of the same PR.
+            completed, stamp_reason = read_completed_stamp(completed_path)
             if stamp_reason:
                 _log(log_handle, stamp_reason)
-            if newest > my_stamp:
+            if completed > my_stamp:
                 _log(
                     log_handle,
-                    "superseded by a newer wake while waiting for the lock; "
-                    "skipping this turn",
+                    "a newer wake already completed a turn while this one "
+                    "waited for the lock; skipping",
                 )
                 return 0
 
@@ -523,6 +520,8 @@ def run_wake(
                 codex_bin=codex_bin,
                 log_handle=log_handle,
             )
+            if result.exit_code == 0:
+                record_completed_stamp(completed_path, my_stamp)
             _log(log_handle, f"wake complete exit={result.exit_code}")
             return result.exit_code
 

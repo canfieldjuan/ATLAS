@@ -72,7 +72,7 @@ leave a window where the same silence is possible.
 
 Ownership lane: dev-workflow/codex-wake-resume
 Slice phase: Workflow/process
-Max files: 9
+Max files: 10
 
 1. Add `scripts/codex_wake_run.py`: reads the wake prompt on stdin, resumes a
    persisted Codex thread for that watcher id when one exists, otherwise starts
@@ -157,11 +157,21 @@ Max files: 9
   - A wake that never gets the lock exits non-zero instead of reporting a
     success it did not perform -- settled by
     `tests/test_codex_wake_run.py::test_lock_timeout_reports_failure_rather_than_dropping_the_wake`.
-  - A wake superseded by a newer one skips its turn, and every failure of the
-    stamp file costs a redundant turn rather than a dropped wake -- settled by
-    `tests/test_codex_wake_run.py::test_a_superseded_wake_skips_its_turn`,
-    `::test_an_unreadable_generation_file_makes_the_wake_run`, and
-    `::test_read_generation_degrades_to_zero_and_says_why`.
+  - A wake skips only against a newer wake that has DEMONSTRABLY completed a
+    turn, so a successor killed before it took the lock cannot suppress it --
+    settled by
+    `tests/test_codex_wake_run.py::test_a_wake_skips_only_after_a_newer_one_completed`,
+    `::test_a_newer_wake_that_never_ran_does_not_suppress_this_one`, and
+    `::test_a_failed_newer_turn_does_not_license_a_skip`.
+  - Every failure of the completion stamp costs a redundant turn rather than a
+    dropped wake -- settled by
+    `tests/test_codex_wake_run.py::test_an_unreadable_completion_stamp_makes_the_wake_run`
+    and `::test_read_completed_stamp_degrades_to_zero_and_says_why`.
+  - The real-entrypoint smoke actually runs in CI, rather than being skipped by
+    a marker -- settled by `tests/test_codex_wake_end_to_end.py` carrying no
+    pytest marker, and by its enrollment in
+    `.github/workflows/codex_wake_bridge_checks.yml` both as a path filter and
+    in the explicit test list.
   - Codex exiting 0 without naming a thread is treated as a protocol failure,
     not success -- settled by
     `tests/test_codex_wake_run.py::test_zero_exit_without_a_thread_event_is_a_protocol_failure`
@@ -243,6 +253,8 @@ stored thread id. That is an admission boundary.
   wake record.
 - `tests/test_codex_wake_end_to_end.py` (new) -- the bridge through the
   installed runner, faking only the Codex binary.
+- `.github/workflows/codex_wake_bridge_checks.yml` -- run the two new test
+  files, and trigger on the runner and its tests.
 - `tests/test_install_codex_wake_bridge.py` -- runner install and drift.
 - `tests/test_audit_pr_watcher_safety.py` -- runner merge-authority scan.
 - `docs/long_running_session_watcher_handoff.md` -- the wake command operators
@@ -318,11 +330,16 @@ exits 0, because a wake already in flight will observe the same PR state.
   made strand-free by adding checks; waiting removes the second file, so the
   lock is the only shared state and the invariant is one line: every wake that
   acquires the lock runs the prompt it was given.
-- Burst coalescing is a stamp, not a queue. A wake records its start time
-  before contending, and skips its turn if a newer wake has stamped itself by
-  the time it gets the lock. Every failure mode of that file -- lost update,
-  unreadable, corrupt, clock jump -- reads as "not superseded", so it costs a
-  redundant turn and can never drop a wake. That asymmetry is the whole design.
+- Burst coalescing skips on proof of completion, not on proof of intent. An
+  earlier version compared start stamps, which was wrong: a wake can record
+  itself and be killed before it ever takes the lock, and an older wake
+  skipping for that ghost would drop both prompts. The recorded value is now
+  the start stamp of the last wake that FINISHED a turn, written under the lock
+  after a successful turn and read under the same lock. A skip therefore means
+  a wake triggered later already processed a strictly newer snapshot of the
+  same PR. A failed turn records nothing, because it processed nothing. Every
+  failure of that file -- unreadable, corrupt, clock jump -- reads as "no newer
+  completion", so it costs a redundant turn and cannot drop a wake.
 - Quarantine is keyed to a confirmed missing-session signature on stderr, not
   to a nonzero exit. Codex reports it as
   `no rollout found for thread id <uuid> (code -32600)`, which is why stderr is
@@ -350,7 +367,7 @@ merge path.
   above are the starting point for choosing that threshold. Tracked as
   follow-up, not fixed here, because picking a ceiling needs data from a real
   multi-day arc rather than a three-turn probe.
-- Cross-host stamps. The supersede stamp uses `time.time_ns()`, which is
+- Cross-host stamps. The completion stamp uses `time.time_ns()`, which is
   comparable only on one machine. Every consumer of a given watcher id runs on
   the operator's host today, so this is correct as built; a multi-host watcher
   would need a different ordering source.
