@@ -72,6 +72,7 @@ leave a window where the same silence is possible.
 
 Ownership lane: dev-workflow/codex-wake-resume
 Slice phase: Workflow/process
+Max files: 8
 
 1. Add `scripts/codex_wake_run.py`: reads the wake prompt on stdin, resumes a
    persisted Codex thread for that watcher id when one exists, otherwise starts
