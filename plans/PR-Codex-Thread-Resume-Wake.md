@@ -38,8 +38,8 @@ installed, tested runner that resumes one persistent Codex thread per watcher.
 thing that is installed today: "Do not recreate a watcher from ad hoc local
 source."
 
-**Over the 400 LOC budget, deliberately.** The diff is 1267 diff lines, of
-which 459 are tests and 325 are this plan. Runtime code is 335 lines across
+**Over the 400 LOC budget, deliberately.** The diff is 1509 diff lines, of
+which 690 are tests and 357 are this plan. Runtime code is 413 lines across
 three files.
 The reason this slice is test-heavy rather than divisible is the defect itself:
 the thing being replaced failed silently for months because no test pinned the
@@ -340,18 +340,20 @@ Run on this branch before push:
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +447 |
-| `plans/PR-Codex-Thread-Resume-Wake.md` | +338 |
-| `scripts/codex_wake_run.py` | +360 |
+| `tests/test_codex_wake_run.py` | +555 |
+| `scripts/codex_wake_run.py` | +389 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | +357 |
+| `tests/test_audit_pr_watcher_safety.py` | +89 |
+| `docs/long_running_session_watcher_handoff.md` | +47 / -2 |
 | `tests/test_install_codex_wake_bridge.py` | +46 |
-| `docs/long_running_session_watcher_handoff.md` | +42 / -2 |
-| `tests/test_audit_pr_watcher_safety.py` | +28 |
 | `scripts/install_codex_wake_bridge.py` | +13 |
-| `scripts/audit_pr_watcher_safety.py` | +1 |
-| **Total** | **1267** |
+| `scripts/audit_pr_watcher_safety.py` | +11 |
+| **Total** | **1509** |
 
-Over the 400 LOC soft cap. Runtime code is 374 lines (runner 360, installer 13,
-audit 1); the remainder is tests (521), this plan (338), and docs (42).
+Over the 400 LOC soft cap. Runtime code is 413 lines (runner 389, installer 13,
+audit 11); the remainder is tests (690), this plan (357), and docs (47). The
+growth from the first push is the four Codex review findings and their
+regression tests, all fixed rather than waived.
 Justified in *Why this slice exists*: the defect being fixed was invisible
 precisely because nothing pinned the invoked argv, so the tests are the fix,
 not packaging around it.
