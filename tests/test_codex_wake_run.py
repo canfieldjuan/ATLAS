@@ -769,6 +769,158 @@ def test_hook_execs_normally_when_the_parent_is_still_alive(
     assert evidence.read_text(encoding="utf-8") == "ran"
 
 
+def test_unusable_thread_path_refuses_before_launching_codex(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a turn whose id cannot be kept must not happen at all.
+
+    Discovering it afterwards means Codex has already edited files while
+    nothing can resume the arc, so every retry repeats that work.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "slice-123.codex-thread").mkdir()  # not a regular file
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_STATE_UNUSABLE
+
+    assert not record.exists(), "Codex must not be launched at all"
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "refusing to start a turn" in log_text
+    assert "safe to retry" in log_text
+
+
+def test_thread_path_problem_accepts_a_usable_path(tmp_path: Path) -> None:
+    """The other side of that boundary, and it must leave no probe behind."""
+    assert runner.thread_path_problem(tmp_path / "sub" / "w.codex-thread") is None
+    assert list((tmp_path / "sub").iterdir()) == []
+
+
+def test_thread_path_problem_names_a_directory(tmp_path: Path) -> None:
+    target = tmp_path / "w.codex-thread"
+    target.mkdir()
+
+    problem = runner.thread_path_problem(target)
+
+    assert problem is not None and "not a regular file" in problem
+
+
+def test_a_persist_failure_mid_turn_is_a_controlled_outcome(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the path breaks after launch, the turn still finishes cleanly.
+
+    Raising out of a running turn would abandon work that is already having
+    effects, and leave a traceback instead of an actionable exit code.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+
+    def exploding_write(path: Path, thread_id: str) -> None:
+        raise OSError("the state directory went away")
+
+    monkeypatch.setattr(runner, "write_thread_id", exploding_write)
+
+    assert _run(tmp_path, fake=fake) == runner.EXIT_STATE_UNUSABLE
+
+    assert record.exists(), "the turn itself still ran to completion"
+    log_text = (tmp_path / "state" / "slice-123.codex-wake.log").read_text(
+        encoding="utf-8"
+    )
+    assert "do not retry blindly" in log_text
+
+
+def test_supervisor_is_interposed_between_the_runner_and_codex(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The parent-death signal reaches one pid; a process group covers a tree."""
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    captured: dict[str, object] = {}
+    real_popen = runner.subprocess.Popen
+
+    def recording_popen(argv: list[str], **kwargs: object) -> object:
+        captured.setdefault("argv", argv)
+        captured.setdefault("kwargs", kwargs)
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", recording_popen)
+
+    assert _run(tmp_path, fake=fake) == 0
+
+    argv = captured["argv"]
+    assert "--supervise" in argv, "codex must be started under the supervisor"
+    assert argv[argv.index("--supervise") + 1] == str(os.getpid())
+    assert "--" in argv and argv[argv.index("--") + 1] == str(fake)
+    # The lock descriptor is handed down so the group holds it.
+    assert captured["kwargs"]["pass_fds"], "the wake lock fd must be inherited"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--supervise"],
+        ["--supervise", "1"],
+        ["--supervise", "1", "--"],
+        ["--supervise", "not-a-pid", "--", "true"],
+        ["--supervise", "1", "no-dashes", "true"],
+    ],
+)
+def test_supervisor_entrypoint_rejects_a_malformed_invocation(
+    argv: list[str],
+) -> None:
+    assert runner.main(argv) == 2
+
+
+def test_supervise_rejects_an_empty_command() -> None:
+    assert runner.supervise([], expected_ppid=os.getpid()) == 2
+
+
+def test_supervisor_reports_a_missing_command_without_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """Run it as a real subprocess: setsid only works in a fresh process."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--supervise",
+            str(os.getpid()),
+            "--",
+            str(tmp_path / "definitely-not-here"),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "could not start" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_supervisor_runs_its_command_and_returns_its_exit_code(
+    tmp_path: Path,
+) -> None:
+    evidence = tmp_path / "ran.txt"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--supervise",
+            str(os.getpid()),
+            "--",
+            sys.executable,
+            "-c",
+            f"open({str(evidence)!r}, 'w').write('ran'); raise SystemExit(7)",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert evidence.read_text(encoding="utf-8") == "ran"
+    assert result.returncode == 7, "the command's exit code must propagate"
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 

@@ -176,6 +176,20 @@ Max files: 10
     it has been reparented -- settled by
     `tests/test_codex_wake_run.py::test_hook_refuses_to_exec_when_already_reparented`
     and the live-parent side `::test_hook_execs_normally_when_the_parent_is_still_alive`.
+  - Descendants Codex starts do not survive a killed runner either, because the
+    turn runs under a supervisor that leads its own process group and takes the
+    group down -- settled by
+    `tests/test_codex_wake_run.py::test_supervisor_is_interposed_between_the_runner_and_codex`,
+    `::test_supervisor_runs_its_command_and_returns_its_exit_code`, and a
+    before/after kill experiment recorded in Verification.
+  - A turn whose thread id could not be stored does not happen at all, so no
+    work is done that nothing can resume -- settled by
+    `tests/test_codex_wake_run.py::test_unusable_thread_path_refuses_before_launching_codex`,
+    `::test_thread_path_problem_names_a_directory`, and the usable side
+    `::test_thread_path_problem_accepts_a_usable_path`.
+  - A persistence failure that only appears mid-turn ends in a controlled exit
+    rather than a traceback out of running work -- settled by
+    `tests/test_codex_wake_run.py::test_a_persist_failure_mid_turn_is_a_controlled_outcome`.
   - A host without the kernel's parent-death signal logs that orphan protection
     is not in force rather than skipping it silently -- settled by
     `tests/test_codex_wake_run.py::test_parent_death_support_is_probed_in_the_parent`.
@@ -296,15 +310,36 @@ resume:  codex exec resume ID --json -c sandbox_mode="..." -   (cwd=repo_dir)
 ```
 
 `--json` makes stdout a JSONL event stream. The runner scans it for
-`thread.started` to capture `thread_id`, and for `turn.completed` to record the
-turn's usage. Events are echoed to `<state-dir>/<watcher-id>.codex-wake.log`
-with a timestamp, so the operator can see cost per wake instead of inferring it.
+`thread.started` to capture `thread_id`, for `turn.completed` to record the
+turn's usage, and for the final agent message. The thread id is written the
+moment that event is consumed, because Codex has already created the session by
+then. Events are echoed to `<state-dir>/<watcher-id>.codex-wake.log` with a
+timestamp, so the operator can see cost and outcome per wake.
 
-A non-blocking `flock` on `<state-dir>/<watcher-id>.codex-wake.lock` serializes
-wakes. Review bursts post several comments within seconds, and the webhook
-receiver fires per delivery; without the lock, one burst would start several
-Codex turns against the same thread. A wake that cannot take the lock logs and
-exits 0, because a wake already in flight will observe the same PR state.
+**Concurrency.** An `flock` on `<state-dir>/<watcher-id>.codex-wake.lock`
+serializes wakes. Review bursts post several comments within seconds and the
+webhook receiver fires per delivery, so several wakes can overlap. A wake that
+cannot take the lock immediately **waits** for it, up to `LOCK_WAIT_SECONDS`,
+and then runs its own prompt; it is not dropped and nothing is handed to
+another process. A wake that never gets the lock exits `EXIT_LOCK_TIMEOUT`
+rather than reporting a success it did not perform. There is no skip path and
+no prompt queue, so no state can suppress a wake.
+
+**Turn ownership.** Codex is started under a supervisor
+(`--supervise <runner pid> -- <codex argv>`), which calls `setsid` to lead its
+own process group and inherits the lock descriptor. Three properties follow.
+The kernel's parent-death signal stops the turn when the runner dies; the
+supervisor then kills its whole process group, so a shell or test runner Codex
+started underneath does not survive; and because the lock lives on the inherited
+open file description, it is not released while that group still holds it. The
+supervisor also compares its parent against the pid captured before the fork and
+exits rather than starting Codex if it has already been orphaned.
+
+**State before effects.** The thread path is checked for usability before Codex
+is launched, because a turn whose id cannot be stored does real work that
+nothing can resume. If it fails anyway mid-turn, the turn is allowed to finish
+and the runner reports `EXIT_STATE_UNUSABLE` instead of raising, and post-turn
+diagnostic writes never change a completed turn's outcome.
 
 ## Intentional
 
@@ -372,6 +407,19 @@ exits 0, because a wake already in flight will observe the same PR state.
   the pid captured before the fork and exits rather than starting Codex into
   an orphan. That check is not conditional on the kernel facility, because
   being orphaned is worth refusing either way.
+- Codex runs under a supervisor rather than being spawned directly. The
+  parent-death signal reaches exactly one pid, so a shell or test runner Codex
+  starts underneath outlives it; passing the lock descriptor does not close
+  that either, because an intermediate process that closes inherited
+  descriptors breaks the chain. The supervisor leads its own process group,
+  holds the lock descriptor, and takes the group down when the runner dies, so
+  nothing from a turn outlives the lock that covered it. If it cannot create
+  its own group it says so and falls back to stopping the immediate child,
+  rather than aiming a group kill at the wrong target.
+- Unusable state is rejected before launch, not discovered afterwards. A turn
+  whose thread id cannot be stored still edits files, pushes, and comments, and
+  nothing can resume it, so every retry repeats that work. The check runs ahead
+  of the turn; the residual mid-turn case ends in a controlled exit code.
 - Post-turn writes are diagnostics and never change the turn's outcome. By the
   time the agent message is recorded, Codex may already have edited files,
   pushed, or commented. Failing the wake because that copy could not be written

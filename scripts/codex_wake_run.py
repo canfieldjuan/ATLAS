@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -53,6 +54,9 @@ EXIT_NO_THREAD_EVENT = 76
 # Exit code used by the pre-exec hook when the runner died before Codex was
 # started. Never seen by the runner itself, which is gone by then.
 EXIT_PARENT_GONE = 77
+# Exit code when the runner cannot keep the state a turn would produce.
+# Raised before launch where possible, so retrying is safe.
+EXIT_STATE_UNUSABLE = 78
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
@@ -94,6 +98,69 @@ def parent_death_signal_support() -> tuple[Any, str | None]:
         return ctypes.CDLL("libc.so.6", use_errno=True), None
     except (OSError, ImportError) as exc:
         return None, f"could not load libc for the parent-death signal: {exc}"
+
+
+def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
+    """Run Codex as the leader of its own process group and take the group down.
+
+    The runner cannot reap Codex's descendants itself. The parent-death signal
+    reaches exactly one pid, and a shell or test runner Codex starts underneath
+    survives it; the wake lock is then released while that descendant is still
+    editing the checkout, so the next wake can overlap it. Passing the lock
+    descriptor does not close the gap either, because an intermediate process
+    that closes inherited descriptors breaks the chain.
+
+    So a supervisor sits between them. It calls setsid, which makes it the
+    leader of a new process group that every descendant inherits, and it holds
+    the inherited wake-lock descriptor. When the runner dies it is signalled
+    and kills the entire group before exiting, which releases the lock only
+    once nothing from this turn is left.
+    """
+    command = list(codex_argv)
+    if not command:
+        print("supervisor was given no command to run", file=sys.stderr)
+        return 2
+
+    own_group = True
+    try:
+        os.setsid()
+    except OSError as exc:
+        # Already a group leader, or not permitted. Without our own group the
+        # take-down below could reach processes that are not part of this turn,
+        # so it is disabled rather than aimed at the wrong target. The death
+        # signal below still covers the immediate Codex process.
+        own_group = False
+        print(f"supervisor could not create its own process group: {exc}", file=sys.stderr)
+    libc, _reason = parent_death_signal_support()
+    if libc is not None:
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+    if os.getppid() != expected_ppid:
+        # Orphaned in the window before the signal was registered.
+        os._exit(EXIT_PARENT_GONE)
+
+    try:
+        child = subprocess.Popen(command)
+    except OSError as exc:
+        print(f"supervisor could not start {command[0]}: {exc}", file=sys.stderr)
+        return 2
+
+    def _take_down_the_group(_signum: int, _frame: Any) -> None:
+        # SIGKILL because anything here may be mid-write; the point is that
+        # nothing from this turn outlives the lock. stderr is the runner's
+        # wake log, so a failure to tear down is still recorded.
+        try:
+            if own_group:
+                os.killpg(0, signal.SIGKILL)
+            else:
+                child.kill()
+        except OSError as exc:
+            print(f"supervisor could not stop the turn: {exc}", file=sys.stderr)
+        os._exit(EXIT_PARENT_GONE)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, _take_down_the_group)
+
+    return child.wait()
 
 
 def make_die_with_parent(expected_ppid: int) -> Any:
@@ -204,6 +271,32 @@ def write_thread_id(path: Path, thread_id: str) -> None:
     _atomic_write(path, thread_id + "\n")
 
 
+def thread_path_problem(path: Path) -> str | None:
+    """Say why the thread id could not be stored at `path`, before launching.
+
+    Checked ahead of the turn on purpose. Discovering it afterwards means
+    Codex has already edited files, pushed, or commented, and there is no
+    resumable id to show for it, so every retry repeats that work.
+    """
+    if path.exists() and not path.is_file():
+        return f"{path} exists but is not a regular file"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return f"cannot create the state directory {path.parent}: {exc}"
+    probe = path.with_name(f".{path.name}.probe.{os.getpid()}")
+    try:
+        probe.write_text("", encoding="utf-8")
+    except OSError as exc:
+        return f"cannot write beside {path}: {exc}"
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+        except OSError:
+            return f"cannot clean up a probe file beside {path}"
+    return None
+
+
 def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[str]:
     """Build the Codex argv for a fresh or resumed wake.
 
@@ -311,6 +404,7 @@ def run_one_turn(
     sandbox: str,
     codex_bin: str,
     log_handle: Any,
+    lock_fd: int | None = None,
 ) -> TurnResult:
     """Spend exactly one Codex turn. The caller must already hold the wake lock."""
     # Read the thread id under the lock. Reading it before acquiring the lock
@@ -322,6 +416,26 @@ def run_one_turn(
     thread_id, ignored_reason = read_thread_id(thread_path)
     if ignored_reason:
         _log(log_handle, f"starting fresh thread: {ignored_reason}")
+
+    if shutil.which(codex_bin) is None and not os.access(codex_bin, os.X_OK):
+        # Resolved here rather than at the spawn, because the supervisor now
+        # sits in between and a failure inside it would surface as its exit
+        # code instead of a clear message about the binary.
+        _log(log_handle, f"codex binary not found or not executable: {codex_bin}")
+        print(f"codex binary not found: {codex_bin}", file=sys.stderr)
+        return TurnResult(2, binary_missing=True)
+
+    state_problem = thread_path_problem(thread_path)
+    if state_problem:
+        # Refuse before Codex can do anything. A turn whose id cannot be kept
+        # is worse than no turn: the work happens and no one can resume it.
+        _log(
+            log_handle,
+            f"refusing to start a turn: {state_problem}. Codex was not "
+            "launched, so nothing was changed and this is safe to retry.",
+        )
+        print(f"cannot store the thread id: {state_problem}", file=sys.stderr)
+        return TurnResult(EXIT_STATE_UNUSABLE)
 
     argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
     mode = "resume" if thread_id else "fresh"
@@ -339,16 +453,26 @@ def run_one_turn(
     # been reparented while it was setting the death signal.
     die_with_parent = make_die_with_parent(os.getpid())
 
+    persist_failure: list[str] = []
+
     def _persist(new_id: str) -> None:
-        if new_id != thread_id:
+        if new_id == thread_id:
+            return
+        try:
             write_thread_id(thread_path, new_id)
+        except OSError as exc:
+            # Raising here would abandon a turn that is already running and
+            # already having effects. Record it and report a controlled
+            # outcome once the turn is over.
+            persist_failure.append(f"could not record thread id {new_id}: {exc}")
+        else:
             _log(log_handle, f"recorded thread id {new_id}")
 
     prompt_fd, prompt_name = tempfile.mkstemp(prefix="codex-wake-", suffix=".txt")
     prompt_file = Path(prompt_name)
-    # Codex reports a missing session on stderr, so it is captured rather than
-    # streamed straight to the log: the text has to be inspected before the
-    # stored id can be judged dead. It is appended to the log either way.
+    # Codex reports a missing session on stderr, so it is captured to a file
+    # rather than streamed straight to the log: the text has to be inspected
+    # before the stored id can be judged dead. It reaches the log either way.
     stderr_fd, stderr_name = tempfile.mkstemp(prefix="codex-wake-err-", suffix=".txt")
     stderr_file = Path(stderr_name)
     stderr_text = ""
@@ -358,14 +482,27 @@ def run_one_turn(
         with prompt_file.open("r", encoding="utf-8") as stdin_handle:
             with os.fdopen(stderr_fd, "w", encoding="utf-8") as stderr_handle:
                 try:
+                    supervisor_argv = [
+                        sys.executable,
+                        str(Path(__file__).resolve()),
+                        "--supervise",
+                        str(os.getpid()),
+                        "--",
+                        *argv,
+                    ]
                     process = subprocess.Popen(
-                        argv,
+                        supervisor_argv,
                         cwd=str(repo_dir),
                         stdin=stdin_handle,
                         stdout=subprocess.PIPE,
                         stderr=stderr_handle,
                         text=True,
                         preexec_fn=die_with_parent,
+                        # The wake lock is an open file description, which fork
+                        # and exec preserve. The supervisor holds it for the
+                        # whole group, so the lock is released only once every
+                        # descendant of this turn is gone.
+                        pass_fds=() if lock_fd is None else (lock_fd,),
                     )
                 except FileNotFoundError:
                     _log(log_handle, f"codex binary not found: {codex_bin}")
@@ -447,6 +584,16 @@ def run_one_turn(
             _log(log_handle, f"full agent message written to {last_path}")
     else:
         _log(log_handle, "no agent message in this turn")
+
+    for failure in persist_failure:
+        _log(
+            log_handle,
+            f"{failure}. The turn ran, so its work is done, but nothing can "
+            "resume it; do not retry blindly.",
+        )
+    if persist_failure:
+        _log(log_handle, f"turn complete exit={EXIT_STATE_UNUSABLE}")
+        return TurnResult(EXIT_STATE_UNUSABLE)
 
     if exit_code == 0 and observed_thread is None:
         # Codex claimed success but never named a thread, so nothing was
@@ -546,6 +693,7 @@ def run_wake(
                 sandbox=sandbox,
                 codex_bin=codex_bin,
                 log_handle=log_handle,
+                lock_fd=lock_handle.fileno(),
             )
             _log(log_handle, f"wake complete exit={result.exit_code}")
             return result.exit_code
@@ -576,6 +724,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    raw = list(sys.argv[1:] if argv is None else argv)
+    if raw[:1] == ["--supervise"]:
+        # Internal entrypoint: `--supervise <runner pid> -- <codex argv...>`.
+        # Not part of the operator surface, so it is handled before argparse.
+        head, separator, command = raw[1:2], raw[2:3], raw[3:]
+        if separator != ["--"] or not command:
+            print("usage: --supervise <ppid> -- <command...>", file=sys.stderr)
+            return 2
+        try:
+            expected = int(head[0])
+        except (IndexError, ValueError):
+            print(f"invalid supervisor parent pid: {head}", file=sys.stderr)
+            return 2
+        return supervise(command, expected_ppid=expected)
+
     args = _build_parser().parse_args(argv)
 
     if not valid_watcher_id(args.watcher_id):
