@@ -675,7 +675,7 @@ def test_codex_child_is_asked_to_die_with_the_runner(
 
     assert _run(tmp_path, fake=fake) == 0
 
-    assert captured["preexec_fn"] is runner._die_with_parent
+    assert callable(captured["preexec_fn"]), "a pre-exec hook must be installed"
 
 
 def test_parent_death_support_is_probed_in_the_parent(
@@ -701,12 +701,14 @@ def test_parent_death_support_is_probed_in_the_parent(
     assert _run(tmp_path, fake=fake, state_dir=tmp_path / "state") == 0
 
     assert record.exists(), "the wake must still run without the kernel feature"
-    assert captured["preexec_fn"] is None
+    # The hook is installed regardless: the orphan check does not depend on the
+    # kernel facility, only the death signal does.
+    assert callable(captured["preexec_fn"])
     log_text = (tmp_path / "state" / "slice-123.codex-wake.log").read_text(
         encoding="utf-8"
     )
     assert "no libc here" in log_text
-    assert "could leave this Codex process running" in log_text
+    assert "cannot signal this Codex process" in log_text
 
 
 def test_die_with_parent_sets_the_parent_death_signal() -> None:
@@ -721,11 +723,50 @@ def test_die_with_parent_sets_the_parent_death_signal() -> None:
     )
     result = subprocess.run(
         [sys.executable, "-c", probe],
-        preexec_fn=runner._die_with_parent,
+        preexec_fn=runner.make_die_with_parent(os.getpid()),
         check=False,
     )
 
     assert result.returncode == 0, "the child should carry PDEATHSIG=SIGTERM"
+
+
+def test_hook_refuses_to_exec_when_already_reparented(tmp_path: Path) -> None:
+    """Regression for the window between fork and setting the death signal.
+
+    If the runner dies in that window the kernel has already reparented the
+    child, and setting the flag afterwards delivers nothing because it is not
+    retroactive. The hook compares against the pid captured before the fork
+    and leaves rather than exec'ing Codex into an orphan.
+    """
+    evidence = tmp_path / "exec_happened.txt"
+    # A pid that is not this child's parent stands in for "already reparented".
+    hook = runner.make_die_with_parent(expected_ppid=os.getpid() + 1_000_000)
+
+    result = subprocess.run(
+        [sys.executable, "-c", f"open({str(evidence)!r}, 'w').write('ran')"],
+        preexec_fn=hook,
+        check=False,
+    )
+
+    assert not evidence.exists(), "the child must not reach exec once orphaned"
+    assert result.returncode != 0
+
+
+def test_hook_execs_normally_when_the_parent_is_still_alive(
+    tmp_path: Path,
+) -> None:
+    """The other side of that boundary: a live parent must not block exec."""
+    evidence = tmp_path / "exec_happened.txt"
+    hook = runner.make_die_with_parent(expected_ppid=os.getpid())
+
+    result = subprocess.run(
+        [sys.executable, "-c", f"open({str(evidence)!r}, 'w').write('ran')"],
+        preexec_fn=hook,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert evidence.read_text(encoding="utf-8") == "ran"
 
 
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:

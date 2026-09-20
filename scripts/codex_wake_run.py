@@ -50,6 +50,9 @@ EXIT_LOCK_TIMEOUT = 75
 # id there is nothing to resume, so reporting success would silently forfeit
 # the continuity this runner exists to provide.
 EXIT_NO_THREAD_EVENT = 76
+# Exit code used by the pre-exec hook when the runner died before Codex was
+# started. Never seen by the runner itself, which is gone by then.
+EXIT_PARENT_GONE = 77
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
@@ -93,20 +96,33 @@ def parent_death_signal_support() -> tuple[Any, str | None]:
         return None, f"could not load libc for the parent-death signal: {exc}"
 
 
-def _die_with_parent() -> None:
-    """Ask the kernel to signal this child when its parent dies.
+def make_die_with_parent(expected_ppid: int) -> Any:
+    """Build the pre-exec hook that binds this child to the runner's life.
 
-    Without this the Codex child outlives a killed runner. The runner's death
+    Without it the Codex child outlives a killed runner. The runner's death
     releases the wake lock, so a later wake can acquire it and start a second
     turn against the same thread and the same checkout while the orphan is
-    still editing files. A signal handler cannot cover it, because the parent
-    may be SIGKILLed; PR_SET_PDEATHSIG is enforced by the kernel and does.
+    still editing files. A signal handler cannot cover that, because the
+    runner may be SIGKILLed; PR_SET_PDEATHSIG is enforced by the kernel.
 
-    Runs after fork, so the caller has already confirmed libc is loadable.
+    The flag alone leaves a window. It is set after fork, and if the runner
+    dies in between, the kernel has already reparented this child and setting
+    the flag afterwards delivers nothing, because it is not retroactive. So
+    the hook also compares its parent against the pid captured before the
+    fork and leaves if it has already been orphaned. That check matters even
+    where the kernel facility is unavailable, so it is not conditional on it.
     """
-    libc, _reason = parent_death_signal_support()
-    if libc is not None:
-        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+
+    def _hook() -> None:
+        libc, _reason = parent_death_signal_support()
+        if libc is not None:
+            libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+        if os.getppid() != expected_ppid:
+            # Already reparented: no death signal is coming, and the lock this
+            # child was covered by is gone. Leave before exec'ing Codex.
+            os._exit(EXIT_PARENT_GONE)
+
+    return _hook
 
 
 def _log(handle: Any, message: str) -> None:
@@ -316,9 +332,12 @@ def run_one_turn(
     if pdeath_reason:
         _log(
             log_handle,
-            f"{pdeath_reason}; a killed runner could leave this Codex process "
-            "running against the checkout",
+            f"{pdeath_reason}; the orphan check still applies, but a runner "
+            "killed mid-turn cannot signal this Codex process",
         )
+    # Captured before the fork: the hook compares against it to detect having
+    # been reparented while it was setting the death signal.
+    die_with_parent = make_die_with_parent(os.getpid())
 
     def _persist(new_id: str) -> None:
         if new_id != thread_id:
@@ -346,7 +365,7 @@ def run_one_turn(
                         stdout=subprocess.PIPE,
                         stderr=stderr_handle,
                         text=True,
-                        preexec_fn=_die_with_parent if _libc is not None else None,
+                        preexec_fn=die_with_parent,
                     )
                 except FileNotFoundError:
                     _log(log_handle, f"codex binary not found: {codex_bin}")

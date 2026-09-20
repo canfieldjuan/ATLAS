@@ -171,6 +171,11 @@ Max files: 10
     `tests/test_codex_wake_run.py::test_codex_child_is_asked_to_die_with_the_runner`
     and `::test_die_with_parent_sets_the_parent_death_signal`, and by a
     before/after experiment recorded in Verification.
+  - A runner that dies in the window between fork and setting the death signal
+    still does not leak a Codex process, because the hook refuses to exec once
+    it has been reparented -- settled by
+    `tests/test_codex_wake_run.py::test_hook_refuses_to_exec_when_already_reparented`
+    and the live-parent side `::test_hook_execs_normally_when_the_parent_is_still_alive`.
   - A host without the kernel's parent-death signal logs that orphan protection
     is not in force rather than skipping it silently -- settled by
     `tests/test_codex_wake_run.py::test_parent_death_support_is_probed_in_the_parent`.
@@ -360,6 +365,13 @@ exits 0, because a wake already in flight will observe the same PR state.
   SIGKILLed and a handler cannot run then. The probe for that facility happens
   in the parent: the pre-exec hook runs after fork with no safe way to report,
   so a missing facility would be silent exactly where it matters.
+- The flag alone is not enough, so the hook also checks its parent. Setting
+  the death signal happens after fork, and a runner that dies in between has
+  already caused the kernel to reparent the child; setting the flag then
+  delivers nothing, because it is not retroactive. The hook compares against
+  the pid captured before the fork and exits rather than starting Codex into
+  an orphan. That check is not conditional on the kernel facility, because
+  being orphaned is worth refusing either way.
 - Post-turn writes are diagnostics and never change the turn's outcome. By the
   time the agent message is recorded, Codex may already have edited files,
   pushed, or commented. Failing the wake because that copy could not be written
