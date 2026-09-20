@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import json
+import os
 from pathlib import Path
 import stat
 import subprocess
@@ -617,6 +618,114 @@ def test_zero_exit_with_a_malformed_thread_id_is_a_protocol_failure(
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 
     assert _run(tmp_path, fake=fake) == runner.EXIT_NO_THREAD_EVENT
+
+
+def test_atomic_write_flushes_the_file_and_its_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The thread id must survive a host restart, not only process death.
+
+    `os.replace` makes the swap atomic but says nothing about when the bytes or
+    the directory entry reach disk. Without both flushes a power loss can leave
+    the id missing and the next wake starts a second thread.
+    """
+    synced: list[str] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        try:
+            synced.append("dir" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file")
+        except OSError:  # pragma: no cover - defensive
+            synced.append("unknown")
+        real_fsync(fd)
+
+    monkeypatch.setattr(runner.os, "fsync", recording_fsync)
+    runner._atomic_write(tmp_path / "sub" / "value", "payload\n")
+
+    assert (tmp_path / "sub" / "value").read_text(encoding="utf-8") == "payload\n"
+    assert "file" in synced, "the staged file must be flushed"
+    assert "dir" in synced, "the rename is directory metadata and needs its own flush"
+
+
+def test_atomic_write_leaves_no_staged_file(tmp_path: Path) -> None:
+    target = tmp_path / "value"
+    runner._atomic_write(target, "payload\n")
+
+    assert [q.name for q in tmp_path.iterdir()] == ["value"]
+
+
+def test_codex_child_is_asked_to_die_with_the_runner(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A killed runner releases the lock, so its child must not outlive it.
+
+    Otherwise an orphan keeps editing the checkout while a later wake acquires
+    the lock and starts another turn against the same thread. A signal handler
+    cannot cover a SIGKILLed parent; the kernel's parent-death signal can.
+    """
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    captured: dict[str, object] = {}
+    real_popen = runner.subprocess.Popen
+
+    def recording_popen(argv: list[str], **kwargs: object) -> object:
+        captured["preexec_fn"] = kwargs.get("preexec_fn")
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", recording_popen)
+
+    assert _run(tmp_path, fake=fake) == 0
+
+    assert captured["preexec_fn"] is runner._die_with_parent
+
+
+def test_parent_death_support_is_probed_in_the_parent(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unavailable kernel feature must be logged, not silently skipped.
+
+    The probe cannot report from the pre-exec hook, which runs after fork.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    monkeypatch.setattr(
+        runner, "parent_death_signal_support", lambda: (None, "no libc here")
+    )
+    captured: dict[str, object] = {}
+    real_popen = runner.subprocess.Popen
+
+    def recording_popen(argv: list[str], **kwargs: object) -> object:
+        captured["preexec_fn"] = kwargs.get("preexec_fn")
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr(runner.subprocess, "Popen", recording_popen)
+
+    assert _run(tmp_path, fake=fake, state_dir=tmp_path / "state") == 0
+
+    assert record.exists(), "the wake must still run without the kernel feature"
+    assert captured["preexec_fn"] is None
+    log_text = (tmp_path / "state" / "slice-123.codex-wake.log").read_text(
+        encoding="utf-8"
+    )
+    assert "no libc here" in log_text
+    assert "could leave this Codex process running" in log_text
+
+
+def test_die_with_parent_sets_the_parent_death_signal() -> None:
+    """Exercised in a real child, because it only takes effect after fork."""
+    probe = (
+        "import ctypes, os, signal, sys;"
+        "libc = ctypes.CDLL('libc.so.6', use_errno=True);"
+        # PR_GET_PDEATHSIG == 2; read it back into a buffer.
+        "out = ctypes.c_int(0);"
+        "rc = libc.prctl(2, ctypes.byref(out), 0, 0, 0);"
+        "sys.exit(0 if rc == 0 and out.value == int(signal.SIGTERM) else 1)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        preexec_fn=runner._die_with_parent,
+        check=False,
+    )
+
+    assert result.returncode == 0, "the child should carry PDEATHSIG=SIGTERM"
 
 
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:

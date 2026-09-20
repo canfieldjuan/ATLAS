@@ -126,13 +126,17 @@ the bridge only writes handoff files. To launch a local command, pass
 session's watcher config. Use the installed runner, not a bare `codex exec`:
 
 ```bash
-CODEX_WAKE_COMMAND="/home/<you>/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir /home/<you>/path/to/repo"
+CODEX_WAKE_COMMAND="'/home/<you>/.local/bin/atlas-codex-wake-run' --watcher-id '<session-id>' --repo-dir '/home/<you>/path/to/repo'"
 ```
 
-Use absolute paths here. The bridge does not run this through a shell: it
-`shlex.split`s the value and hands the argv straight to `subprocess.run`, so a
-`${HOME}` or `~` in the command stays literal and the wake dies with
-`FileNotFoundError` instead of starting a Codex turn.
+Use absolute paths, and quote each one individually as shown. The bridge does
+not run this through a shell: it `shlex.split`s the value and hands the argv
+straight to `subprocess.run`. Two consequences follow. A `${HOME}` or `~` stays
+literal, so the wake dies with `FileNotFoundError` instead of starting a Codex
+turn. And the outer quotes around the whole value do not survive to protect the
+individual arguments, so a repo or worktree path containing a space splits into
+separate argv entries and the runner rejects the stray ones. The inner quotes
+are what keep such a path intact.
 
 The command receives the generated prompt on stdin. The prompt text is not
 interpolated into a shell command. Do not use no-approval/full-filesystem Codex
@@ -169,11 +173,14 @@ Verify wiring without spending tokens:
 ~/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <repo-dir> --dry-run
 ```
 
-Each wake appends its mode, argv, and the turn's token usage to
-`~/.local/state/atlas-pr-watchers/<session-id>.codex-wake.log`, so wake cost is
-readable rather than inferred. Concurrent wakes are serialized by a lock; a
-wake that arrives while one is in flight logs and exits, because the in-flight
-wake observes the same PR state.
+Each wake appends its mode, argv, the turn's token usage, and the agent's final
+message to `~/.local/state/atlas-pr-watchers/<session-id>.codex-wake.log`, so
+wake cost and outcome are readable rather than inferred. Concurrent wakes are
+serialized by a lock: a wake that arrives while one is in flight waits for the
+lock and then runs its own prompt. It is not dropped, because the running turn
+may already have taken its snapshot of the PR and cannot see a review posted
+after that point. A wake that never gets the lock exits non-zero rather than
+reporting a success it did not perform.
 
 A merged PR leaves its `.codex-thread` file behind. Remove it during the
 post-merge teardown in AGENTS 3c.1 so the next PR on that watcher id does not
@@ -327,7 +334,7 @@ POLL_MINUTES="30"
 AUTO_MERGE="0"
 NOTIFY="1"
 # Optional, quoted. Leave unset for write-only handoff.
-# CODEX_WAKE_COMMAND="/home/<you>/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <absolute repo or worktree path>"
+# CODEX_WAKE_COMMAND="'/home/<you>/.local/bin/atlas-codex-wake-run' --watcher-id '<session-id>' --repo-dir '<absolute repo or worktree path>'"
 # Absolute paths only: the bridge shlex.splits this and never uses a shell.
 EOF
 ```
@@ -475,7 +482,7 @@ POLL_MINUTES="30"
 AUTO_MERGE="0"
 NOTIFY="1"
 # Optional, quoted. Leave unset for write-only handoff.
-# CODEX_WAKE_COMMAND="/home/<you>/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <absolute repo or worktree path>"
+# CODEX_WAKE_COMMAND="'/home/<you>/.local/bin/atlas-codex-wake-run' --watcher-id '<session-id>' --repo-dir '<absolute repo or worktree path>'"
 # Absolute paths only: the bridge shlex.splits this and never uses a shell.
 EOF
 

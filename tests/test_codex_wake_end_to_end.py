@@ -48,7 +48,7 @@ def _install(bin_dir: Path, systemd_dir: Path) -> Path:
 
 def _fake_codex(tmp_path: Path) -> tuple[Path, Path]:
     record = tmp_path / "codex-invocation.json"
-    fake = tmp_path / "fake-codex"
+    fake = tmp_path / "fake codex bin"
     fake.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os, sys\n"
@@ -100,7 +100,7 @@ def test_bridge_wakes_the_installed_runner_and_records_the_thread(
     systemd_dir = tmp_path / "systemd"
     config_dir = tmp_path / "config"
     state_dir = tmp_path / "state"
-    repo_dir = tmp_path / "repo"
+    repo_dir = tmp_path / "my repo dir"
     for path in (config_dir, state_dir, repo_dir):
         path.mkdir(parents=True, exist_ok=True)
 
@@ -108,12 +108,15 @@ def test_bridge_wakes_the_installed_runner_and_records_the_thread(
     fake_codex, codex_record = _fake_codex(tmp_path)
     head_sha = "a" * 40
 
-    # The wake command exactly as the handoff doc tells an operator to write it:
-    # an absolute path, because the bridge shlex.splits it with no shell.
+    # The wake command exactly as the handoff doc tells an operator to write
+    # it: absolute paths, each quoted on its own. The bridge shlex-splits this
+    # value with no shell, so the outer quotes do not survive to protect the
+    # individual arguments and an unquoted path containing a space would break
+    # into stray argv entries. The paths here contain spaces to enforce that.
     wake_command = (
-        f"{sys.executable} {runner} --watcher-id e2e-wake "
-        f"--repo-dir {repo_dir} --state-dir {state_dir} "
-        f"--sandbox read-only --codex-bin {fake_codex}"
+        f"'{sys.executable}' '{runner}' --watcher-id 'e2e-wake' "
+        f"--repo-dir '{repo_dir}' --state-dir '{state_dir}' "
+        f"--sandbox read-only --codex-bin '{fake_codex}'"
     )
     (config_dir / "e2e-wake.env").write_text(
         "\n".join(
@@ -183,7 +186,7 @@ def test_second_bridge_wake_resumes_the_recorded_thread(tmp_path: Path) -> None:
     bin_dir = tmp_path / "bin"
     config_dir = tmp_path / "config"
     state_dir = tmp_path / "state"
-    repo_dir = tmp_path / "repo"
+    repo_dir = tmp_path / "my repo dir"
     for path in (config_dir, state_dir, repo_dir):
         path.mkdir(parents=True, exist_ok=True)
 
@@ -191,9 +194,9 @@ def test_second_bridge_wake_resumes_the_recorded_thread(tmp_path: Path) -> None:
     fake_codex, codex_record = _fake_codex(tmp_path)
     head_sha = "b" * 40
     wake_command = (
-        f"{sys.executable} {runner} --watcher-id e2e-wake "
-        f"--repo-dir {repo_dir} --state-dir {state_dir} "
-        f"--sandbox read-only --codex-bin {fake_codex}"
+        f"'{sys.executable}' '{runner}' --watcher-id 'e2e-wake' "
+        f"--repo-dir '{repo_dir}' --state-dir '{state_dir}' "
+        f"--sandbox read-only --codex-bin '{fake_codex}'"
     )
     (config_dir / "e2e-wake.env").write_text(
         f'REPO_DIR="{repo_dir}"\nPR="4242"\nREPO="example/repo"\n'

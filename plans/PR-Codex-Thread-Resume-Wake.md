@@ -108,8 +108,6 @@ Max files: 10
   - A malformed or foreign-shaped stored thread id is ignored and the runner
     starts fresh rather than passing attacker-influenced text as argv --
     settled by `tests/test_codex_wake_run.py::test_rejects_malformed_thread_id`.
-  - A second wake while one holds the lock exits 0 without invoking Codex --
-    settled by `tests/test_codex_wake_run.py::test_concurrent_wake_is_skipped`.
   - The runner contains no PR merge or delete-branch command, so
     `scripts/audit_pr_watcher_safety.py` stays clean -- settled by
     `python scripts/audit_pr_watcher_safety.py` in Verification.
@@ -164,6 +162,23 @@ Max files: 10
   - A post-turn audit-write failure does not overturn a completed turn, so a
     caller cannot be driven to repeat real side effects -- settled by
     `tests/test_codex_wake_run.py::test_an_unwritable_audit_path_does_not_fail_a_completed_turn`.
+  - The thread id is written durably enough to survive a host restart, not just
+    process death: the staged file and its directory entry are both flushed --
+    settled by
+    `tests/test_codex_wake_run.py::test_atomic_write_flushes_the_file_and_its_directory`.
+  - The Codex child does not outlive a killed runner, so an orphan cannot keep
+    editing the checkout while a later wake takes the freed lock -- settled by
+    `tests/test_codex_wake_run.py::test_codex_child_is_asked_to_die_with_the_runner`
+    and `::test_die_with_parent_sets_the_parent_death_signal`, and by a
+    before/after experiment recorded in Verification.
+  - A host without the kernel's parent-death signal logs that orphan protection
+    is not in force rather than skipping it silently -- settled by
+    `tests/test_codex_wake_run.py::test_parent_death_support_is_probed_in_the_parent`.
+  - The documented wake command survives a repo or worktree path containing
+    whitespace, because the bridge shlex-splits the value and the outer quotes
+    do not protect individual arguments -- settled by
+    `tests/test_codex_wake_end_to_end.py`, whose paths contain spaces and which
+    fails against the unquoted form.
   - The real-entrypoint smoke actually runs in CI, rather than being skipped by
     a marker -- settled by `tests/test_codex_wake_end_to_end.py` carrying no
     pytest marker, and by its enrollment in
@@ -340,6 +355,11 @@ exits 0, because a wake already in flight will observe the same PR state.
   monotonic, reboot-aware, same-host clock, which is more machinery than the
   optimization is worth here. Removing it leaves no skip path, so no file,
   stamp, or clock change can suppress a wake. The cost is stated in Deferred.
+- The Codex child is bound to the runner's lifetime with the kernel's
+  parent-death signal rather than a signal handler, because the runner can be
+  SIGKILLed and a handler cannot run then. The probe for that facility happens
+  in the parent: the pre-exec hook runs after fork with no safe way to report,
+  so a missing facility would be silent exactly where it matters.
 - Post-turn writes are diagnostics and never change the turn's outcome. By the
   time the agent message is recorded, Codex may already have edited files,
   pushed, or commented. Failing the wake because that copy could not be written

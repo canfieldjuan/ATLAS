@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -68,6 +69,44 @@ MISSING_SESSION_RE = re.compile(
 
 def _now() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+# PR_SET_PDEATHSIG on Linux.
+_PR_SET_PDEATHSIG = 1
+
+
+def parent_death_signal_support() -> tuple[Any, str | None]:
+    """Resolve libc in the PARENT, so an unavailable kernel feature is visible.
+
+    The probe cannot live in the pre-exec hook: that code runs after fork in a
+    child with no safe way to report anything, so a failure there would be
+    silent exactly where it matters. Resolving here lets the caller log that
+    orphan protection is not in force on this host.
+    """
+    if not sys.platform.startswith("linux"):
+        return None, f"parent-death signal is Linux-only; not available on {sys.platform}"
+    try:
+        import ctypes
+
+        return ctypes.CDLL("libc.so.6", use_errno=True), None
+    except (OSError, ImportError) as exc:
+        return None, f"could not load libc for the parent-death signal: {exc}"
+
+
+def _die_with_parent() -> None:
+    """Ask the kernel to signal this child when its parent dies.
+
+    Without this the Codex child outlives a killed runner. The runner's death
+    releases the wake lock, so a later wake can acquire it and start a second
+    turn against the same thread and the same checkout while the orphan is
+    still editing files. A signal handler cannot cover it, because the parent
+    may be SIGKILLed; PR_SET_PDEATHSIG is enforced by the kernel and does.
+
+    Runs after fork, so the caller has already confirmed libc is loadable.
+    """
+    libc, _reason = parent_death_signal_support()
+    if libc is not None:
+        libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
 
 
 def _log(handle: Any, message: str) -> None:
@@ -117,11 +156,29 @@ def read_thread_id(path: Path) -> tuple[str | None, str | None]:
 
 
 def _atomic_write(path: Path, text: str) -> None:
+    """Write durably enough to survive a host restart, not just process death.
+
+    `os.replace` alone makes the swap atomic but says nothing about when the
+    bytes or the directory entry reach the disk. Without both fsyncs, a power
+    loss right after a wake can leave the thread id missing or empty, and the
+    next wake starts a second thread against a session Codex already created.
+    The thread id is the one piece of state this runner exists to keep, so it
+    is worth two fsyncs on a file written once per wake.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        staged.write_text(text, encoding="utf-8")
+        with staged.open("w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(staged, path)
+        # The rename itself is directory metadata and needs its own flush.
+        dir_fd = os.open(str(path.parent), os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
     finally:
         staged.unlink(missing_ok=True)
 
@@ -255,6 +312,14 @@ def run_one_turn(
     _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
     _log(log_handle, "argv=" + " ".join(argv))
 
+    _libc, pdeath_reason = parent_death_signal_support()
+    if pdeath_reason:
+        _log(
+            log_handle,
+            f"{pdeath_reason}; a killed runner could leave this Codex process "
+            "running against the checkout",
+        )
+
     def _persist(new_id: str) -> None:
         if new_id != thread_id:
             write_thread_id(thread_path, new_id)
@@ -281,6 +346,7 @@ def run_one_turn(
                         stdout=subprocess.PIPE,
                         stderr=stderr_handle,
                         text=True,
+                        preexec_fn=_die_with_parent if _libc is not None else None,
                     )
                 except FileNotFoundError:
                     _log(log_handle, f"codex binary not found: {codex_bin}")
