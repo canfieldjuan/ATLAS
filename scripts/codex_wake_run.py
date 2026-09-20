@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Run one Codex wake turn against a persistent per-watcher thread.
+"""Run Codex wake turns against a persistent per-watcher thread.
 
 The PR watcher and `codex_wake_bridge.py` decide whether a wake should happen
 and what the prompt says. This runner is the last stage: it takes that prompt
-on stdin and spends exactly one Codex turn on it, resuming the watcher's
-existing Codex thread when there is one.
+on stdin and spends a Codex turn on it, resuming the watcher's existing Codex
+thread when there is one.
 
 Resuming matters for cost and for continuity. A fresh `codex exec` rebuilds the
 whole conversation from nothing, so the woken agent does not remember the arc it
 is continuing and the operator pays full cold-start context on every wake.
 
-This runner never merges, closes, or pushes anything. It starts a Codex turn and
-records what that turn cost.
+This runner never merges, closes, or pushes anything. It starts Codex turns and
+records what they cost.
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import Any, Sequence
+from typing import Any, NamedTuple, Sequence
 
 
 DEFAULT_STATE_DIR = Path.home() / ".local" / "state" / "atlas-pr-watchers"
@@ -37,12 +37,22 @@ SAFE_WATCHER_ID_RE = re.compile(r"[A-Za-z0-9._-]+")
 THREAD_ID_RE = re.compile(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}")
 # A stored thread id is one short line; refuse to read more than that.
 MAX_THREAD_FILE_BYTES = 256
+# A queued prompt is bridge-generated handoff text, not arbitrary input.
+MAX_PENDING_FILE_BYTES = 512 * 1024
+# An in-flight wake drains queued prompts, but a review burst must not be able
+# to chain turns without bound: every turn spends the operator's plan tokens.
+MAX_COALESCED_TURNS = 4
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
 
 def _now() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _log(handle: Any, message: str) -> None:
+    handle.write(f"[{_now()}] {message}\n")
+    handle.flush()
 
 
 def valid_watcher_id(watcher_id: str) -> bool:
@@ -86,23 +96,54 @@ def read_thread_id(path: Path) -> tuple[str | None, str | None]:
     return candidate, None
 
 
-def write_thread_id(path: Path, thread_id: str) -> None:
-    """Persist atomically so a killed wake cannot leave a partial id."""
+def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        staged.write_text(thread_id + "\n", encoding="utf-8")
+        staged.write_text(text, encoding="utf-8")
         os.replace(staged, path)
     finally:
         staged.unlink(missing_ok=True)
 
 
-def build_argv(
-    *,
-    codex_bin: str,
-    thread_id: str | None,
-    sandbox: str,
-) -> list[str]:
+def write_thread_id(path: Path, thread_id: str) -> None:
+    """Persist atomically so a killed wake cannot leave a partial id."""
+    _atomic_write(path, thread_id + "\n")
+
+
+def queue_pending_prompt(path: Path, prompt: str) -> None:
+    """Hand a prompt to the wake that currently holds the lock.
+
+    Newest wins. Each bridge prompt is a full snapshot of the PR, so the most
+    recent one strictly supersedes anything queued before it.
+    """
+    _atomic_write(path, prompt)
+
+
+def take_pending_prompt(path: Path) -> tuple[str | None, str | None]:
+    """Claim and clear a queued prompt. Returns (prompt, reason_ignored)."""
+    if not path.exists():
+        return None, None
+    try:
+        if path.stat().st_size > MAX_PENDING_FILE_BYTES:
+            path.unlink(missing_ok=True)
+            return None, "queued prompt was too large; discarded"
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"could not read queued prompt: {exc}"
+    except UnicodeDecodeError:
+        path.unlink(missing_ok=True)
+        return None, "queued prompt was not valid UTF-8; discarded"
+    try:
+        path.unlink()
+    except OSError as exc:
+        return None, f"could not clear queued prompt: {exc}"
+    if not text.strip():
+        return None, "queued prompt was empty"
+    return text, None
+
+
+def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[str]:
     """Build the Codex argv for a fresh or resumed wake.
 
     `codex exec` and `codex exec resume` do not share a flag surface. Verified
@@ -123,11 +164,6 @@ def build_argv(
     # Trailing "-" makes Codex read the prompt from stdin.
     argv.append("-")
     return argv
-
-
-def _log(handle: Any, message: str) -> None:
-    handle.write(f"[{_now()}] {message}\n")
-    handle.flush()
 
 
 def _consume_events(
@@ -188,6 +224,112 @@ def _consume_events(
     return thread_id, usage, last_message
 
 
+class TurnResult(NamedTuple):
+    """Outcome of one Codex turn."""
+
+    exit_code: int
+    binary_missing: bool = False
+
+
+def run_one_turn(
+    *,
+    watcher_id: str,
+    repo_dir: Path,
+    thread_path: Path,
+    state_dir: Path,
+    prompt: str,
+    sandbox: str,
+    codex_bin: str,
+    log_handle: Any,
+) -> TurnResult:
+    """Spend exactly one Codex turn. The caller must already hold the wake lock."""
+    # Read the thread id under the lock. Reading it before acquiring the lock
+    # leaves a stale-read interleaving: this process can read "no thread" while
+    # another holds the lock, that one records a new id and releases, and this
+    # one then acquires the lock still holding None, starts a second thread,
+    # and overwrites the id. One thread per watcher is the contract, so the
+    # read has to happen inside the critical section.
+    thread_id, ignored_reason = read_thread_id(thread_path)
+    if ignored_reason:
+        _log(log_handle, f"starting fresh thread: {ignored_reason}")
+
+    argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
+    mode = "resume" if thread_id else "fresh"
+    _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
+    _log(log_handle, "argv=" + " ".join(argv))
+
+    prompt_fd, prompt_name = tempfile.mkstemp(prefix="codex-wake-", suffix=".txt")
+    prompt_file = Path(prompt_name)
+    try:
+        with os.fdopen(prompt_fd, "w", encoding="utf-8") as prompt_handle:
+            prompt_handle.write(prompt)
+        with prompt_file.open("r", encoding="utf-8") as stdin_handle:
+            try:
+                process = subprocess.Popen(
+                    argv,
+                    cwd=str(repo_dir),
+                    stdin=stdin_handle,
+                    stdout=subprocess.PIPE,
+                    stderr=log_handle,
+                    text=True,
+                )
+            except FileNotFoundError:
+                _log(log_handle, f"codex binary not found: {codex_bin}")
+                print(f"codex binary not found: {codex_bin}", file=sys.stderr)
+                return TurnResult(2, binary_missing=True)
+            with process:
+                observed_thread, usage, last_message = _consume_events(
+                    process.stdout, log_handle
+                )
+            exit_code = process.returncode
+    finally:
+        try:
+            prompt_file.unlink()
+        except OSError as exc:
+            _log(log_handle, f"could not remove temp prompt file {prompt_file}: {exc}")
+
+    if observed_thread and observed_thread != thread_id:
+        write_thread_id(thread_path, observed_thread)
+        _log(log_handle, f"recorded thread id {observed_thread}")
+    elif thread_id is not None and observed_thread is None and exit_code != 0:
+        # A resume that never reached `thread.started` did not attach to the
+        # session: the store may have been cleared, or the id may have come from
+        # another machine. Leaving the id in place would make every future wake
+        # retry the same dead resume forever, so it is quarantined and the next
+        # wake starts fresh. Quarantine rather than delete, so a transient
+        # failure stays inspectable; the cost of a false positive is one lost
+        # continuity, versus a permanently wedged watcher.
+        stale_path = thread_path.with_name(thread_path.name + ".stale")
+        try:
+            os.replace(thread_path, stale_path)
+        except OSError as exc:
+            _log(log_handle, f"could not quarantine stale thread id: {exc}")
+        else:
+            _log(
+                log_handle,
+                f"resume failed with no thread.started; quarantined {thread_id} "
+                f"to {stale_path}. The next wake starts fresh.",
+            )
+
+    if usage is not None:
+        _log(log_handle, "usage=" + json.dumps(usage, sort_keys=True))
+
+    if last_message is not None:
+        # Full text goes to its own file so the log stays scannable.
+        last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
+        last_path.write_text(last_message + "\n", encoding="utf-8")
+        summary = " ".join(last_message.split())
+        if len(summary) > 500:
+            summary = summary[:500] + " [truncated]"
+        _log(log_handle, f"agent message: {summary}")
+        _log(log_handle, f"full agent message written to {last_path}")
+    else:
+        _log(log_handle, "no agent message in this turn")
+
+    _log(log_handle, f"turn complete exit={exit_code}")
+    return TurnResult(exit_code)
+
+
 def run_wake(
     *,
     watcher_id: str,
@@ -202,14 +344,12 @@ def run_wake(
     thread_path = state_dir / f"{watcher_id}.codex-thread"
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
-
-    # Dry run only reports; the real read happens under the lock below.
-    thread_id, ignored_reason = read_thread_id(thread_path)
+    pending_path = state_dir / f"{watcher_id}.codex-wake.pending"
 
     if dry_run:
+        thread_id, ignored_reason = read_thread_id(thread_path)
         argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
-        mode = "resume" if thread_id else "fresh"
-        print(f"mode={mode}")
+        print(f"mode={'resume' if thread_id else 'fresh'}")
         print(f"cwd={repo_dir}")
         if ignored_reason:
             print(f"ignored_stored_thread_id={ignored_reason}")
@@ -234,102 +374,57 @@ def run_wake(
             try:
                 fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
-                # A wake is already in flight. It will observe the same PR state
-                # this one would have, so dropping this wake loses nothing.
-                _log(log_handle, f"skipped: a Codex wake is already running for {watcher_id}")
+                # A wake is already in flight. Dropping this one would lose the
+                # event: the running turn may already have taken its PR
+                # snapshot, so it cannot see a review posted after that point.
+                # Hand the newer prompt to the lock holder, which drains the
+                # queue before it exits.
+                queue_pending_prompt(pending_path, prompt)
+                _log(
+                    log_handle,
+                    f"a Codex wake is already running for {watcher_id}; "
+                    "queued this prompt for it to pick up",
+                )
                 return 0
 
-            # Re-read under the lock. Reading before acquiring it leaves a
-            # stale-read interleaving: this process can read "no thread" while
-            # another holds the lock, that one records a new id and releases,
-            # and this one then acquires the lock still holding None, starts a
-            # second thread, and overwrites the id. One thread per watcher is
-            # the contract, so the read has to be inside the critical section.
-            thread_id, ignored_reason = read_thread_id(thread_path)
+            turn_prompt = prompt
+            turns = 0
+            exit_code = 0
+            while True:
+                turns += 1
+                result = run_one_turn(
+                    watcher_id=watcher_id,
+                    repo_dir=repo_dir,
+                    thread_path=thread_path,
+                    state_dir=state_dir,
+                    prompt=turn_prompt,
+                    sandbox=sandbox,
+                    codex_bin=codex_bin,
+                    log_handle=log_handle,
+                )
+                exit_code = result.exit_code
+                if result.binary_missing:
+                    # Nothing will drain the queue either; leave it for an
+                    # operator who has repaired the install.
+                    break
 
-            if ignored_reason:
-                _log(log_handle, f"starting fresh thread: {ignored_reason}")
-
-            argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
-            mode = "resume" if thread_id else "fresh"
-            _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
-            _log(log_handle, "argv=" + " ".join(argv))
-
-            prompt_fd, prompt_name = tempfile.mkstemp(
-                prefix="codex-wake-", suffix=".txt"
-            )
-            prompt_file = Path(prompt_name)
-            try:
-                with os.fdopen(prompt_fd, "w", encoding="utf-8") as prompt_handle:
-                    prompt_handle.write(prompt)
-                with prompt_file.open("r", encoding="utf-8") as stdin_handle:
-                    try:
-                        process = subprocess.Popen(
-                            argv,
-                            cwd=str(repo_dir),
-                            stdin=stdin_handle,
-                            stdout=subprocess.PIPE,
-                            stderr=log_handle,
-                            text=True,
-                        )
-                    except FileNotFoundError:
-                        _log(log_handle, f"codex binary not found: {codex_bin}")
-                        print(f"codex binary not found: {codex_bin}", file=sys.stderr)
-                        return 2
-                    with process:
-                        observed_thread, usage, last_message = _consume_events(
-                            process.stdout, log_handle
-                        )
-                    exit_code = process.returncode
-            finally:
-                try:
-                    prompt_file.unlink()
-                except OSError as exc:
+                queued, queue_reason = take_pending_prompt(pending_path)
+                if queue_reason:
+                    _log(log_handle, queue_reason)
+                if queued is None:
+                    break
+                if turns >= MAX_COALESCED_TURNS:
+                    queue_pending_prompt(pending_path, queued)
                     _log(
                         log_handle,
-                        f"could not remove temp prompt file {prompt_file}: {exc}",
+                        f"a queued prompt remains after {turns} turns "
+                        f"(cap {MAX_COALESCED_TURNS}); left for the next wake",
                     )
+                    break
+                _log(log_handle, f"draining a queued prompt; starting turn {turns + 1}")
+                turn_prompt = queued
 
-            if observed_thread and observed_thread != thread_id:
-                write_thread_id(thread_path, observed_thread)
-                _log(log_handle, f"recorded thread id {observed_thread}")
-            elif thread_id is not None and observed_thread is None and exit_code != 0:
-                # A resume that never reached `thread.started` did not attach to
-                # the session: the store may have been cleared, or the id may
-                # have come from another machine. Leaving the id in place would
-                # make every future wake retry the same dead resume forever, so
-                # it is quarantined and the next wake starts fresh. Quarantine
-                # rather than delete, so a transient failure is still
-                # inspectable; the cost of a false positive is one lost
-                # continuity, versus a permanently wedged watcher.
-                stale_path = thread_path.with_name(thread_path.name + ".stale")
-                try:
-                    os.replace(thread_path, stale_path)
-                except OSError as exc:
-                    _log(log_handle, f"could not quarantine stale thread id: {exc}")
-                else:
-                    _log(
-                        log_handle,
-                        f"resume failed with no thread.started; quarantined "
-                        f"{thread_id} to {stale_path}. The next wake starts fresh.",
-                    )
-
-            if usage is not None:
-                _log(log_handle, "usage=" + json.dumps(usage, sort_keys=True))
-
-            if last_message is not None:
-                # Full text goes to its own file so the log stays scannable.
-                last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
-                last_path.write_text(last_message + "\n", encoding="utf-8")
-                summary = " ".join(last_message.split())
-                if len(summary) > 500:
-                    summary = summary[:500] + " [truncated]"
-                _log(log_handle, f"agent message: {summary}")
-                _log(log_handle, f"full agent message written to {last_path}")
-            else:
-                _log(log_handle, "no agent message in this turn")
-
-            _log(log_handle, f"wake complete exit={exit_code}")
+            _log(log_handle, f"wake complete turns={turns} exit={exit_code}")
             return exit_code
 
 

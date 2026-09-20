@@ -327,7 +327,8 @@ POLL_MINUTES="30"
 AUTO_MERGE="0"
 NOTIFY="1"
 # Optional, quoted. Leave unset for write-only handoff.
-# CODEX_WAKE_COMMAND="codex exec -C <absolute repo or worktree path> -"
+# CODEX_WAKE_COMMAND="/home/<you>/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <absolute repo or worktree path>"
+# Absolute paths only: the bridge shlex.splits this and never uses a shell.
 EOF
 ```
 
@@ -474,7 +475,8 @@ POLL_MINUTES="30"
 AUTO_MERGE="0"
 NOTIFY="1"
 # Optional, quoted. Leave unset for write-only handoff.
-# CODEX_WAKE_COMMAND="codex exec -C <absolute repo or worktree path> -"
+# CODEX_WAKE_COMMAND="/home/<you>/.local/bin/atlas-codex-wake-run --watcher-id <session-id> --repo-dir <absolute repo or worktree path>"
+# Absolute paths only: the bridge shlex.splits this and never uses a shell.
 EOF
 
 python scripts/install_codex_wake_bridge.py --reload-systemd

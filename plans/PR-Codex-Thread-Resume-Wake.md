@@ -137,6 +137,18 @@ Max files: 8
   - The documented `CODEX_WAKE_COMMAND` is a runnable argv. The bridge
     `shlex.split`s it and never uses a shell, so the doc uses absolute paths --
     settled by `docs/long_running_session_watcher_handoff.md:127-135`.
+  - EVERY wake-command example in the doc names the runner, not a bare
+    `codex exec`, so an operator following any setup section gets thread
+    persistence -- settled by `grep -n CODEX_WAKE_COMMAND
+    docs/long_running_session_watcher_handoff.md` returning only runner
+    invocations at lines 129, 330, and 478.
+  - A wake that arrives while another holds the lock is queued rather than
+    dropped, and the lock holder drains it before exiting -- settled by
+    `tests/test_codex_wake_run.py::test_concurrent_wake_queues_instead_of_dropping`
+    and `::test_lock_holder_drains_a_prompt_queued_mid_turn`.
+  - Queue draining is capped so a review burst cannot chain Codex turns without
+    bound, and the event that does not fit is preserved -- settled by
+    `tests/test_codex_wake_run.py::test_coalescing_is_capped_and_leaves_the_remainder`.
 - Reachability proof: entrypoint is
   `atlas-pr-webhook-receiver -> atlas-pr-watch-event -> codex_wake_bridge.py
   --source event -> CODEX_WAKE_COMMAND`. Observable effect is a Codex turn
@@ -272,6 +284,15 @@ exits 0, because a wake already in flight will observe the same PR state.
 - Opening the wake log and lock is guarded: a background wake whose state
   directory is unwritable exits 2 with a message rather than a traceback nobody
   is present to read.
+- A wake blocked on the lock queues its prompt instead of dropping it, and
+  the lock holder drains the queue before releasing. The earlier "the in-flight
+  wake observes the same PR state" assumption was wrong: the running turn may
+  already have taken its snapshot, so a review posted after that point would
+  have been invisible until some unrelated later event.
+- Queue draining is capped at `MAX_COALESCED_TURNS`. Newest-wins coalescing
+  already collapses a burst, but an unbounded drain loop would be a token sink
+  of exactly the kind this slice exists to avoid. A prompt that does not fit is
+  left queued for the next wake rather than discarded.
 - A failed resume is quarantined, not deleted. Only a resume that never reached
   `thread.started` is treated as unusable; a turn that attached and then failed
   keeps its id, because discarding it would throw away the arc on any ordinary

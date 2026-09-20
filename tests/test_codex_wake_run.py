@@ -258,7 +258,14 @@ def test_trailing_newline_thread_id_is_accepted(tmp_path: Path, repo_dir: Path) 
     ]
 
 
-def test_concurrent_wake_is_skipped(tmp_path: Path, repo_dir: Path) -> None:
+def test_concurrent_wake_queues_instead_of_dropping(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A wake blocked on the lock must not discard its event.
+
+    The running turn may already have taken its PR snapshot, so it cannot see a
+    review posted after that point. The newer prompt is queued for it.
+    """
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
@@ -267,12 +274,109 @@ def test_concurrent_wake_is_skipped(tmp_path: Path, repo_dir: Path) -> None:
     with lock_path.open("w", encoding="utf-8") as holder:
         fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
-        assert _run(tmp_path, fake=fake) == 0
+        assert _run(tmp_path, fake=fake, prompt="newer review thread") == 0
 
-        assert not record.exists(), "a second wake must not invoke Codex"
+        assert not record.exists(), "a second wake must not invoke Codex directly"
 
+    pending = state_dir / "slice-123.codex-wake.pending"
+    assert pending.read_text(encoding="utf-8") == "newer review thread"
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
     assert "already running" in log_text
+    assert "queued this prompt" in log_text
+
+
+def _queueing_codex(tmp_path: Path, *, thread_id: str, queue_times: int) -> Path:
+    """A fake Codex that simulates events arriving while the turn is running."""
+    counter = tmp_path / "invocations"
+    pending = tmp_path / "state" / "slice-123.codex-wake.pending"
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "from pathlib import Path\n"
+        f"counter = Path({str(counter)!r})\n"
+        f"pending = Path({str(pending)!r})\n"
+        "sys.stdin.read()\n"
+        "n = int(counter.read_text()) if counter.exists() else 0\n"
+        "n += 1\n"
+        "counter.write_text(str(n))\n"
+        f"if n <= {queue_times}:\n"
+        "    pending.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    pending.write_text(f'queued prompt {n}')\n"
+        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {thread_id!r}}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
+def test_lock_holder_drains_a_prompt_queued_mid_turn(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    fake = _queueing_codex(tmp_path, thread_id=THREAD_A, queue_times=1)
+
+    assert _run(tmp_path, fake=fake) == 0
+
+    assert (tmp_path / "invocations").read_text(encoding="utf-8") == "2"
+    state_dir = tmp_path / "state"
+    assert not (state_dir / "slice-123.codex-wake.pending").exists()
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "draining a queued prompt; starting turn 2" in log_text
+    assert "wake complete turns=2" in log_text
+
+
+def test_coalescing_is_capped_and_leaves_the_remainder(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A review burst must not chain Codex turns without bound."""
+    fake = _queueing_codex(tmp_path, thread_id=THREAD_A, queue_times=50)
+
+    assert _run(tmp_path, fake=fake) == 0
+
+    invocations = int((tmp_path / "invocations").read_text(encoding="utf-8"))
+    assert invocations == runner.MAX_COALESCED_TURNS
+    state_dir = tmp_path / "state"
+    # The event that did not fit is preserved, not dropped.
+    assert (state_dir / "slice-123.codex-wake.pending").exists()
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert f"cap {runner.MAX_COALESCED_TURNS}" in log_text
+    assert "left for the next wake" in log_text
+
+
+def test_queued_prompt_is_the_newest_one(tmp_path: Path, repo_dir: Path) -> None:
+    """Each bridge prompt is a full PR snapshot, so newest supersedes older."""
+    state_dir = tmp_path / "state"
+    pending = state_dir / "slice-123.codex-wake.pending"
+
+    runner.queue_pending_prompt(pending, "older snapshot")
+    runner.queue_pending_prompt(pending, "newer snapshot")
+
+    taken, reason = runner.take_pending_prompt(pending)
+    assert taken == "newer snapshot"
+    assert reason is None
+    assert not pending.exists()
+
+
+def test_empty_queued_prompt_is_discarded(tmp_path: Path) -> None:
+    pending = tmp_path / "state" / "slice-123.codex-wake.pending"
+    runner.queue_pending_prompt(pending, "   \n")
+
+    taken, reason = runner.take_pending_prompt(pending)
+
+    assert taken is None
+    assert reason == "queued prompt was empty"
+
+
+def test_oversized_queued_prompt_is_discarded(tmp_path: Path) -> None:
+    pending = tmp_path / "state" / "slice-123.codex-wake.pending"
+    runner.queue_pending_prompt(pending, "x" * (runner.MAX_PENDING_FILE_BYTES + 1))
+
+    taken, reason = runner.take_pending_prompt(pending)
+
+    assert taken is None
+    assert reason == "queued prompt was too large; discarded"
+    assert not pending.exists()
 
 
 def test_thread_id_is_read_inside_the_lock(tmp_path: Path, repo_dir: Path) -> None:
