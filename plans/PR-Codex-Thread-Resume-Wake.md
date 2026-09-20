@@ -140,8 +140,14 @@ Slice phase: Workflow/process
   feeding argv; concurrent wakes from a burst of review comments; a resumed
   thread outliving the PR it was opened for; accidental widening of sandbox or
   approval posture in watcher-triggered automation.
-- Reviewer rules triggered: R1 (plan/contract), R4 (untrusted input to argv),
-  R7 (concurrency), R9 (installed-artifact drift), R14 (workflow safety).
+- Reviewer rules triggered: R1 (plan/contract), R2 and R10 (this diff edits
+  `scripts/audit_pr_watcher_safety.py`, a gate predicate: it widens
+  `REPO_WATCHER_SOURCES` so the merge-authority scan covers the new runner, and
+  the widening is proved to detect by
+  `tests/test_audit_pr_watcher_safety.py::test_fails_on_codex_wake_runner_with_merge_command`
+  rather than only to pass), R4 (untrusted stored thread id reaching argv),
+  R7 (concurrent wakes serialized by a lock), R9 (installed-artifact drift),
+  R14 (workflow safety).
 
 ### Boundary-change enumeration
 
