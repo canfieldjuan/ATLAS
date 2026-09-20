@@ -4,6 +4,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import stat
 import subprocess
@@ -987,11 +988,64 @@ def test_reap_children_returns_zero_with_nothing_to_reap() -> None:
     assert runner._reap_children() == 0
 
 
-def test_pgid_of_rejects_a_malformed_stat_line() -> None:
-    assert runner._pgid_of("") is None
-    assert runner._pgid_of("1 (x) S") is None
-    assert runner._pgid_of("1 (comm with spaces) S 1 notanumber") is None
-    assert runner._pgid_of("1 (comm) S 1 4242 0 0") == 4242
+@pytest.mark.parametrize(
+    ("stat_line", "expected"),
+    [
+        # comm is parenthesized and may contain spaces, parentheses and ") ".
+        # Splitting on the first ") " reads the ppid as the pgid and silently
+        # drops that process from a scan.
+        ("4242 (worker) hidden) S 1000 7777 7777 0 -1", 7777),
+        ("9 ((paren)) S 5 2121 2121", 2121),
+        ("9 (a b c) S 5 3131 3131", 3131),
+        ("1 (systemd) S 0 1 1 0 -1", 1),
+        ("1 (comm) S 1 4242 0 0", 4242),
+        ("", None),
+        ("1 (x) S", None),
+        ("1 (comm with spaces) S 1 notanumber", None),
+    ],
+)
+def test_pgid_of_parses_every_comm_shape(
+    stat_line: str, expected: int | None
+) -> None:
+    assert runner._pgid_of(stat_line) == expected
+
+
+def test_scan_finds_a_child_whose_name_contains_the_delimiter(
+    tmp_path: Path,
+) -> None:
+    """The parser bug, driven through a real process rather than a fixture.
+
+    A process named "worker) hidden" stays in the group. If its stat line is
+    mis-parsed it vanishes from the scan, and the drain then reports an empty
+    group and releases the lock while it is still running.
+    """
+    # comm comes from the executable name, capped at 15 characters, so this
+    # copies a real binary rather than using a shebang script, whose comm
+    # would become the interpreter's name instead.
+    source = shutil.which("sleep")
+    if source is None:
+        pytest.skip("no sleep binary to copy")
+    script = tmp_path / "worker) hidden"
+    shutil.copy(source, script)
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+
+    child = subprocess.Popen([str(script), "30"])
+    try:
+        time.sleep(0.5)
+        comm = Path(f"/proc/{child.pid}/comm").read_text(encoding="utf-8").strip()
+        if ") " not in comm:
+            pytest.skip(f"kernel did not keep the delimiter in comm: {comm!r}")
+
+        members = runner.process_group_members(
+            os.getpgid(child.pid), exclude_pid=os.getpid()
+        )
+
+        assert child.pid in members, (
+            "a process whose name contains the stat delimiter must still be found"
+        )
+    finally:
+        child.kill()
+        child.wait()
 
 
 def test_process_group_members_excludes_the_caller(tmp_path: Path) -> None:

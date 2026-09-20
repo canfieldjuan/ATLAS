@@ -118,9 +118,15 @@ class GroupScan(NamedTuple):
 
 
 def _pgid_of(stat_line: str) -> int | None:
-    """Parse the process group from one /proc/<pid>/stat line."""
-    # The comm field can contain spaces and parentheses, so split after it.
-    _, _, rest = stat_line.partition(") ")
+    """Parse the process group from one /proc/<pid>/stat line.
+
+    The comm field is parenthesized and may itself contain spaces, parentheses
+    and even ") ". Splitting on the FIRST ") " therefore mis-parses a process
+    named something like "worker) hidden", reading its parent pid as its group
+    and dropping it from a scan. comm is the only parenthesized field, so the
+    LAST ")" is where it really ends.
+    """
+    _, _, rest = stat_line.rpartition(")")
     fields = rest.split()
     # After the state field come ppid and pgrp.
     _state, _ppid, pgrp, *_remainder = (*fields, None, None, None)

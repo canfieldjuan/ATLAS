@@ -196,8 +196,12 @@ Max files: 10
     with the clean case `::test_a_clean_turn_is_not_slowed_by_the_drain`.
   - The drain's process scan reports what it could not read, so a scan that
     saw almost nothing is distinguishable from an empty group -- settled by
-    `tests/test_codex_wake_run.py::test_scan_reports_what_it_could_not_read`
-    and `::test_pgid_of_rejects_a_malformed_stat_line`.
+    `tests/test_codex_wake_run.py::test_scan_reports_what_it_could_not_read`.
+  - That scan finds a process whose name contains the `/proc` stat delimiter,
+    so a member cannot hide from the drain -- settled by
+    `tests/test_codex_wake_run.py::test_pgid_of_parses_every_comm_shape` and
+    `::test_scan_finds_a_child_whose_name_contains_the_delimiter`, which runs a
+    real binary named `worker) hidden` and fails against the old parser.
   - The supervisor's termination handlers exist before Codex is spawned, so a
     runner that dies in between cannot leave Codex running without the lock --
     settled by
