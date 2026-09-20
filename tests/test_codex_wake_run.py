@@ -1007,6 +1007,46 @@ def test_process_group_members_of_an_unused_group_is_empty() -> None:
     assert runner.process_group_members(2**31 - 1, exclude_pid=os.getpid()) == []
 
 
+def test_supervisor_handlers_are_installed_before_the_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for the spawn-to-handler window.
+
+    If the runner dies after Codex starts but before the handlers exist, the
+    parent-death signal takes its default action and kills only the
+    supervisor. Codex survives without the lock descriptor, so the next wake
+    can overlap it in the same checkout.
+    """
+    order: list[str] = []
+    real_signal = runner.signal.signal
+    real_popen = runner.subprocess.Popen
+
+    def recording_signal(sig: int, handler: object) -> object:
+        if sig in (runner.signal.SIGTERM, runner.signal.SIGINT, runner.signal.SIGHUP):
+            order.append(f"handler:{sig}")
+        return real_signal(sig, handler)
+
+    def recording_popen(argv: list[str], **kwargs: object) -> object:
+        order.append("spawn")
+        return real_popen(argv, **kwargs)
+
+    monkeypatch.setattr(runner.signal, "signal", recording_signal)
+    monkeypatch.setattr(runner.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(runner.os, "setsid", lambda: None)
+    monkeypatch.setattr(runner, "drain_process_group", lambda **kwargs: None)
+
+    exit_code = runner.supervise(
+        [sys.executable, "-c", "pass"], expected_ppid=os.getppid()
+    )
+
+    assert exit_code == 0
+    assert "spawn" in order
+    assert order.index("spawn") > 0, "no handler was installed before the spawn"
+    first_spawn = order.index("spawn")
+    installed = [item for item in order[:first_spawn] if item.startswith("handler:")]
+    assert len(installed) == 3, "all three termination signals must be covered first"
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 

@@ -289,12 +289,13 @@ def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
         # Orphaned in the window before the signal was registered.
         os._exit(EXIT_PARENT_GONE)
 
-    try:
-        child = subprocess.Popen(command)
-    except OSError as exc:
-        executable = next(iter(command), "<none>")
-        print(f"supervisor could not start {executable}: {exc}", file=sys.stderr)
-        return 2
+    # Installed BEFORE anything is spawned. Between the spawn and the handler
+    # there would otherwise be a window where the parent-death signal takes its
+    # default action: it would kill only this supervisor, leaving Codex running
+    # without the lock descriptor, so the next wake could overlap it. The
+    # handler works whether or not a child exists yet, because everything this
+    # supervisor spawns joins its process group at fork.
+    spawned: list[subprocess.Popen[bytes]] = []
 
     def _take_down_the_group(_signum: int, _frame: Any) -> None:
         # SIGKILL because anything here may be mid-write; the point is that
@@ -304,13 +305,22 @@ def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
             if own_group:
                 os.killpg(0, signal.SIGKILL)
             else:
-                child.kill()
+                for started in spawned:
+                    started.kill()
         except OSError as exc:
             print(f"supervisor could not stop the turn: {exc}", file=sys.stderr)
         os._exit(EXIT_PARENT_GONE)
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _take_down_the_group)
+
+    try:
+        child = subprocess.Popen(command)
+    except OSError as exc:
+        executable = next(iter(command), "<none>")
+        print(f"supervisor could not start {executable}: {exc}", file=sys.stderr)
+        return 2
+    spawned.append(child)
 
     exit_code = child.wait()
 

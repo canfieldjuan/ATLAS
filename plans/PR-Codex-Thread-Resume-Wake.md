@@ -198,6 +198,11 @@ Max files: 10
     saw almost nothing is distinguishable from an empty group -- settled by
     `tests/test_codex_wake_run.py::test_scan_reports_what_it_could_not_read`
     and `::test_pgid_of_rejects_a_malformed_stat_line`.
+  - The supervisor's termination handlers exist before Codex is spawned, so a
+    runner that dies in between cannot leave Codex running without the lock --
+    settled by
+    `tests/test_codex_wake_run.py::test_supervisor_handlers_are_installed_before_the_spawn`
+    and a before/after kill experiment recorded in Verification.
   - A host without the kernel's parent-death signal logs that orphan protection
     is not in force rather than skipping it silently -- settled by
     `tests/test_codex_wake_run.py::test_parent_death_support_is_probed_in_the_parent`.
@@ -424,6 +429,12 @@ diagnostic writes never change a completed turn's outcome.
   nothing from a turn outlives the lock that covered it. If it cannot create
   its own group it says so and falls back to stopping the immediate child,
   rather than aiming a group kill at the wrong target.
+- The supervisor installs its termination handlers before it spawns anything.
+  Doing it afterwards leaves a window in which the parent-death signal takes
+  its default action, killing only the supervisor and leaving Codex running
+  without the lock descriptor. The handler is written to work before a child
+  exists, because everything the supervisor spawns joins its process group at
+  fork, so the group kill covers a child spawned moments earlier.
 - The group is drained on the normal path too, not only when the runner dies.
   A turn's own process exiting does not mean the turn is over: Codex can start
   a background command that outlives it, and returning then would release the
@@ -466,6 +477,16 @@ merge path.
   above are the starting point for choosing that threshold. Tracked as
   follow-up, not fixed here, because picking a ceiling needs data from a real
   multi-day arc rather than a three-turn probe.
+- Extracting turn lifetime into a reviewed component. Owning a Codex turn's
+  lifetime has needed a supervisor, a process group, a parent-death signal, a
+  reparent check, handler ordering around the spawn, and a drain on both the
+  normal and abnormal paths. Five review rounds found a real window in that
+  mechanism each time. Every fix stands on its own and the measured behavior is
+  now correct, but this is a lot of process-lifetime surface for a wake runner
+  to carry, and a purpose-built supervisor (or a systemd scope, which gets the
+  same property from the kernel) would be a better home for it. Not attempted
+  here because replacing the mechanism mid-review would discard the evidence
+  already gathered for the current one.
 - Burst coalescing, if measurement shows it is worth it. Without it, N review
   comments arriving together cost N serialized turns instead of one. Idle cost
   is unchanged at zero, which is the property this slice was asked for. A
