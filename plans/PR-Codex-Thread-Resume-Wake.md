@@ -154,9 +154,18 @@ Max files: 8
     dropped, and the lock holder drains it before exiting -- settled by
     `tests/test_codex_wake_run.py::test_concurrent_wake_queues_instead_of_dropping`
     and `::test_lock_holder_drains_a_prompt_queued_mid_turn`.
-  - Queue draining is capped so a review burst cannot chain Codex turns without
-    bound, and the event that does not fit is preserved -- settled by
-    `tests/test_codex_wake_run.py::test_coalescing_is_capped_and_leaves_the_remainder`.
+  - Queue draining is capped so a review burst cannot chain Codex turns in one
+    process without bound, and the event that does not fit gets a follow-up
+    consumer rather than being stranded -- settled by
+    `tests/test_codex_wake_run.py::test_coalescing_is_capped_and_hands_off`,
+    `::test_spawn_handoff_builds_a_drain_invocation`, and
+    `::test_drain_pending_consumes_the_queue_without_stdin`.
+  - Claiming a queued prompt is atomic, so a prompt queued mid-claim is not
+    destroyed by the claim -- settled by
+    `tests/test_codex_wake_run.py::test_prompt_queued_during_a_claim_is_not_lost`.
+  - When the handoff chain is exhausted the wake exits non-zero instead of
+    leaving a prompt to rot -- settled by
+    `tests/test_codex_wake_run.py::test_exhausted_handoff_chain_fails_loudly`.
 - Reachability proof: entrypoint is
   `atlas-pr-webhook-receiver -> atlas-pr-watch-event -> codex_wake_bridge.py
   --source event -> CODEX_WAKE_COMMAND`. Observable effect is a Codex turn
@@ -297,10 +306,17 @@ exits 0, because a wake already in flight will observe the same PR state.
   wake observes the same PR state" assumption was wrong: the running turn may
   already have taken its snapshot, so a review posted after that point would
   have been invisible until some unrelated later event.
-- Queue draining is capped at `MAX_COALESCED_TURNS`. Newest-wins coalescing
-  already collapses a burst, but an unbounded drain loop would be a token sink
-  of exactly the kind this slice exists to avoid. A prompt that does not fit is
-  left queued for the next wake rather than discarded.
+- Queue draining is capped at `MAX_COALESCED_TURNS` per process. Newest-wins
+  coalescing already collapses a burst, but an unbounded drain loop would be a
+  token sink of exactly the kind this slice exists to avoid. Hitting the cap
+  with work queued starts a detached `--drain-pending` consumer instead of
+  leaving the prompt for some hypothetical later event, because nothing
+  schedules that event. The chain is bounded by `MAX_HANDOFF_CHAIN`, and the
+  last link exits `EXIT_QUEUE_NOT_DRAINED` rather than stranding silently.
+- Claiming a queued prompt is a rename, not read-then-unlink. Read-then-unlink
+  is lossy: a contender can replace the file between the two steps, and the
+  unlink then destroys a prompt nobody read while that contender has already
+  reported success. A rename takes exactly the bytes it removes.
 - Quarantine is keyed to a confirmed missing-session signature on stderr, not
   to a nonzero exit. Codex reports it as
   `no rollout found for thread id <uuid> (code -32600)`, which is why stderr is

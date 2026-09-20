@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, NamedTuple, Sequence
 
 
@@ -42,6 +43,17 @@ MAX_PENDING_FILE_BYTES = 512 * 1024
 # An in-flight wake drains queued prompts, but a review burst must not be able
 # to chain turns without bound: every turn spends the operator's plan tokens.
 MAX_COALESCED_TURNS = 4
+# When the cap is reached with work still queued, this process hands off to a
+# detached follow-up rather than stranding the prompt. The chain is bounded so
+# a sustained event storm cannot spend without limit.
+MAX_HANDOFF_CHAIN = 3
+# How long a handoff consumer waits for the lock before giving up. Giving up
+# is safe: the holder re-checks the queue after every turn, so whoever holds
+# the lock will drain what we could not claim.
+LOCK_WAIT_SECONDS = 300
+# Exit code when a queued prompt outlives the handoff chain. Distinct so the
+# caller sees a real failure instead of a silent strand.
+EXIT_QUEUE_NOT_DRAINED = 75
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
@@ -134,26 +146,77 @@ def queue_pending_prompt(path: Path, prompt: str) -> None:
 
 
 def take_pending_prompt(path: Path) -> tuple[str | None, str | None]:
-    """Claim and clear a queued prompt. Returns (prompt, reason_ignored)."""
-    if not path.exists():
+    """Atomically claim a queued prompt. Returns (prompt, reason_ignored).
+
+    The claim is a rename, not read-then-unlink. Reading and then deleting the
+    path is lossy: a contender can atomically replace the file between the two
+    steps, and the delete then destroys a prompt nobody ever read, while that
+    contender has already returned success. Renaming takes exactly the bytes
+    that were there; anything queued afterwards lands on a fresh path and is
+    picked up by the next pass of the drain loop.
+    """
+    claim = path.with_name(f".{path.name}.claim.{os.getpid()}")
+    try:
+        os.replace(path, claim)
+    except FileNotFoundError:
         return None, None
+    except OSError as exc:
+        return None, f"could not claim queued prompt: {exc}"
     try:
-        if path.stat().st_size > MAX_PENDING_FILE_BYTES:
-            path.unlink(missing_ok=True)
+        if claim.stat().st_size > MAX_PENDING_FILE_BYTES:
             return None, "queued prompt was too large; discarded"
-        text = path.read_text(encoding="utf-8")
+        text = claim.read_text(encoding="utf-8")
     except OSError as exc:
-        return None, f"could not read queued prompt: {exc}"
+        return None, f"could not read claimed prompt: {exc}"
     except UnicodeDecodeError:
-        path.unlink(missing_ok=True)
         return None, "queued prompt was not valid UTF-8; discarded"
-    try:
-        path.unlink()
-    except OSError as exc:
-        return None, f"could not clear queued prompt: {exc}"
+    finally:
+        claim.unlink(missing_ok=True)
     if not text.strip():
         return None, "queued prompt was empty"
     return text, None
+
+
+def spawn_handoff(
+    *,
+    watcher_id: str,
+    repo_dir: Path,
+    state_dir: Path,
+    sandbox: str,
+    codex_bin: str,
+    chain_depth: int,
+    log_handle: Any,
+) -> bool:
+    """Start a detached consumer for a prompt this process will not drain.
+
+    Re-queueing and exiting would strand the prompt: nothing else is scheduled
+    to consume it, so an accepted wake could sit on disk indefinitely. The
+    follow-up waits for the lock this process still holds, then drains.
+    """
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--watcher-id", watcher_id,
+        "--repo-dir", str(repo_dir),
+        "--state-dir", str(state_dir),
+        "--sandbox", sandbox,
+        "--codex-bin", codex_bin,
+        "--drain-pending",
+        "--chain-depth", str(chain_depth),
+    ]
+    try:
+        subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as exc:
+        _log(log_handle, f"could not start handoff consumer: {exc}")
+        return False
+    _log(log_handle, f"started handoff consumer at chain depth {chain_depth}")
+    return True
 
 
 def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[str]:
@@ -390,6 +453,8 @@ def run_wake(
     sandbox: str,
     codex_bin: str,
     dry_run: bool,
+    drain_pending: bool = False,
+    chain_depth: int = 0,
 ) -> int:
     state_dir.mkdir(parents=True, exist_ok=True)
     thread_path = state_dir / f"{watcher_id}.codex-thread"
@@ -422,23 +487,51 @@ def run_wake(
             return 2
 
         with lock_handle:
-            try:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                # A wake is already in flight. Dropping this one would lose the
-                # event: the running turn may already have taken its PR
-                # snapshot, so it cannot see a review posted after that point.
-                # Hand the newer prompt to the lock holder, which drains the
-                # queue before it exits.
-                queue_pending_prompt(pending_path, prompt)
-                _log(
-                    log_handle,
-                    f"a Codex wake is already running for {watcher_id}; "
-                    "queued this prompt for it to pick up",
-                )
-                return 0
-
-            turn_prompt = prompt
+            if drain_pending:
+                # A handoff consumer waits, because its whole job is to drain
+                # what the current holder could not. Giving up is still safe:
+                # the holder re-checks the queue after every turn.
+                deadline = time.monotonic() + LOCK_WAIT_SECONDS
+                acquired = False
+                while time.monotonic() < deadline:
+                    try:
+                        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except OSError:
+                        time.sleep(1.0)
+                        continue
+                    acquired = True
+                    break
+                if not acquired:
+                    _log(
+                        log_handle,
+                        f"handoff consumer gave up waiting for the {watcher_id} "
+                        "lock; the current holder drains the queue",
+                    )
+                    return 0
+                claimed, claim_reason = take_pending_prompt(pending_path)
+                if claim_reason:
+                    _log(log_handle, claim_reason)
+                if claimed is None:
+                    _log(log_handle, "handoff consumer found nothing queued")
+                    return 0
+                turn_prompt = claimed
+            else:
+                try:
+                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError:
+                    # A wake is already in flight. Dropping this one would lose
+                    # the event: the running turn may already have taken its PR
+                    # snapshot, so it cannot see a review posted after that
+                    # point. Hand the newer prompt to the lock holder, which
+                    # drains the queue before it exits.
+                    queue_pending_prompt(pending_path, prompt)
+                    _log(
+                        log_handle,
+                        f"a Codex wake is already running for {watcher_id}; "
+                        "queued this prompt for it to pick up",
+                    )
+                    return 0
+                turn_prompt = prompt
             turns = 0
             exit_code = 0
             while True:
@@ -465,12 +558,36 @@ def run_wake(
                 if queued is None:
                     break
                 if turns >= MAX_COALESCED_TURNS:
+                    # Put it back, then guarantee a consumer for it. Leaving it
+                    # on disk with nothing scheduled to read it would strand an
+                    # accepted wake.
                     queue_pending_prompt(pending_path, queued)
-                    _log(
-                        log_handle,
-                        f"a queued prompt remains after {turns} turns "
-                        f"(cap {MAX_COALESCED_TURNS}); left for the next wake",
-                    )
+                    next_depth = chain_depth + 1
+                    if next_depth <= MAX_HANDOFF_CHAIN and spawn_handoff(
+                        watcher_id=watcher_id,
+                        repo_dir=repo_dir,
+                        state_dir=state_dir,
+                        sandbox=sandbox,
+                        codex_bin=codex_bin,
+                        chain_depth=next_depth,
+                        log_handle=log_handle,
+                    ):
+                        _log(
+                            log_handle,
+                            f"hit the {MAX_COALESCED_TURNS}-turn cap; handed the "
+                            "queued prompt to a follow-up consumer",
+                        )
+                    else:
+                        # Either the chain is exhausted or the spawn failed.
+                        # Exit non-zero so this surfaces as a failure rather
+                        # than a prompt quietly rotting in the state dir.
+                        exit_code = EXIT_QUEUE_NOT_DRAINED
+                        _log(
+                            log_handle,
+                            "a queued prompt remains and no follow-up consumer "
+                            f"was started (chain depth {chain_depth} of "
+                            f"{MAX_HANDOFF_CHAIN}); it stays at {pending_path}",
+                        )
                     break
                 _log(log_handle, f"draining a queued prompt; starting turn {turns + 1}")
                 turn_prompt = queued
@@ -500,6 +617,16 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the argv this wake would run and exit without calling Codex.",
     )
+    parser.add_argument(
+        "--drain-pending",
+        action="store_true",
+        help=(
+            "Consume a queued prompt instead of reading stdin. Waits for the "
+            "wake lock. Started automatically when a wake hits its turn cap "
+            "with work still queued."
+        ),
+    )
+    parser.add_argument("--chain-depth", type=int, default=0)
     return parser
 
 
@@ -515,10 +642,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"repo dir is not a directory: {repo_dir}", file=sys.stderr)
         return 2
 
-    prompt = "" if args.dry_run else sys.stdin.read()
-    if not args.dry_run and not prompt.strip():
-        print("refusing to start a Codex turn with an empty prompt", file=sys.stderr)
+    if args.chain_depth < 0 or args.chain_depth > MAX_HANDOFF_CHAIN:
+        print(f"invalid chain depth: {args.chain_depth}", file=sys.stderr)
         return 2
+
+    # A handoff consumer takes its prompt off the queue, not from stdin.
+    if args.dry_run or args.drain_pending:
+        prompt = ""
+    else:
+        prompt = sys.stdin.read()
+        if not prompt.strip():
+            print(
+                "refusing to start a Codex turn with an empty prompt",
+                file=sys.stderr,
+            )
+            return 2
 
     return run_wake(
         watcher_id=args.watcher_id,
@@ -528,6 +666,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sandbox=args.sandbox,
         codex_bin=args.codex_bin,
         dry_run=args.dry_run,
+        drain_pending=args.drain_pending,
+        chain_depth=args.chain_depth,
     )
 
 
