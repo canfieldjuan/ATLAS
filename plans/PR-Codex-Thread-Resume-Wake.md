@@ -38,7 +38,7 @@ installed, tested runner that resumes one persistent Codex thread per watcher.
 thing that is installed today: "Do not recreate a watcher from ad hoc local
 source."
 
-**Over the 400 LOC budget, deliberately.** The diff is 1161 added lines, of
+**Over the 400 LOC budget, deliberately.** The diff is 1166 diff lines, of
 which 459 are tests and 325 are this plan. Runtime code is 335 lines across
 three files.
 The reason this slice is test-heavy rather than divisible is the defect itself:
@@ -319,7 +319,7 @@ Run on this branch before push:
 | `tests/test_audit_pr_watcher_safety.py` | +28 |
 | `scripts/install_codex_wake_bridge.py` | +13 |
 | `scripts/audit_pr_watcher_safety.py` | +1 |
-| **Total** | **8 files, +1161 / -2** |
+| **Total** | **1166** |
 
 Over the 400 LOC soft cap. Runtime code is 335 lines (runner 321, installer 13,
 audit 1); the remainder is tests (459), this plan (325), and docs (42).
