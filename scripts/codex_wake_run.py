@@ -57,6 +57,9 @@ EXIT_PARENT_GONE = 77
 # Exit code when the runner cannot keep the state a turn would produce.
 # Raised before launch where possible, so retrying is safe.
 EXIT_STATE_UNUSABLE = 78
+# How long the supervisor gives a turn's leftovers to exit on SIGTERM
+# before killing them, once the turn itself has finished.
+GROUP_DRAIN_SECONDS = 5.0
 
 SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 
@@ -100,6 +103,154 @@ def parent_death_signal_support() -> tuple[Any, str | None]:
         return None, f"could not load libc for the parent-death signal: {exc}"
 
 
+class GroupScan(NamedTuple):
+    """Live pids in a process group, plus what the scan could not read.
+
+    Scanning /proc races with processes exiting, so entries disappearing is
+    normal. The count is still carried out rather than discarded: a scan that
+    could read almost nothing would otherwise look identical to an empty group
+    and quietly license releasing the lock.
+    """
+
+    members: list[int]
+    unreadable: int
+    vanished: int
+
+
+def _pgid_of(stat_line: str) -> int | None:
+    """Parse the process group from one /proc/<pid>/stat line."""
+    # The comm field can contain spaces and parentheses, so split after it.
+    _, _, rest = stat_line.partition(") ")
+    fields = rest.split()
+    # After the state field come ppid and pgrp.
+    _state, _ppid, pgrp, *_remainder = (*fields, None, None, None)
+    if not isinstance(pgrp, str) or not pgrp.isdigit():
+        return None
+    return int(pgrp)
+
+
+def scan_process_group(pgid: int, *, exclude_pid: int) -> GroupScan:
+    """Find the live pids in `pgid`, ignoring one pid (normally ourselves)."""
+    members: list[int] = []
+    unreadable = 0
+    vanished = 0
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return GroupScan(members, unreadable=1, vanished=0)
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid == exclude_pid:
+            continue
+        try:
+            with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as handle:
+                stat_line = handle.read()
+        except FileNotFoundError:
+            # Exited between listing and reading. Expected while a group is
+            # winding down, and counted so a caller can tell a quiet scan from
+            # one that raced with a stampede of exits.
+            vanished += 1
+            continue
+        except (OSError, UnicodeDecodeError):
+            unreadable += 1
+            continue
+        if _pgid_of(stat_line) == pgid:
+            members.append(pid)
+    return GroupScan(members, unreadable, vanished)
+
+
+def process_group_members(pgid: int, *, exclude_pid: int) -> list[int]:
+    """Convenience wrapper for callers that only need the pids."""
+    return scan_process_group(pgid, exclude_pid=exclude_pid).members
+
+
+def drain_process_group(*, deadline_seconds: float, report: Any) -> None:
+    """Stop anything the turn left running, before the lock is released.
+
+    The turn's own process exiting does not mean the turn is over. Codex can
+    start a background command that outlives it, and returning here would
+    release the wake lock while that command is still editing the checkout, so
+    the next wake could overlap it.
+    """
+    me = os.getpid()
+    try:
+        pgid = os.getpgid(0)
+    except OSError as exc:
+        report(f"supervisor could not read its process group: {exc}")
+        return
+
+    scan = scan_process_group(pgid, exclude_pid=me)
+    if scan.vanished:
+        report(f"{scan.vanished} process(es) exited while the group was scanned")
+    if scan.unreadable:
+        report(
+            f"could not read {scan.unreadable} /proc entries while looking for "
+            "leftovers; some may not have been stopped"
+        )
+    if not scan.members:
+        return
+    report(f"turn left {len(scan.members)} process(es) running; stopping them")
+
+    # Ignore the signal we are about to send to the whole group, so the
+    # supervisor survives long enough to reap and report.
+    previous = signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    try:
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except OSError as exc:
+            report(f"supervisor could not signal the turn's group: {exc}")
+
+        end = time.monotonic() + deadline_seconds
+        while time.monotonic() < end:
+            _reap_children()
+            if not process_group_members(pgid, exclude_pid=me):
+                return
+            time.sleep(0.1)
+
+        already_gone = 0
+        for pid in process_group_members(pgid, exclude_pid=me):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                # Exited on its own between the scan and the kill.
+                already_gone += 1
+            except OSError as exc:
+                report(f"supervisor could not stop pid {pid}: {exc}")
+        reaped = _reap_children()
+        if already_gone or reaped:
+            report(
+                f"drain reaped {reaped} and found {already_gone} already gone"
+            )
+        remaining = process_group_members(pgid, exclude_pid=me)
+        if remaining:
+            report(f"supervisor could not stop {remaining}; releasing the lock anyway")
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def _reap_children() -> int:
+    """Collect finished children so they do not linger as zombies.
+
+    Returns how many were reaped. ChildProcessError means there is nothing
+    left to reap, which is how this loop is meant to end rather than a failure,
+    so it is turned into the count instead of being re-raised.
+    """
+    reaped = 0
+    while True:
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return reaped
+        except OSError as exc:
+            print(f"supervisor could not reap children: {exc}", file=sys.stderr)
+            return reaped
+        if pid == 0:
+            return reaped
+        reaped += 1
+
+
 def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
     """Run Codex as the leader of its own process group and take the group down.
 
@@ -141,7 +292,8 @@ def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
     try:
         child = subprocess.Popen(command)
     except OSError as exc:
-        print(f"supervisor could not start {command[0]}: {exc}", file=sys.stderr)
+        executable = next(iter(command), "<none>")
+        print(f"supervisor could not start {executable}: {exc}", file=sys.stderr)
         return 2
 
     def _take_down_the_group(_signum: int, _frame: Any) -> None:
@@ -160,7 +312,15 @@ def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, _take_down_the_group)
 
-    return child.wait()
+    exit_code = child.wait()
+
+    if own_group:
+        # The turn is not over just because its own process exited.
+        drain_process_group(
+            deadline_seconds=GROUP_DRAIN_SECONDS,
+            report=lambda message: print(message, file=sys.stderr),
+        )
+    return exit_code
 
 
 def make_die_with_parent(expected_ppid: int) -> Any:
@@ -732,10 +892,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if separator != ["--"] or not command:
             print("usage: --supervise <ppid> -- <command...>", file=sys.stderr)
             return 2
+        parent_pid = next(iter(head), "")
         try:
-            expected = int(head[0])
-        except (IndexError, ValueError):
-            print(f"invalid supervisor parent pid: {head}", file=sys.stderr)
+            expected = int(parent_pid)
+        except ValueError:
+            print(f"invalid supervisor parent pid: {parent_pid!r}", file=sys.stderr)
             return 2
         return supervise(command, expected_ppid=expected)
 

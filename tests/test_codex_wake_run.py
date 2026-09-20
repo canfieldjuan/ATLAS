@@ -921,6 +921,92 @@ def test_supervisor_runs_its_command_and_returns_its_exit_code(
     assert result.returncode == 7, "the command's exit code must propagate"
 
 
+def test_a_background_process_does_not_outlive_the_lock(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the turn is not over when its own process exits.
+
+    Codex can start a background command that survives it. Returning then
+    would release the wake lock while that command is still editing the
+    checkout, so the next wake could overlap it.
+    """
+    background_pid = tmp_path / "background.pid"
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, subprocess, sys\n"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(40)'],"
+        " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"open({str(background_pid)!r}, 'w').write(str(p.pid))\n"
+        "sys.stdin.read()\n"
+        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    state_dir = tmp_path / "state"
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    pid = int(background_pid.read_text(encoding="utf-8"))
+    assert not Path(f"/proc/{pid}").exists(), (
+        "a process the turn left running must be stopped before the lock frees"
+    )
+    # The turn itself still succeeded and is still resumable.
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A
+
+
+def test_a_clean_turn_is_not_slowed_by_the_drain(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The other side: nothing left behind means nothing to wait for."""
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+
+    started = time.monotonic()
+    assert _run(tmp_path, fake=fake) == 0
+    elapsed = time.monotonic() - started
+
+    assert elapsed < runner.GROUP_DRAIN_SECONDS, (
+        "a turn that left nothing running must not wait out the drain deadline"
+    )
+
+
+def test_scan_reports_what_it_could_not_read(tmp_path: Path) -> None:
+    """A scan that read almost nothing must not look like an empty group."""
+    scan = runner.scan_process_group(os.getpgid(0), exclude_pid=os.getpid())
+
+    assert isinstance(scan.members, list)
+    assert scan.unreadable >= 0 and scan.vanished >= 0
+
+
+def test_reap_children_returns_zero_with_nothing_to_reap() -> None:
+    """ChildProcessError is how the loop ends, not a failure to hide."""
+    assert runner._reap_children() == 0
+
+
+def test_pgid_of_rejects_a_malformed_stat_line() -> None:
+    assert runner._pgid_of("") is None
+    assert runner._pgid_of("1 (x) S") is None
+    assert runner._pgid_of("1 (comm with spaces) S 1 notanumber") is None
+    assert runner._pgid_of("1 (comm) S 1 4242 0 0") == 4242
+
+
+def test_process_group_members_excludes_the_caller(tmp_path: Path) -> None:
+    pgid = os.getpgid(0)
+
+    members = runner.process_group_members(pgid, exclude_pid=os.getpid())
+
+    assert os.getpid() not in members
+
+
+def test_process_group_members_of_an_unused_group_is_empty() -> None:
+    # A pgid that cannot be in use: larger than the configured pid ceiling.
+    assert runner.process_group_members(2**31 - 1, exclude_pid=os.getpid()) == []
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 

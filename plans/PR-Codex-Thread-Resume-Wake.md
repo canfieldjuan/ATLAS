@@ -190,6 +190,14 @@ Max files: 10
   - A persistence failure that only appears mid-turn ends in a controlled exit
     rather than a traceback out of running work -- settled by
     `tests/test_codex_wake_run.py::test_a_persist_failure_mid_turn_is_a_controlled_outcome`.
+  - A turn that finishes normally but left a background process running does
+    not release the lock until that process is gone -- settled by
+    `tests/test_codex_wake_run.py::test_a_background_process_does_not_outlive_the_lock`,
+    with the clean case `::test_a_clean_turn_is_not_slowed_by_the_drain`.
+  - The drain's process scan reports what it could not read, so a scan that
+    saw almost nothing is distinguishable from an empty group -- settled by
+    `tests/test_codex_wake_run.py::test_scan_reports_what_it_could_not_read`
+    and `::test_pgid_of_rejects_a_malformed_stat_line`.
   - A host without the kernel's parent-death signal logs that orphan protection
     is not in force rather than skipping it silently -- settled by
     `tests/test_codex_wake_run.py::test_parent_death_support_is_probed_in_the_parent`.
@@ -416,6 +424,12 @@ diagnostic writes never change a completed turn's outcome.
   nothing from a turn outlives the lock that covered it. If it cannot create
   its own group it says so and falls back to stopping the immediate child,
   rather than aiming a group kill at the wrong target.
+- The group is drained on the normal path too, not only when the runner dies.
+  A turn's own process exiting does not mean the turn is over: Codex can start
+  a background command that outlives it, and returning then would release the
+  lock while that command is still editing the checkout. Leftovers get SIGTERM,
+  a short grace period, then SIGKILL, and are reaped before the supervisor
+  returns. A turn that left nothing behind pays nothing for this.
 - Unusable state is rejected before launch, not discovered afterwards. A turn
   whose thread id cannot be stored still edits files, pushes, and comments, and
   nothing can resume it, so every retry repeats that work. The check runs ahead
