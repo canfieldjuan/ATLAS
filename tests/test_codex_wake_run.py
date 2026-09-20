@@ -7,6 +7,7 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import time
 
 import pytest
 
@@ -258,338 +259,6 @@ def test_trailing_newline_thread_id_is_accepted(tmp_path: Path, repo_dir: Path) 
     ]
 
 
-def test_concurrent_wake_queues_instead_of_dropping(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """A wake blocked on the lock must not discard its event.
-
-    The running turn may already have taken its PR snapshot, so it cannot see a
-    review posted after that point. The newer prompt is queued for it.
-    """
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    lock_path = state_dir / "slice-123.codex-wake.lock"
-
-    with lock_path.open("w", encoding="utf-8") as holder:
-        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-        assert _run(tmp_path, fake=fake, prompt="newer review thread") == 0
-
-        assert not record.exists(), "a second wake must not invoke Codex directly"
-
-    pending = state_dir / "slice-123.codex-wake.pending"
-    assert pending.read_text(encoding="utf-8") == "newer review thread"
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "already running" in log_text
-    assert "queued this prompt" in log_text
-
-
-def _queueing_codex(tmp_path: Path, *, thread_id: str, queue_times: int) -> Path:
-    """A fake Codex that simulates events arriving while the turn is running."""
-    counter = tmp_path / "invocations"
-    pending = tmp_path / "state" / "slice-123.codex-wake.pending"
-    fake = tmp_path / "fake-codex"
-    fake.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, sys\n"
-        "from pathlib import Path\n"
-        f"counter = Path({str(counter)!r})\n"
-        f"pending = Path({str(pending)!r})\n"
-        "sys.stdin.read()\n"
-        "n = int(counter.read_text()) if counter.exists() else 0\n"
-        "n += 1\n"
-        "counter.write_text(str(n))\n"
-        f"if n <= {queue_times}:\n"
-        "    pending.parent.mkdir(parents=True, exist_ok=True)\n"
-        "    pending.write_text(f'queued prompt {n}')\n"
-        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {thread_id!r}}}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
-        encoding="utf-8",
-    )
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-    return fake
-
-
-def test_lock_holder_drains_a_prompt_queued_mid_turn(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    fake = _queueing_codex(tmp_path, thread_id=THREAD_A, queue_times=1)
-
-    assert _run(tmp_path, fake=fake) == 0
-
-    assert (tmp_path / "invocations").read_text(encoding="utf-8") == "2"
-    state_dir = tmp_path / "state"
-    assert not (state_dir / "slice-123.codex-wake.pending").exists()
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "draining a queued prompt; starting turn 2" in log_text
-    assert "wake complete turns=2" in log_text
-
-
-def test_coalescing_is_capped_and_hands_off(
-    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A review burst must not chain Codex turns in one process without bound.
-
-    The remaining prompt is not stranded: a follow-up consumer is started for
-    it before this process returns.
-    """
-    fake = _queueing_codex(tmp_path, thread_id=THREAD_A, queue_times=50)
-    spawned: list[int] = []
-    monkeypatch.setattr(
-        runner,
-        "spawn_handoff",
-        lambda **kwargs: (spawned.append(kwargs["chain_depth"]), True)[1],
-    )
-
-    assert _run(tmp_path, fake=fake) == 0
-
-    invocations = int((tmp_path / "invocations").read_text(encoding="utf-8"))
-    assert invocations == runner.MAX_COALESCED_TURNS
-    state_dir = tmp_path / "state"
-    # The event that did not fit is preserved AND has a consumer.
-    assert (state_dir / "slice-123.codex-wake.pending").exists()
-    assert spawned == [1]
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "handed the queued prompt to a follow-up consumer" in log_text
-
-
-def test_exhausted_handoff_chain_fails_loudly(
-    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """At the end of the chain a strand must surface, not rot silently."""
-    fake = _queueing_codex(tmp_path, thread_id=THREAD_A, queue_times=50)
-    monkeypatch.setattr(runner, "spawn_handoff", lambda **kwargs: False)
-
-    exit_code = runner.run_wake(
-        watcher_id="slice-123",
-        repo_dir=repo_dir,
-        state_dir=tmp_path / "state",
-        prompt="wake prompt",
-        sandbox="workspace-write",
-        codex_bin=str(fake),
-        dry_run=False,
-        chain_depth=runner.MAX_HANDOFF_CHAIN,
-    )
-
-    assert exit_code == runner.EXIT_QUEUE_NOT_DRAINED
-    state_dir = tmp_path / "state"
-    assert (state_dir / "slice-123.codex-wake.pending").exists()
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "no follow-up consumer" in log_text
-
-
-def test_prompt_queued_during_a_claim_is_not_lost(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Regression for the read-then-unlink race.
-
-    A contender can atomically replace the pending file between a read and a
-    delete. Deleting afterwards would destroy a prompt nobody read, while that
-    contender already returned success. The claim is a rename, so the bytes
-    taken are exactly the bytes removed.
-    """
-    pending = tmp_path / "slice-123.codex-wake.pending"
-    runner.queue_pending_prompt(pending, "older snapshot")
-
-    real_read_text = Path.read_text
-
-    def racing_read(self: Path, *args: object, **kwargs: object) -> str:
-        if ".claim." in self.name:
-            # A second wake queues a newer snapshot mid-claim.
-            runner.queue_pending_prompt(pending, "newer snapshot")
-        return real_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(Path, "read_text", racing_read)
-    first, reason = runner.take_pending_prompt(pending)
-    monkeypatch.undo()
-
-    assert first == "older snapshot"
-    assert reason is None
-    second, _ = runner.take_pending_prompt(pending)
-    assert second == "newer snapshot", "a prompt queued mid-claim must survive"
-
-
-def test_claim_leaves_no_temp_file_behind(tmp_path: Path) -> None:
-    pending = tmp_path / "slice-123.codex-wake.pending"
-    runner.queue_pending_prompt(pending, "a prompt")
-
-    runner.take_pending_prompt(pending)
-
-    assert list(tmp_path.glob("*claim*")) == []
-    assert not pending.exists()
-
-
-def test_spawn_handoff_builds_a_drain_invocation(
-    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_popen(argv: list[str], **kwargs: object) -> object:
-        captured["argv"] = argv
-        captured["kwargs"] = kwargs
-        return object()
-
-    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
-    log = tmp_path / "log.txt"
-    with log.open("w", encoding="utf-8") as handle:
-        assert runner.spawn_handoff(
-            watcher_id="slice-123",
-            repo_dir=repo_dir,
-            state_dir=tmp_path / "state",
-            sandbox="read-only",
-            codex_bin="codex",
-            chain_depth=2,
-            log_handle=handle,
-        )
-
-    argv = captured["argv"]
-    assert "--drain-pending" in argv
-    assert argv[argv.index("--chain-depth") + 1] == "2"
-    assert argv[argv.index("--watcher-id") + 1] == "slice-123"
-    assert argv[argv.index("--sandbox") + 1] == "read-only"
-    assert captured["kwargs"]["start_new_session"] is True
-
-
-def test_drain_pending_consumes_the_queue_without_stdin(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    runner.queue_pending_prompt(
-        state_dir / "slice-123.codex-wake.pending", "queued work"
-    )
-
-    exit_code = runner.run_wake(
-        watcher_id="slice-123",
-        repo_dir=repo_dir,
-        state_dir=state_dir,
-        prompt="",
-        sandbox="workspace-write",
-        codex_bin=str(fake),
-        dry_run=False,
-        drain_pending=True,
-        chain_depth=1,
-    )
-
-    assert exit_code == 0
-    assert json.loads(record.read_text(encoding="utf-8"))["stdin"] == "queued work"
-    assert not (state_dir / "slice-123.codex-wake.pending").exists()
-
-
-def test_drain_pending_with_an_empty_queue_is_a_noop(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-
-    exit_code = runner.run_wake(
-        watcher_id="slice-123",
-        repo_dir=repo_dir,
-        state_dir=tmp_path / "state",
-        prompt="",
-        sandbox="workspace-write",
-        codex_bin=str(fake),
-        dry_run=False,
-        drain_pending=True,
-        chain_depth=1,
-    )
-
-    assert exit_code == 0
-    assert not record.exists()
-
-
-def test_drain_pending_gives_up_when_the_lock_is_held(
-    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Giving up is safe: the holder re-checks the queue after every turn."""
-    monkeypatch.setattr(runner, "LOCK_WAIT_SECONDS", 1)
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    runner.queue_pending_prompt(
-        state_dir / "slice-123.codex-wake.pending", "queued work"
-    )
-    lock_path = state_dir / "slice-123.codex-wake.lock"
-
-    with lock_path.open("w", encoding="utf-8") as holder:
-        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-
-        exit_code = runner.run_wake(
-            watcher_id="slice-123",
-            repo_dir=repo_dir,
-            state_dir=state_dir,
-            prompt="",
-            sandbox="workspace-write",
-            codex_bin=str(fake),
-            dry_run=False,
-            drain_pending=True,
-            chain_depth=1,
-        )
-
-    assert exit_code == 0
-    assert not record.exists()
-    # The prompt is still queued for whoever holds the lock.
-    assert (state_dir / "slice-123.codex-wake.pending").exists()
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "gave up waiting" in log_text
-
-
-@pytest.mark.parametrize("depth", [-1, 99])
-def test_rejects_out_of_range_chain_depth(
-    tmp_path: Path, repo_dir: Path, depth: int
-) -> None:
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-
-    exit_code = runner.main(
-        [
-            "--watcher-id", "slice-123",
-            "--repo-dir", str(repo_dir),
-            "--state-dir", str(tmp_path / "state"),
-            "--codex-bin", str(fake),
-            "--drain-pending",
-            "--chain-depth", str(depth),
-        ]
-    )
-
-    assert exit_code == 2
-    assert not record.exists()
-
-
-def test_queued_prompt_is_the_newest_one(tmp_path: Path, repo_dir: Path) -> None:
-    """Each bridge prompt is a full PR snapshot, so newest supersedes older."""
-    state_dir = tmp_path / "state"
-    pending = state_dir / "slice-123.codex-wake.pending"
-
-    runner.queue_pending_prompt(pending, "older snapshot")
-    runner.queue_pending_prompt(pending, "newer snapshot")
-
-    taken, reason = runner.take_pending_prompt(pending)
-    assert taken == "newer snapshot"
-    assert reason is None
-    assert not pending.exists()
-
-
-def test_empty_queued_prompt_is_discarded(tmp_path: Path) -> None:
-    pending = tmp_path / "state" / "slice-123.codex-wake.pending"
-    runner.queue_pending_prompt(pending, "   \n")
-
-    taken, reason = runner.take_pending_prompt(pending)
-
-    assert taken is None
-    assert reason == "queued prompt was empty"
-
-
-def test_oversized_queued_prompt_is_discarded(tmp_path: Path) -> None:
-    pending = tmp_path / "state" / "slice-123.codex-wake.pending"
-    runner.queue_pending_prompt(pending, "x" * (runner.MAX_PENDING_FILE_BYTES + 1))
-
-    taken, reason = runner.take_pending_prompt(pending)
-
-    assert taken is None
-    assert reason == "queued prompt was too large; discarded"
-    assert not pending.exists()
-
-
 def test_thread_id_is_read_inside_the_lock(tmp_path: Path, repo_dir: Path) -> None:
     """Regression for the stale-read interleaving.
 
@@ -779,6 +448,194 @@ def test_codex_stderr_is_recorded_in_the_log(tmp_path: Path, repo_dir: Path) -> 
         encoding="utf-8"
     )
     assert "codex stderr: Error: something went wrong" in log_text
+
+
+def test_a_blocked_wake_waits_and_then_runs_its_own_turn(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Concurrency is handled by waiting, not by handing the prompt away.
+
+    There is no queue to strand: a wake that acquires the lock runs the prompt
+    it was given.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    lock_path = state_dir / "slice-123.codex-wake.lock"
+
+    holder = lock_path.open("w", encoding="utf-8")
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    real_sleep = time.sleep
+    released: list[bool] = []
+
+    def releasing_sleep(seconds: float) -> None:
+        if not released:
+            released.append(True)
+            fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+            holder.close()
+        real_sleep(0.01)
+
+    monkeypatch.setattr(runner.time, "sleep", releasing_sleep)
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir, prompt="my own prompt") == 0
+
+    assert released, "the test must have exercised the wait path"
+    assert json.loads(record.read_text(encoding="utf-8"))["stdin"] == "my own prompt"
+
+
+def test_lock_timeout_reports_failure_rather_than_dropping_the_wake(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(runner, "LOCK_WAIT_SECONDS", 0)
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    lock_path = state_dir / "slice-123.codex-wake.lock"
+
+    with lock_path.open("w", encoding="utf-8") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_LOCK_TIMEOUT
+
+    assert not record.exists()
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "gave up" in log_text
+
+
+def test_a_superseded_wake_skips_its_turn(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A newer wake covers an older one, so the older one need not spend a turn."""
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    generation = state_dir / "slice-123.codex-wake.generation"
+    # A newer wake stamped itself far in the future.
+    runner._atomic_write(generation, f"{time.time_ns() + 10**12}\n")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    assert not record.exists(), "a superseded wake must not spend a turn"
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "superseded" in log_text
+
+
+def test_an_unreadable_generation_file_makes_the_wake_run(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Every failure of the stamp file must cost a turn, never drop one."""
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    generation = state_dir / "slice-123.codex-wake.generation"
+    generation.write_text("not a number at all", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    assert record.exists(), "a wake that cannot prove it is superseded must run"
+
+
+@pytest.mark.parametrize(
+    ("stored", "expect_reason"),
+    [("", False), ("   ", False), ("not-a-number", True), ("x" * 200, True)],
+)
+def test_read_generation_degrades_to_zero_and_says_why(
+    tmp_path: Path, stored: str, expect_reason: bool
+) -> None:
+    path = tmp_path / "gen"
+    path.write_text(stored, encoding="utf-8")
+
+    stamp, reason = runner.read_generation(path)
+
+    assert stamp == 0
+    assert (reason is not None) == expect_reason
+
+
+def test_read_generation_of_a_missing_file_is_silent(tmp_path: Path) -> None:
+    stamp, reason = runner.read_generation(tmp_path / "absent")
+
+    assert stamp == 0
+    assert reason is None
+
+
+def test_record_generation_keeps_the_newest(tmp_path: Path) -> None:
+    path = tmp_path / "gen"
+
+    assert runner.record_generation(path, 500) is None
+    assert runner.record_generation(path, 100) is None
+
+    assert runner.read_generation(path)[0] == 500
+
+
+def test_record_generation_reports_a_corrupt_file_then_repairs_it(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "gen"
+    path.write_text("garbage", encoding="utf-8")
+
+    reason = runner.record_generation(path, 500)
+
+    assert reason is not None and "not an integer" in reason
+    assert runner.read_generation(path) == (500, None)
+
+
+def test_a_corrupt_stamp_file_is_reported_in_the_log(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "slice-123.codex-wake.generation").write_text(
+        "garbage", encoding="utf-8"
+    )
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    assert record.exists()
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "not an integer" in log_text
+
+
+def test_zero_exit_without_a_thread_event_is_a_protocol_failure(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Success with no thread id would silently forfeit continuity."""
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdin.read()\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    state_dir = tmp_path / "state"
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_NO_THREAD_EVENT
+
+    assert not (state_dir / "slice-123.codex-thread").exists()
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "emitted no valid thread.started event" in log_text
+
+
+def test_zero_exit_with_a_malformed_thread_id_is_a_protocol_failure(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdin.read()\n"
+        "print(json.dumps({'type': 'thread.started', 'thread_id': 'not-a-uuid'}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n"
+        "sys.exit(0)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+    assert _run(tmp_path, fake=fake) == runner.EXIT_NO_THREAD_EVENT
 
 
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:

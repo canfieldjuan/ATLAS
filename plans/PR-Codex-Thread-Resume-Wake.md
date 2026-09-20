@@ -72,7 +72,7 @@ leave a window where the same silence is possible.
 
 Ownership lane: dev-workflow/codex-wake-resume
 Slice phase: Workflow/process
-Max files: 8
+Max files: 9
 
 1. Add `scripts/codex_wake_run.py`: reads the wake prompt on stdin, resumes a
    persisted Codex thread for that watcher id when one exists, otherwise starts
@@ -150,22 +150,27 @@ Max files: 8
     persistence -- settled by `grep -n CODEX_WAKE_COMMAND
     docs/long_running_session_watcher_handoff.md` returning only runner
     invocations at lines 129, 330, and 478.
-  - A wake that arrives while another holds the lock is queued rather than
-    dropped, and the lock holder drains it before exiting -- settled by
-    `tests/test_codex_wake_run.py::test_concurrent_wake_queues_instead_of_dropping`
-    and `::test_lock_holder_drains_a_prompt_queued_mid_turn`.
-  - Queue draining is capped so a review burst cannot chain Codex turns in one
-    process without bound, and the event that does not fit gets a follow-up
-    consumer rather than being stranded -- settled by
-    `tests/test_codex_wake_run.py::test_coalescing_is_capped_and_hands_off`,
-    `::test_spawn_handoff_builds_a_drain_invocation`, and
-    `::test_drain_pending_consumes_the_queue_without_stdin`.
-  - Claiming a queued prompt is atomic, so a prompt queued mid-claim is not
-    destroyed by the claim -- settled by
-    `tests/test_codex_wake_run.py::test_prompt_queued_during_a_claim_is_not_lost`.
-  - When the handoff chain is exhausted the wake exits non-zero instead of
-    leaving a prompt to rot -- settled by
-    `tests/test_codex_wake_run.py::test_exhausted_handoff_chain_fails_loudly`.
+  - A wake that arrives while another holds the lock waits for it and then
+    runs its own prompt, so no wake is dropped and there is no queue to strand
+    -- settled by
+    `tests/test_codex_wake_run.py::test_a_blocked_wake_waits_and_then_runs_its_own_turn`.
+  - A wake that never gets the lock exits non-zero instead of reporting a
+    success it did not perform -- settled by
+    `tests/test_codex_wake_run.py::test_lock_timeout_reports_failure_rather_than_dropping_the_wake`.
+  - A wake superseded by a newer one skips its turn, and every failure of the
+    stamp file costs a redundant turn rather than a dropped wake -- settled by
+    `tests/test_codex_wake_run.py::test_a_superseded_wake_skips_its_turn`,
+    `::test_an_unreadable_generation_file_makes_the_wake_run`, and
+    `::test_read_generation_degrades_to_zero_and_says_why`.
+  - Codex exiting 0 without naming a thread is treated as a protocol failure,
+    not success -- settled by
+    `tests/test_codex_wake_run.py::test_zero_exit_without_a_thread_event_is_a_protocol_failure`
+    and `::test_zero_exit_with_a_malformed_thread_id_is_a_protocol_failure`.
+  - The real entrypoint works end to end: the bridge reads a watcher config,
+    splits the documented `CODEX_WAKE_COMMAND`, invokes the INSTALLED runner,
+    and a thread plus wake record appear; a second event resumes that thread --
+    settled by `tests/test_codex_wake_end_to_end.py`, which fakes only the
+    Codex binary.
 - Reachability proof: entrypoint is
   `atlas-pr-webhook-receiver -> atlas-pr-watch-event -> codex_wake_bridge.py
   --source event -> CODEX_WAKE_COMMAND`. Observable effect is a Codex turn
@@ -234,7 +239,10 @@ stored thread id. That is an admission boundary.
 - `scripts/install_codex_wake_bridge.py` -- install and drift-check it.
 - `scripts/audit_pr_watcher_safety.py` -- one line, scan scope.
 - `tests/test_codex_wake_run.py` (new) -- argv shape, thread round trip,
-  malformed-id admission, concurrency, wake record.
+  malformed-id admission, lock waiting and supersede, protocol failures,
+  wake record.
+- `tests/test_codex_wake_end_to_end.py` (new) -- the bridge through the
+  installed runner, faking only the Codex binary.
 - `tests/test_install_codex_wake_bridge.py` -- runner install and drift.
 - `tests/test_audit_pr_watcher_safety.py` -- runner merge-authority scan.
 - `docs/long_running_session_watcher_handoff.md` -- the wake command operators
@@ -301,22 +309,20 @@ exits 0, because a wake already in flight will observe the same PR state.
 - Opening the wake log and lock is guarded: a background wake whose state
   directory is unwritable exits 2 with a message rather than a traceback nobody
   is present to read.
-- A wake blocked on the lock queues its prompt instead of dropping it, and
-  the lock holder drains the queue before releasing. The earlier "the in-flight
-  wake observes the same PR state" assumption was wrong: the running turn may
-  already have taken its snapshot, so a review posted after that point would
-  have been invisible until some unrelated later event.
-- Queue draining is capped at `MAX_COALESCED_TURNS` per process. Newest-wins
-  coalescing already collapses a burst, but an unbounded drain loop would be a
-  token sink of exactly the kind this slice exists to avoid. Hitting the cap
-  with work queued starts a detached `--drain-pending` consumer instead of
-  leaving the prompt for some hypothetical later event, because nothing
-  schedules that event. The chain is bounded by `MAX_HANDOFF_CHAIN`, and the
-  last link exits `EXIT_QUEUE_NOT_DRAINED` rather than stranding silently.
-- Claiming a queued prompt is a rename, not read-then-unlink. Read-then-unlink
-  is lossy: a contender can replace the file between the two steps, and the
-  unlink then destroys a prompt nobody read while that contender has already
-  reported success. A rename takes exactly the bytes it removes.
+- A blocked wake waits for the lock and then runs its own prompt. There is no
+  prompt queue. Three review rounds were spent closing windows in a file-based
+  handoff (drop-on-contention, then a read-then-unlink claim race, then the
+  window between the holder's final queue check and its release), which is the
+  AGENTS 3k.2 signal to replace the mechanism rather than patch it again. A
+  queue whose producer and consumer synchronize through a second file cannot be
+  made strand-free by adding checks; waiting removes the second file, so the
+  lock is the only shared state and the invariant is one line: every wake that
+  acquires the lock runs the prompt it was given.
+- Burst coalescing is a stamp, not a queue. A wake records its start time
+  before contending, and skips its turn if a newer wake has stamped itself by
+  the time it gets the lock. Every failure mode of that file -- lost update,
+  unreadable, corrupt, clock jump -- reads as "not superseded", so it costs a
+  redundant turn and can never drop a wake. That asymmetry is the whole design.
 - Quarantine is keyed to a confirmed missing-session signature on stderr, not
   to a nonzero exit. Codex reports it as
   `no rollout found for thread id <uuid> (code -32600)`, which is why stderr is
@@ -344,6 +350,10 @@ merge path.
   above are the starting point for choosing that threshold. Tracked as
   follow-up, not fixed here, because picking a ceiling needs data from a real
   multi-day arc rather than a three-turn probe.
+- Cross-host stamps. The supersede stamp uses `time.time_ns()`, which is
+  comparable only on one machine. Every consumer of a given watcher id runs on
+  the operator's host today, so this is correct as built; a multi-host watcher
+  would need a different ordering source.
 - Enabling the timers. `atlas-pr-watch@.timer` and
   `atlas-pr-watch-event@.timer` have no symlinks under
   `~/.config/systemd/user/timers.target.wants/`, so no instance is enabled
