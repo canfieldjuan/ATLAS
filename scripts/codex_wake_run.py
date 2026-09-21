@@ -133,8 +133,17 @@ class GroupScan(NamedTuple):
     vanished: int
 
 
+# A process in Z state has already exited and is only waiting to be reaped.
+# It holds no files and runs no code, so counting it as a live group member
+# turns a finished turn into a reported failure.
+ZOMBIE_STATE = "Z"
+
+
 def _pgid_of(stat_line: str) -> int | None:
-    """Parse the process group from one /proc/<pid>/stat line.
+    """Parse the process group of a LIVE process from one /proc/<pid>/stat line.
+
+    Returns None for a zombie, because the question this answers is whether
+    anything from the turn is still running, not whether an entry still exists.
 
     The comm field is parenthesized and may itself contain spaces, parentheses
     and even ") ". Splitting on the FIRST ") " therefore mis-parses a process
@@ -145,7 +154,9 @@ def _pgid_of(stat_line: str) -> int | None:
     _, _, rest = stat_line.rpartition(")")
     fields = rest.split()
     # After the state field come ppid and pgrp.
-    _state, _ppid, pgrp, *_remainder = (*fields, None, None, None)
+    state, _ppid, pgrp, *_remainder = (*fields, None, None, None)
+    if state == ZOMBIE_STATE:
+        return None
     if not isinstance(pgrp, str) or not pgrp.isdigit():
         return None
     return int(pgrp)

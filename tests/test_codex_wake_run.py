@@ -1656,6 +1656,67 @@ def test_a_readable_empty_group_is_contained(
     assert runner.drain_process_group(deadline_seconds=0.0, report=lambda _m: None) == 0
 
 
+def test_a_zombie_is_not_a_live_group_member(tmp_path: Path) -> None:
+    """Regression: a reaped-pending process is dead, not still running.
+
+    Counting it turns a finished turn into a reported failure, and the caller
+    may then retry edits, pushes or comments the agent already made.
+    """
+    child = subprocess.Popen([sys.executable, "-c", "raise SystemExit(0)"])
+    try:
+        deadline = time.monotonic() + 5.0
+        state = ""
+        while time.monotonic() < deadline:
+            try:
+                line = Path(f"/proc/{child.pid}/stat").read_text(encoding="utf-8")
+            except OSError:
+                break
+            state = line.rpartition(")")[2].split()[0]
+            if state == "Z":
+                break
+            time.sleep(0.05)
+        if state != "Z":
+            pytest.skip("could not observe the child in zombie state")
+
+        members = runner.process_group_members(
+            os.getpgid(0), exclude_pid=os.getpid()
+        )
+
+        assert child.pid not in members
+    finally:
+        child.wait()
+
+
+def test_a_running_process_is_still_a_live_group_member() -> None:
+    """The other side: excluding zombies must not blind the scan."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(10)"])
+    try:
+        time.sleep(0.5)
+        members = runner.process_group_members(
+            os.getpgid(0), exclude_pid=os.getpid()
+        )
+        assert child.pid in members
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.parametrize(
+    ("stat_line", "expected"),
+    [
+        ("4242 (worker) Z 1 7777 7777", None),
+        ("4242 (worker) S 1 7777 7777", 7777),
+        ("4242 (worker) R 1 7777 7777", 7777),
+        ("4242 (worker) D 1 7777 7777", 7777),
+        ("4242 (zombie) hidden) Z 1 7777 7777", None),
+    ],
+)
+def test_pgid_of_reports_only_live_processes(
+    stat_line: str, expected: int | None
+) -> None:
+    assert runner._pgid_of(stat_line) == expected
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 

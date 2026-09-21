@@ -231,6 +231,11 @@ Max files: 10
     `tests/test_codex_wake_run.py::test_thread_identity_ignores_casing`, with
     the still-refused case `::test_a_genuinely_different_thread_is_still_refused`
     and `::test_missing_session_match_ignores_casing`.
+  - The containment scan counts only processes that are actually running, so a
+    zombie awaiting reaping cannot fail a finished turn -- settled by
+    `tests/test_codex_wake_run.py::test_a_zombie_is_not_a_live_group_member`,
+    with the other side `::test_a_running_process_is_still_a_live_group_member`
+    and `::test_pgid_of_reports_only_live_processes`.
   - Containment that could not be checked is not reported as contained, so a
     host where `/proc` is unreadable or `setsid` fails fails the turn rather
     than releasing the lock on an assumption -- settled by
@@ -513,6 +518,11 @@ diagnostic writes never change a completed turn's outcome.
   accepts uppercase hex, and a UUID's identity is not its casing, so comparing
   spellings would treat one conversation written two ways as two and kill the
   correct turn.
+- The scan answers "is anything still running", not "does an entry exist". A
+  process in Z state has already exited and is only waiting to be reaped, so
+  counting it would turn a finished turn into a reported failure and invite a
+  retry of work the agent already did. That is the same predicate as the
+  fail-closed rule below, read from its other side.
 - Containment that cannot be established is treated as absent, not as
   unnecessary. If `/proc` cannot be read or `setsid` fails, the drain cannot
   know what is still running, and reporting a clean turn there would release
@@ -635,7 +645,7 @@ round:
 - `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py
   tests/test_install_codex_wake_bridge.py tests/test_codex_wake_bridge.py
   tests/test_audit_pr_watcher_safety.py tests/test_pr_watcher.py
-  tests/test_report_pr_watcher_state.py -q` -- **330 passed**.
+  tests/test_report_pr_watcher_state.py -q` -- **337 passed**.
 - `python scripts/audit_pr_watcher_safety.py` -- exit 0, "watcher
   docs/config/source grant no merge authority".
 - `bash scripts/check_ascii_python.sh` -- exit 0.
@@ -643,7 +653,7 @@ round:
   tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob
   'scripts/**'` -- exit 0, no new brittleness above baseline.
 - End-to-end against the **real** `codex-cli 0.155.1`: a fresh wake stored
-  codeword `HAWSER-6628` and a resumed wake recalled it, through the
+  codeword `TRANSOM-4409` and a resumed wake recalled it, through the
   supervisor and with the current identity and quarantine rules in place.
 
 Probes that shaped specific fixes, each reproduced before the change and
