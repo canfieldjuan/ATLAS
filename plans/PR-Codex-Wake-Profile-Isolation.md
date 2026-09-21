@@ -92,24 +92,35 @@ This PR is the contract half of that phase: it adds the plan and no code.
 
 The reviewer reviews the contract itself here, not an implementation. Each
 criterion is about whether the contract is decidable and complete enough that
-the implementation can be reviewed against it.
+the implementation can be reviewed against it. Every behavioral claim in this
+contract was reproduced against codex-cli 0.155.1 through the installed runner
+before it was written down; a reviewer can re-run each one.
 
 - The contract names both environment variables and says why one alone is
   insufficient -- settled by the 49,728 row above, measured with `CODEX_HOME`
   set and `HOME` left alone, which still carried all 26 skills.
 - The contract states the default when nothing is configured, and that default
-  is "behave exactly as today" -- settled by invariant I2 below, which the
+  is "behave exactly as today" -- settled by invariant I2, which the
   implementation must prove with a test asserting the child environment is
   unmodified when no profile is configured.
-- The contract states a fail-closed rule for a misconfigured profile, and
-  fail-closed means "no turn is spent" rather than "fall back to the
-  interactive profile" -- settled by invariant I3 and failure case F1.
-- The contract says where the effective profile is recorded, so an operator
-  reading a wake log after the fact can tell which profile a turn ran under --
-  settled by invariant I5.
-- The contract names the credential and tooling reachability requirement, so a
-  wake under an isolated `HOME` cannot silently lose git identity or `gh` auth
-  -- settled by invariant I4 and failure case F3.
+- The contract requires the receipt to name the profile a turn actually ran
+  under, not merely the arguments it was passed -- settled by invariant I5 and
+  its reproduction, where an ambient `CODEX_HOME` and `HOME` produced output
+  byte-identical to no profile at all.
+- The contract assigns profile validation to Codex rather than to the runner,
+  and gives the evidence for that assignment -- settled by failure cases F1 and
+  F2, which show Codex refusing a nonexistent profile before any model call and
+  a credential-less profile at the API, both without billing tokens and neither
+  falling back to the interactive profile.
+- The contract forbids a pre-launch validation check rather than leaving it
+  optional -- settled by the "no pre-launch profile validation" paragraph, so a
+  reviewer can reject an implementation that adds one.
+- The contract states that a profile directory is written to by Codex and must
+  therefore be writable -- settled by invariant I6 and its reproduction, where
+  an empty profile gained `installation_id` and several sqlite databases.
+- The contract names the tooling reachability requirement, so a wake under an
+  isolated `HOME` cannot silently lose git identity or `gh` auth -- settled by
+  failure case F3 and the Deferred documentation item.
 - The contract does not change any behavior PR #2525 settled -- settled by the
   "what must not change" list above, which the implementation must leave green
   in `tests/test_codex_wake_run.py` (365 tests at the time of writing).
@@ -161,44 +172,70 @@ the two compose with what exists.
   variable is added, removed or altered by this feature.
 - **I2.** When neither is given, the child environment is byte-identical to
   today's. This feature is opt-in and cannot change an existing deployment.
-- **I3.** Either argument may be given alone, and each takes effect alone. The
-  runner does not infer one from the other, because they are independent roots
-  and a partial isolation is a legitimate operator choice.
-- **I4.** The runner does not copy, create or write credentials. Whatever
-  authentication the isolated profile has is what the operator put there.
-- **I5.** The effective profile is recorded in the wake log for every turn that
-  launches, alongside the existing `argv=` line, including when no profile is
-  configured.
-- **I6.** A wake never writes to a path outside its configured profile and its
-  existing state directory. Codex's own writes inside the profile
-  (`sessions/`, a regenerated `skills/.system`) are expected and permitted.
+- **I3.** Either argument may be given alone and each takes effect alone, and
+  when only one is given the runner records that the other root is **not**
+  isolated. Partial isolation measurably under-delivers: `CODEX_HOME` alone
+  still carried all 26 shared skills and cost 49,728 tokens against 27,495 for
+  both. Reusing an existing `CODEX_HOME` without relocating `HOME` is a real
+  operator position, so it is allowed; it must not look like full isolation in
+  the log.
+- **I4.** The runner does not create, copy or write any part of a profile, and
+  does not write credentials. A profile is an operator-supplied input.
+- **I5.** For every turn that launches, the runner records the **effective**
+  `CODEX_HOME` and `HOME` the child actually receives, whatever their origin --
+  passed by argument, inherited from the runner's own environment, or unset.
+  Recording only the arguments would leave the log blind in exactly the case
+  that matters. Reproduced against the shipped runner: with
+  `CODEX_HOME` and `HOME` both set in the environment and neither passed as an
+  argument, the runner's output is byte-identical to a run with no profile at
+  all, so nothing in the receipt distinguishes them.
+- **I6.** The runner writes nothing outside its own state directory. Codex
+  writes inside the profile, so a profile directory must be writable by the
+  wake: reproduced by pointing `CODEX_HOME` at an empty directory, after which
+  Codex created `installation_id` and several sqlite databases there.
+- **I7.** The runner never selects or substitutes a profile. It passes what it
+  was given, or nothing. There is no fallback path to select, which is the
+  fail-closed rule enforced by construction rather than by a check.
 
-**Failure cases.**
+**Failure cases.** Each of these was reproduced against codex-cli 0.155.1
+through the installed runner before being written down.
 
-- **F1.** A configured profile directory that does not exist, or exists and is
-  not a directory, is refused **before launch** with a distinct non-zero exit
-  code and no turn spent. Falling back to the interactive profile would
-  reintroduce the exact defect this slice exists to remove, and doing it
-  silently would hide it. Refusing before launch is safe to retry, which is the
-  same rule the runner already applies to an unusable thread path.
-- **F2.** A configured profile directory that exists but cannot be read is
-  treated as F1.
-- **F3.** A profile whose authentication is missing or invalid is **not**
-  detectable before launch without spending a turn, so it is not pre-checked.
-  Codex fails, the turn carries its own non-zero exit code, and the existing
-  receipts record it. The contract's obligation is that this failure is loud in
-  the wake log, not that it is prevented.
-- **F4.** An isolated `HOME` missing git identity or `gh` credentials is an
+- **F1. `CODEX_HOME` points at a path that does not exist.** Codex refuses
+  before any model call, naming the path:
+  `Error finding codex home: CODEX_HOME points to "..." but that path does not
+  exist`. It does **not** create the directory and does **not** fall back to
+  the interactive profile. The runner records `turn complete exit=1` and
+  `usage=unavailable`. No tokens are billed.
+- **F2. `CODEX_HOME` exists but carries no credential.** Codex populates the
+  directory with its own scaffolding, then fails `401 Unauthorized` after
+  retrying the websocket three times over about twelve seconds. Exit 1, no
+  tokens billed.
+- **F3. An isolated `HOME` missing git identity or `gh` credentials** is an
   operator configuration error, not a runner error. The runner does not probe
   for them, because probing would either spend a turn or hard-code assumptions
   about which tools a given arc needs. The documentation obligation is in
   Deferred.
 
-**Concurrency model.** Unchanged. The per-watcher wake lock continues to
-serialize wakes, and profile directories are shared read-mostly state that
-Codex itself manages. Two watchers may share one profile directory; Codex
-already tolerates concurrent sessions in one `CODEX_HOME`, and nothing in this
-slice adds cross-wake coordination.
+**The runner performs no pre-launch profile validation.** This reverses the
+first draft of this contract, which specified a pre-launch check that refused a
+missing or unreadable profile so that no turn would be spent. Reproducing F1 and
+F2 shows that check would protect against nothing: Codex already fails closed,
+already refuses to fall back, and already costs nothing when it does. A runner
+check would duplicate authority that belongs to Codex, could false-reject a
+profile Codex would have accepted, and would introduce a time-of-check race the
+runner cannot close, because a profile is handed to a child process as a string
+in an environment variable and cannot be pinned to a descriptor the way PR #2525
+pinned the thread file. An implementation that adds such a check should be
+rejected, and an implementation that claims to close that race is overclaiming.
+
+**Concurrency model.** The per-watcher wake lock continues to serialize wakes
+and this slice adds no cross-wake coordination. One correction to the first
+draft, which called a profile "read-mostly": reproducing F2 shows Codex writes
+sqlite databases and an installation id inside `CODEX_HOME`, so two watchers
+pointed at one profile share that state. Sharing is permitted and untested at
+concurrency; a watcher that wants isolation from another watcher's Codex state
+should be given its own profile directory. This is a documentation obligation,
+recorded in Deferred, not a runner behavior.
 
 **Settling test evidence the implementation must produce.**
 
@@ -229,6 +266,20 @@ slice adds cross-wake coordination.
   on the next run. The `skip_host_skill_discovery` feature flag is the right
   lever, is marked "under development", and measurably does nothing today.
   Those five built-ins are accepted as a floor.
+- **No pre-launch profile validation, reversing this contract's first draft.**
+  The draft specified refusing a missing or unreadable profile before launch so
+  that no turn would be spent. Reproducing the two cases showed the check would
+  protect against nothing: a nonexistent `CODEX_HOME` makes Codex exit before
+  any model call, and a credential-less one fails at the API, both free and
+  neither falling back. The check would have duplicated Codex's authority,
+  risked false-rejecting a profile Codex accepts, and added a time-of-check
+  race the runner cannot close. Removed on evidence.
+- **A single `--wake-profile <dir>` prescribing `<dir>/codex` and `<dir>/home`
+  was rejected.** It would remove the partial-isolation foot-gun by
+  construction, which is its appeal, but it forces a directory layout on the
+  operator and makes an existing `CODEX_HOME` unusable without moving it. The
+  foot-gun is handled by I3's recording requirement instead, which costs a log
+  line rather than an imposed layout.
 - **Profile contents are the operator's, not the repo's.** This slice gives the
   runner the ability to use an isolated profile. What belongs inside one is a
   configuration question with a security dimension (which credentials a
@@ -266,23 +317,27 @@ Parked hardening: none.
 
 ## Verification
 
-This commit changes no runtime file, so there is nothing to run against it. The
-measurements the contract rests on were taken by hand against the real
-codex-cli 0.155.1 and are reproducible:
+This commit changes no runtime file. What it carries instead is a set of
+reproductions run against the real codex-cli 0.155.1 through the installed
+runner, each of which a reviewer can repeat:
 
-- Command: `CODEX_HOME=<profile> HOME=<agent-home> ~/.local/bin/atlas-codex-wake-run --watcher-id <id> --repo-dir <repo> --state-dir <dir> --sandbox danger-full-access` with the two prompts named above - Result: pass - Environment: local
-- Command: `python3 -c "import json; [print(json.loads(l).get('type')) for l in open('<rollout>.jsonl')]"` to attribute injected context per record - Result: pass - Environment: local
-- Command: `codex features list` to confirm which skill flags exist and their status - Result: pass - Environment: local
+- Command: `echo x | CODEX_HOME=<profile> HOME=<agent-home> ~/.local/bin/atlas-codex-wake-run --watcher-id r1 --repo-dir <repo> --state-dir <dir> --sandbox read-only --dry-run`, run once with the two variables set and once without - Result: pass - Environment: local
+- Command: `echo "Reply with only the word OK." | CODEX_HOME=/tmp/codex-home-does-not-exist-xyz ~/.local/bin/atlas-codex-wake-run --watcher-id c1 --repo-dir <repo> --state-dir <dir> --sandbox read-only` - Result: fail - Environment: local
+- Command: `echo "Reply with only the word OK." | CODEX_HOME=<empty dir> ~/.local/bin/atlas-codex-wake-run --watcher-id d1 --repo-dir <repo> --state-dir <dir> --sandbox read-only` - Result: fail - Environment: local
+- Command: `bash scripts/check_ascii_python.sh` - Result: pass - Environment: local
 
-The implementation commit will carry its own Verification block with the test
-counts and one live `usage=` line.
+The two `fail` results are the expected ones and are the evidence for F1 and F2:
+each exits 1, records `usage=unavailable`, bills nothing, and does not fall back
+to the interactive profile. The implementation commit will carry its own
+Verification block with test counts and one live `usage=` line from an isolated
+wake.
 
 ## Estimated diff size
 
 | File | +/- |
 |---|---:|
-| `plans/PR-Codex-Wake-Profile-Isolation.md` | +288 |
-| **Total** | **288** |
+| `plans/PR-Codex-Wake-Profile-Isolation.md` | +343 |
+| **Total** | **343** |
 
 Contract only. The implementation that follows is budgeted at roughly 150 lines
 of runtime and test change, well inside the 400-line soft cap.
