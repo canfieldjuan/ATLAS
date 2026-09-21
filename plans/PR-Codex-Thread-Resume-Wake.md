@@ -38,8 +38,8 @@ installed, tested runner that resumes one persistent Codex thread per watcher.
 thing that is installed today: "Do not recreate a watcher from ad hoc local
 source."
 
-**Over the 400 LOC budget, deliberately.** The diff is 3681 diff lines, of
-which 1901 are tests and 625 are this plan. Runtime code is 1083 lines
+**Over the 400 LOC budget, deliberately.** The diff is 3880 diff lines, of
+which 2005 are tests and 650 are this plan. Runtime code is 1153 lines
 across three files.
 The reason this slice is test-heavy rather than divisible is the defect itself:
 the thing being replaced failed silently for months because no test pinned the
@@ -635,9 +635,9 @@ re-run after it:
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +1528 |
-| `scripts/codex_wake_run.py` | +1059 |
-| `plans/PR-Codex-Thread-Resume-Wake.md` | +625 |
+| `tests/test_codex_wake_run.py` | +1632 |
+| `scripts/codex_wake_run.py` | +1129 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | +650 |
 | `tests/test_codex_wake_end_to_end.py` | +238 |
 | `tests/test_audit_pr_watcher_safety.py` | +89 |
 | `docs/long_running_session_watcher_handoff.md` | +63 / -4 |
@@ -645,6 +645,6 @@ re-run after it:
 | `scripts/install_codex_wake_bridge.py` | +13 |
 | `scripts/audit_pr_watcher_safety.py` | +11 |
 | `.github/workflows/codex_wake_bridge_checks.yml` | +5 |
-| **Total** | **3681** |
+| **Total** | **3880** |
 
 Over the 400 LOC soft cap. Runtime code is 508 lines; the remainder is tests (794), this plan (381), and docs (51). The growth over the first push is six Codex review findings and their regression tests, all fixed rather than waived.
