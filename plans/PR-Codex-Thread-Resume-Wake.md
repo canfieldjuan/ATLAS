@@ -115,6 +115,16 @@ Max files: 10
     tracked, drift-checked file -- settled by
     `tests/test_install_codex_wake_bridge.py::test_check_detects_runner_drift`
     and `::test_check_reports_a_missing_runner`.
+  - Each wake's record describes THAT wake: a turn with no agent message
+    overwrites it with an explicit empty marker rather than leaving the
+    previous wake's result standing -- settled by
+    `tests/test_codex_wake_run.py::test_a_silent_turn_does_not_leave_the_previous_result_standing`.
+  - Writing the wake log cannot fail a turn that already ran, and falls back to
+    stderr -- settled by
+    `tests/test_codex_wake_run.py::test_log_survives_a_failing_log_file`.
+  - Only lock contention waits; any other lock error fails immediately with a
+    diagnostic instead of stalling for the whole window -- settled by
+    `tests/test_codex_wake_run.py::test_only_contention_waits_for_the_lock`.
   - Each wake records the agent's final message, so a wake that runs while the
     operator is away is auditable afterwards -- settled by
     `tests/test_codex_wake_run.py::test_agent_message_is_recorded_for_the_absent_operator`
@@ -481,6 +491,21 @@ diagnostic writes never change a completed turn's outcome.
   whose thread id cannot be stored still edits files, pushes, and comments, and
   nothing can resume it, so every retry repeats that work. The check runs ahead
   of the turn; the residual mid-turn case ends in a controlled exit code.
+- The wake log itself is best-effort. `_log` is the diagnostic channel, and a
+  diagnostic channel must not be able to fail the operation it describes; a
+  full disk after Codex has edited files would otherwise raise out of a
+  finished turn and make the caller repeat that work. It falls back to stderr
+  and carries the reason.
+- The per-wake record is always overwritten, including when a turn says
+  nothing. Leaving the previous message in place makes a stale result read as
+  this wake's result, which defeats the point of keeping one for an operator
+  who was not watching. A silent turn that otherwise succeeded exits
+  `EXIT_NO_AGENT_MESSAGE`; a turn that already failed keeps its own exit code,
+  because that is the more useful diagnosis.
+- Only `EAGAIN`/`EWOULDBLOCK` count as contention on the lock. Treating `EIO`,
+  `EBADF` or `ENOLCK` as another holder would stall every wake for the full
+  wait window and then report a timeout that hides the real fault; `EINTR`
+  retries immediately.
 - Post-turn writes are diagnostics and never change the turn's outcome. By the
   time the agent message is recorded, Codex may already have edited files,
   pushed, or commented. Failing the wake because that copy could not be written
@@ -575,7 +600,7 @@ round:
 - `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py
   tests/test_install_codex_wake_bridge.py tests/test_codex_wake_bridge.py
   tests/test_audit_pr_watcher_safety.py tests/test_pr_watcher.py
-  tests/test_report_pr_watcher_state.py -q` -- **312 passed**.
+  tests/test_report_pr_watcher_state.py -q` -- **319 passed**.
 - `python scripts/audit_pr_watcher_safety.py` -- exit 0, "watcher
   docs/config/source grant no merge authority".
 - `bash scripts/check_ascii_python.sh` -- exit 0.
@@ -583,7 +608,7 @@ round:
   tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob
   'scripts/**'` -- exit 0, no new brittleness above baseline.
 - End-to-end against the **real** `codex-cli 0.155.1`: a fresh wake stored
-  codeword `GUNWALE-9903` and a resumed wake recalled it, through the
+  codeword `FORECASTLE-2286` and a resumed wake recalled it, through the
   supervisor and with the current identity and quarantine rules in place.
 
 Probes that shaped specific fixes, each reproduced before the change and

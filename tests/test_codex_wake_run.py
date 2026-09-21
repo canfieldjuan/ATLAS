@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import fcntl
 import importlib.util
 import json
@@ -950,6 +951,8 @@ def test_a_background_process_does_not_outlive_the_lock(
         f"open({str(background_pid)!r}, 'w').write(str(p.pid))\n"
         "sys.stdin.read()\n"
         f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
+        "print(json.dumps({'type': 'item.completed', 'item':"
+        " {'id': 'i', 'type': 'agent_message', 'text': 'started something'}}))\n"
         "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n"
         "sys.exit(0)\n",
         encoding="utf-8",
@@ -1356,6 +1359,105 @@ def test_drain_reports_how_many_it_could_not_stop(
     assert any("released when this process exits" in m for m in messages)
 
 
+def test_log_survives_a_failing_log_file(capsys: pytest.CaptureFixture[str]) -> None:
+    """A diagnostic channel must not fail the operation it describes.
+
+    A full disk after Codex has already edited files would otherwise raise out
+    of a finished turn and make the caller retry work that already happened.
+    """
+
+    class Exploding:
+        def write(self, *_args: object) -> None:
+            raise OSError(errno.ENOSPC, "No space left on device")
+
+        def flush(self) -> None:
+            pass
+
+    runner._log(Exploding(), "the turn already ran")
+
+    captured = capsys.readouterr()
+    assert "the turn already ran" in captured.err
+    assert "wake log unavailable" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("err", "retries"),
+    [
+        (errno.EAGAIN, True),
+        (errno.EWOULDBLOCK, True),
+        (errno.EIO, False),
+        (errno.EBADF, False),
+        (errno.ENOLCK, False),
+    ],
+)
+def test_only_contention_waits_for_the_lock(
+    tmp_path: Path,
+    repo_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    err: int,
+    retries: bool,
+) -> None:
+    """A filesystem that cannot lock must fail now, not in ten minutes.
+
+    Treating EIO or EBADF as another holder stalls every wake for the whole
+    wait window and then reports a timeout that hides the real fault.
+    """
+    monkeypatch.setattr(runner, "LOCK_WAIT_SECONDS", 0)
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+
+    def failing_flock(_fd: int, _op: int) -> None:
+        raise OSError(err, os.strerror(err))
+
+    monkeypatch.setattr(runner.fcntl, "flock", failing_flock)
+
+    exit_code = _run(tmp_path, fake=fake, state_dir=tmp_path / "state")
+
+    assert not record.exists()
+    if retries:
+        assert exit_code == runner.EXIT_LOCK_TIMEOUT
+    else:
+        assert exit_code == runner.EXIT_STATE_UNUSABLE
+        log_text = (tmp_path / "state" / "slice-123.codex-wake.log").read_text(
+            encoding="utf-8"
+        )
+        assert "not contention" in log_text
+
+
+def test_a_silent_turn_does_not_leave_the_previous_result_standing(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the per-wake record must describe THIS wake.
+
+    A stale message reads exactly like the current wake's result to whoever
+    comes back to it, which is the whole audit guarantee for an absent
+    operator.
+    """
+    state_dir = tmp_path / "state"
+    speaks, _r1 = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run(tmp_path, fake=speaks, state_dir=state_dir) == 0
+    assert (state_dir / "slice-123.codex-wake.last.md").read_text(
+        encoding="utf-8"
+    ).strip() == "ok"
+
+    silent = tmp_path / "silent-codex"
+    silent.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdin.read()\n"
+        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        encoding="utf-8",
+    )
+    silent.chmod(silent.stat().st_mode | stat.S_IXUSR)
+
+    exit_code = _run(tmp_path, fake=silent, state_dir=state_dir)
+
+    assert exit_code == runner.EXIT_NO_AGENT_MESSAGE
+    record = (state_dir / "slice-123.codex-wake.last.md").read_text(encoding="utf-8")
+    assert "ok" not in record.split("\n")[0] or "no agent message" in record
+    assert "no agent message" in record
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 
@@ -1474,6 +1576,8 @@ def test_non_json_stdout_lines_are_counted_not_silently_dropped(
         "print('warning: this line is not json')\n"
         "print('[1, 2, 3]')\n"
         f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
+        "print(json.dumps({'type': 'item.completed', 'item':"
+        " {'id': 'i', 'type': 'agent_message', 'text': 'ok'}}))\n"
         "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
         encoding="utf-8",
     )

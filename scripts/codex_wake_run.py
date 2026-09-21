@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import errno
 import fcntl
 import json
 import os
@@ -62,6 +63,9 @@ EXIT_STATE_UNUSABLE = 78
 # The lock cannot be held past process exit, so the only honest option is
 # to make the leak loud instead of returning success over it.
 EXIT_TURN_NOT_CONTAINED = 79
+# Exit code when a turn finished without ever saying what it did. The wake
+# record is the only account of work done while nobody was watching.
+EXIT_NO_AGENT_MESSAGE = 80
 # How long the supervisor gives a turn's leftovers to exit on SIGTERM
 # before killing them, once the turn itself has finished.
 GROUP_DRAIN_SECONDS = 5.0
@@ -403,9 +407,31 @@ def make_die_with_parent(expected_ppid: int) -> Any:
     return _hook
 
 
+def _write_if_possible(stream: Any, text: str) -> str | None:
+    """Write `text`; return None on success, or why the stream refused it."""
+    try:
+        stream.write(text)
+        stream.flush()
+    except OSError as exc:
+        return str(exc)
+    return None
+
+
 def _log(handle: Any, message: str) -> None:
-    handle.write(f"[{_now()}] {message}\n")
-    handle.flush()
+    """Write one wake-log line, falling back to stderr if the log cannot take it.
+
+    This is a diagnostic channel, and a diagnostic channel must not be able to
+    fail the operation it is describing. A full disk after Codex has already
+    edited files, pushed, or commented would otherwise raise out of a finished
+    turn and make the caller retry work that has already happened. If stderr is
+    gone too there is nothing left to tell, and still nothing worth failing a
+    finished turn over.
+    """
+    line = f"[{_now()}] {message}"
+    problem = _write_if_possible(handle, line + "\n")
+    if problem is None:
+        return
+    _write_if_possible(sys.stderr, f"{line}  (wake log unavailable: {problem})\n")
 
 
 def valid_watcher_id(watcher_id: str) -> bool:
@@ -789,11 +815,14 @@ def run_one_turn(
                 if line.strip():
                     _log(log_handle, f"codex stderr: {line.rstrip()}")
     finally:
-        for temp in (prompt_file, stderr_file):
+        for scratch_file in (prompt_file, stderr_file):
             try:
-                temp.unlink()
+                scratch_file.unlink()
             except OSError as exc:
-                _log(log_handle, f"could not remove temp file {temp}: {exc}")
+                _log(
+                    log_handle,
+                    f"could not remove the scratch file {scratch_file}: {exc}",
+                )
 
     if thread_id is not None and observed_thread is None and exit_code != 0:
         if reports_missing_session(stderr_text, thread_id):
@@ -828,29 +857,6 @@ def run_one_turn(
 
     if usage is not None:
         _log(log_handle, "usage=" + json.dumps(usage, sort_keys=True))
-
-    if last_message is not None:
-        summary = " ".join(last_message.split())
-        if len(summary) > 500:
-            summary = summary[:500] + " [truncated]"
-        _log(log_handle, f"agent message: {summary}")
-        # Everything past this point is diagnostics about a turn that already
-        # happened. Codex may have edited files, pushed, or commented, so a
-        # failure to record that must not turn a completed turn into a reported
-        # failure: the caller would retry and repeat real side effects.
-        last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
-        try:
-            last_path.write_text(last_message + "\n", encoding="utf-8")
-        except OSError as exc:
-            _log(
-                log_handle,
-                f"could not write the agent message to {last_path}: {exc}; "
-                "the turn itself completed and is not being failed for this",
-            )
-        else:
-            _log(log_handle, f"full agent message written to {last_path}")
-    else:
-        _log(log_handle, "no agent message in this turn")
 
     for failure in persist_failure:
         _log(
@@ -888,6 +894,54 @@ def run_one_turn(
         )
         _log(log_handle, f"turn complete exit={EXIT_NO_THREAD_EVENT}")
         return TurnResult(EXIT_NO_THREAD_EVENT)
+
+    last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
+    if last_message is None:
+        # Always overwrite, so the record cannot keep describing an earlier
+        # wake. A stale message reads exactly like this wake's result to
+        # whoever comes back to it, which is the whole point of keeping one.
+        placeholder = (
+            f"[{_now()}] this wake produced no agent message; "
+            f"the turn exited {exit_code} and left no account of what it did\n"
+        )
+        try:
+            last_path.write_text(placeholder, encoding="utf-8")
+        except OSError as exc:
+            _log(log_handle, f"could not clear the stale wake record: {exc}")
+        else:
+            _log(
+                log_handle,
+                "no agent message in this turn; the wake record was marked "
+                "empty rather than left showing the previous wake",
+            )
+        if exit_code == 0:
+            # A turn that reports success while saying nothing about what it
+            # did is a protocol failure. A turn that already failed keeps its
+            # own exit code, which is the more useful diagnosis.
+            _log(log_handle, f"turn complete exit={EXIT_NO_AGENT_MESSAGE}")
+            return TurnResult(EXIT_NO_AGENT_MESSAGE)
+        _log(log_handle, f"turn complete exit={exit_code}")
+        return TurnResult(exit_code)
+
+    if last_message is not None:
+        summary = " ".join(last_message.split())
+        if len(summary) > 500:
+            summary = summary[:500] + " [truncated]"
+        _log(log_handle, f"agent message: {summary}")
+        # Everything past this point is diagnostics about a turn that already
+        # happened. Codex may have edited files, pushed, or commented, so a
+        # failure to record that must not turn a completed turn into a reported
+        # failure: the caller would retry and repeat real side effects.
+        try:
+            last_path.write_text(last_message + "\n", encoding="utf-8")
+        except OSError as exc:
+            _log(
+                log_handle,
+                f"could not write the agent message to {last_path}: {exc}; "
+                "the turn itself completed and is not being failed for this",
+            )
+        else:
+            _log(log_handle, f"full agent message written to {last_path}")
 
     _log(log_handle, f"turn complete exit={exit_code}")
     return TurnResult(exit_code)
@@ -952,7 +1006,23 @@ def run_wake(
             while True:
                 try:
                     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError:
+                except OSError as exc:
+                    if exc.errno == errno.EINTR:
+                        # A signal arrived mid-call; that is not contention.
+                        continue
+                    if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        # EIO, EBADF, ENOLCK and friends are not another
+                        # holder. Retrying them for the full wait window would
+                        # stall every wake for ten minutes and then report a
+                        # lock timeout that hides the real fault.
+                        _log(
+                            log_handle,
+                            f"cannot lock {lock_path}: {exc}. This is not "
+                            "contention, so the wake is failing immediately "
+                            "rather than waiting out the timeout.",
+                        )
+                        print(f"cannot lock {lock_path}: {exc}", file=sys.stderr)
+                        return EXIT_STATE_UNUSABLE
                     if time.monotonic() >= deadline:
                         break
                     time.sleep(1.0)
