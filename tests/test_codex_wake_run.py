@@ -1526,6 +1526,46 @@ def test_a_resume_repeating_its_own_thread_is_fine(
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
 
+def test_a_non_utf8_byte_does_not_discard_the_turn(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: one bad byte must not cost the whole stream.
+
+    Strict decoding raises on the buffered chunk, which takes a valid
+    thread.started already emitted down with it. The turn has run by then, so
+    that discards the only way to resume work that already happened.
+    """
+    side_effect = tmp_path / "codex_did_work.txt"
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdin.read()\n"
+        f"sys.stdout.write(json.dumps({{'type': 'thread.started',"
+        f" 'thread_id': {THREAD_A!r}}}) + '\\n')\n"
+        "sys.stdout.flush()\n"
+        "sys.stdout.buffer.write(b'\\xff\\xfe not utf-8\\n')\n"
+        "sys.stdout.buffer.flush()\n"
+        f"open({str(side_effect)!r}, 'w').write('did work')\n"
+        "print(json.dumps({'type': 'item.completed', 'item':"
+        " {'id': 'i', 'type': 'agent_message', 'text': 'ok'}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    state_dir = tmp_path / "state"
+
+    exit_code = _run(tmp_path, fake=fake, state_dir=state_dir)
+
+    assert side_effect.exists(), "the fake must have reached its side effect"
+    assert exit_code == 0
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A, "the turn must stay resumable"
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "not JSON events" in log_text, "the junk line must still be counted"
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 

@@ -226,6 +226,10 @@ Max files: 10
   - The missing-thread diagnostic is matched as one record, so output about a
     different thread cannot quarantine this one -- settled by
     `tests/test_codex_wake_run.py::test_a_split_diagnostic_does_not_quarantine`.
+  - A non-UTF-8 byte in the event stream does not discard the turn: decoding
+    replaces it, the junk line is counted, and the thread stays resumable --
+    settled by
+    `tests/test_codex_wake_run.py::test_a_non_utf8_byte_does_not_discard_the_turn`.
   - The drain's process scan reports what it could not read, so a scan that
     saw almost nothing is distinguishable from an empty group -- settled by
     `tests/test_codex_wake_run.py::test_scan_reports_what_it_could_not_read`.
@@ -495,6 +499,12 @@ diagnostic writes never change a completed turn's outcome.
   whose thread id cannot be stored still edits files, pushes, and comments, and
   nothing can resume it, so every retry repeats that work. The check runs ahead
   of the turn; the residual mid-turn case ends in a controlled exit code.
+- Codex stdout is decoded with replacement rather than strictly. One
+  undecodable byte would otherwise abort the stream, and because the decoder
+  buffers it takes a valid `thread.started` already emitted down with it. The
+  turn has run by that point, so strict decoding discards the only way to
+  resume work that already happened. The junk still shows up in the
+  non-JSON-line count rather than passing unnoticed.
 - The wake log itself is best-effort. `_log` is the diagnostic channel, and a
   diagnostic channel must not be able to fail the operation it describes; a
   full disk after Codex has edited files would otherwise raise out of a
@@ -606,7 +616,7 @@ round:
 - `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py
   tests/test_install_codex_wake_bridge.py tests/test_codex_wake_bridge.py
   tests/test_audit_pr_watcher_safety.py tests/test_pr_watcher.py
-  tests/test_report_pr_watcher_state.py -q` -- **322 passed**.
+  tests/test_report_pr_watcher_state.py -q` -- **323 passed**.
 - `python scripts/audit_pr_watcher_safety.py` -- exit 0, "watcher
   docs/config/source grant no merge authority".
 - `bash scripts/check_ascii_python.sh` -- exit 0.
@@ -614,7 +624,7 @@ round:
   tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob
   'scripts/**'` -- exit 0, no new brittleness above baseline.
 - End-to-end against the **real** `codex-cli 0.155.1`: a fresh wake stored
-  codeword `CAPSTAN-7715` and a resumed wake recalled it, through the
+  codeword `BINNACLE-5140` and a resumed wake recalled it, through the
   supervisor and with the current identity and quarantine rules in place.
 
 Probes that shaped specific fixes, each reproduced before the change and

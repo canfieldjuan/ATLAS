@@ -802,6 +802,14 @@ def run_one_turn(
                         stdout=subprocess.PIPE,
                         stderr=stderr_handle,
                         text=True,
+                        # Replace undecodable bytes instead of raising. Strict
+                        # decoding lets one bad byte abort the whole stream,
+                        # and the decoder buffers, so even a valid
+                        # thread.started already emitted is lost with it. The
+                        # turn has run by then, so that would discard the only
+                        # way to resume work that already happened.
+                        encoding="utf-8",
+                        errors="replace",
                         preexec_fn=die_with_parent,
                         # The wake lock is an open file description, which fork
                         # and exec preserve. The supervisor holds it for the
