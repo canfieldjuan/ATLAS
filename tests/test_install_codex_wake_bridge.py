@@ -283,3 +283,49 @@ def test_reload_systemd_failure_returns_nonzero(tmp_path: Path) -> None:
     assert code == 1
     assert "systemctl --user daemon-reload exited 1" in messages
     assert "no user bus" in messages
+
+
+def test_install_writes_the_codex_wake_runner(tmp_path: Path) -> None:
+    """The runner replaces the hand-written local script of the same name."""
+    bin_dir = tmp_path / "bin"
+    systemd_dir = tmp_path / "systemd"
+
+    result = _run("--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir))
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    runner = bin_dir / installer.RUNNER_NAME
+    assert runner.name == "atlas-codex-wake-run"
+    assert runner.read_text(encoding="utf-8") == (
+        ROOT / "scripts" / "codex_wake_run.py"
+    ).read_text(encoding="utf-8")
+    assert os.access(runner, os.X_OK)
+    assert "--ask-for-approval" not in runner.read_text(encoding="utf-8")
+
+
+def test_check_detects_runner_drift(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    systemd_dir = tmp_path / "systemd"
+    assert _run("--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir)).returncode == 0
+    assert _run(
+        "--check", "--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir)
+    ).returncode == 0
+
+    runner = bin_dir / installer.RUNNER_NAME
+    runner.write_text("#!/bin/sh\ncodex exec --ask-for-approval never -\n", encoding="utf-8")
+
+    drifted = _run("--check", "--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir))
+
+    assert drifted.returncode == 1
+    assert f"content drift: {runner}" in drifted.stdout
+
+
+def test_check_reports_a_missing_runner(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    systemd_dir = tmp_path / "systemd"
+    assert _run("--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir)).returncode == 0
+    (bin_dir / installer.RUNNER_NAME).unlink()
+
+    missing = _run("--check", "--bin-dir", str(bin_dir), "--systemd-dir", str(systemd_dir))
+
+    assert missing.returncode == 1
+    assert f"missing: {bin_dir / installer.RUNNER_NAME}" in missing.stdout

@@ -17,6 +17,9 @@ from typing import Sequence
 
 WRAPPER_NAME = "atlas-pr-watch-and-wake"
 BRIDGE_NAME = "atlas-codex-wake-bridge"
+# Deliberately the same basename as the hand-written local script this
+# replaces, so installing repairs the broken copy instead of leaving two.
+RUNNER_NAME = "atlas-codex-wake-run"
 WATCHER_NAME = "atlas-pr-watch"
 RECONCILIATION_LIB_DIR = "atlas-pr-watch-lib"
 RECONCILIATION_CHECKER_NAME = "check_ai_reconciliation_live.py"
@@ -25,6 +28,7 @@ PR_BODY_AUDIT_NAME = "audit_pr_body.py"
 PR_CHANGE_POLICY_NAME = "_pr_change_policy.py"
 DROPIN_REL = Path("atlas-pr-watch@.service.d") / "wake-bridge.conf"
 BRIDGE_SOURCE = Path(__file__).with_name("codex_wake_bridge.py")
+RUNNER_SOURCE = Path(__file__).with_name("codex_wake_run.py")
 WATCHER_SOURCE = Path(__file__).with_name("pr_watcher.py")
 RECONCILIATION_CHECKER_SOURCE = Path(__file__).with_name(RECONCILIATION_CHECKER_NAME)
 RECONCILIATION_AUDIT_SOURCE = Path(__file__).with_name(RECONCILIATION_AUDIT_NAME)
@@ -71,6 +75,10 @@ python "$bridge" "${{session_id}}" --source scheduled
 
 def _bridge_text() -> str:
     return BRIDGE_SOURCE.read_text(encoding="utf-8")
+
+
+def _runner_text() -> str:
+    return RUNNER_SOURCE.read_text(encoding="utf-8")
 
 
 def _watcher_text() -> str:
@@ -141,6 +149,7 @@ def _matches(path: Path, expected: str, *, executable: bool = False) -> tuple[bo
 def check_install(bin_dir: Path, systemd_dir: Path) -> tuple[bool, list[str]]:
     wrapper = bin_dir / WRAPPER_NAME
     bridge = bin_dir / BRIDGE_NAME
+    runner = bin_dir / RUNNER_NAME
     watcher = bin_dir / WATCHER_NAME
     reconciliation_dir = bin_dir / RECONCILIATION_LIB_DIR
     reconciliation_checker = reconciliation_dir / RECONCILIATION_CHECKER_NAME
@@ -150,6 +159,7 @@ def check_install(bin_dir: Path, systemd_dir: Path) -> tuple[bool, list[str]]:
     checks = [
         _matches(wrapper, _wrapper_text(watcher, bridge), executable=True),
         _matches(bridge, _bridge_text(), executable=True),
+        _matches(runner, _runner_text(), executable=True),
         _matches(watcher, _watcher_text(), executable=True),
         _matches(reconciliation_checker, _reconciliation_checker_text()),
         _matches(reconciliation_audit, _reconciliation_audit_text()),
@@ -164,6 +174,7 @@ def check_install(bin_dir: Path, systemd_dir: Path) -> tuple[bool, list[str]]:
 def install(bin_dir: Path, systemd_dir: Path, *, reload_systemd: bool) -> tuple[int, list[str]]:
     wrapper = bin_dir / WRAPPER_NAME
     bridge = bin_dir / BRIDGE_NAME
+    runner = bin_dir / RUNNER_NAME
     watcher = bin_dir / WATCHER_NAME
     reconciliation_dir = bin_dir / RECONCILIATION_LIB_DIR
     reconciliation_checker = reconciliation_dir / RECONCILIATION_CHECKER_NAME
@@ -176,6 +187,7 @@ def install(bin_dir: Path, systemd_dir: Path, *, reload_systemd: bool) -> tuple[
     _write(pr_body_audit, _pr_body_audit_text())
     _write(reconciliation_checker, _reconciliation_checker_text())
     _write(bridge, _bridge_text(), executable=True)
+    _write(runner, _runner_text(), executable=True)
     _write(watcher, _watcher_text(), executable=True)
     _write(wrapper, _wrapper_text(watcher, bridge), executable=True)
     _write(dropin, _dropin_text(wrapper))
@@ -185,6 +197,7 @@ def install(bin_dir: Path, systemd_dir: Path, *, reload_systemd: bool) -> tuple[
         f"wrote: {pr_body_audit}",
         f"wrote: {reconciliation_checker}",
         f"wrote: {bridge}",
+        f"wrote: {runner}",
         f"wrote: {watcher}",
         f"wrote: {wrapper}",
         f"wrote: {dropin}",

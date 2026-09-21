@@ -240,3 +240,92 @@ def test_repo_watcher_source_status_only_passes(tmp_path: Path) -> None:
     result = _run(tmp_path, "--repo-root", str(repo), "--repo-only")
 
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_fails_on_codex_wake_runner_with_merge_command(tmp_path: Path) -> None:
+    """The wake runner is scanned too; it launches Codex and must stay merge-free."""
+    repo = _repo(tmp_path)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "codex_wake_run.py").write_text(
+        "#!/usr/bin/env python3\nsubprocess.run(['gh', 'pr', 'merge'])\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "--repo-root", str(repo), "--repo-only")
+
+    assert result.returncode == 1
+    assert "watcher executable must not contain PR merge/delete-branch commands" in result.stdout
+
+
+def test_codex_wake_runner_status_only_passes(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "codex_wake_run.py").write_text(
+        "#!/usr/bin/env python3\nargv = ['codex', 'exec', 'resume']\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "--repo-root", str(repo), "--repo-only")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_fails_on_installed_wake_runner_with_merge_command(tmp_path: Path) -> None:
+    """The installed runner is what the bridge invokes; a drifted copy must fail."""
+    repo = _repo(tmp_path)
+    runner = tmp_path / "bin" / "atlas-codex-wake-run"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text(
+        "#!/usr/bin/env python3\nsubprocess.run(['gh', 'pr', 'merge', '--squash'])\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        tmp_path,
+        "--repo-root",
+        str(repo),
+        "--watcher-runner",
+        str(runner),
+    )
+
+    assert result.returncode == 1
+    assert "watcher executable must not contain PR merge/delete-branch commands" in result.stdout
+    assert str(runner) in result.stdout
+
+
+def test_installed_wake_runner_status_only_passes(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    runner = tmp_path / "bin" / "atlas-codex-wake-run"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text(
+        "#!/usr/bin/env python3\nargv = ['codex', 'exec', 'resume']\n",
+        encoding="utf-8",
+    )
+
+    result = _run(
+        tmp_path,
+        "--repo-root",
+        str(repo),
+        "--watcher-runner",
+        str(runner),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_repo_only_mode_does_not_read_the_installed_runner(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    runner = tmp_path / "bin" / "atlas-codex-wake-run"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text("#!/usr/bin/env python3\ngh pr merge\n", encoding="utf-8")
+
+    result = _run(
+        tmp_path,
+        "--repo-root",
+        str(repo),
+        "--repo-only",
+        "--watcher-runner",
+        str(runner),
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
