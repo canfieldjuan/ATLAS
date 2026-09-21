@@ -1284,6 +1284,78 @@ def test_a_fresh_turn_still_records_whatever_thread_it_started(
     ).strip() == THREAD_B
 
 
+def test_a_split_diagnostic_does_not_quarantine(tmp_path: Path) -> None:
+    """The id must come out of the diagnostic, not be searched for separately.
+
+    stderr that names the resumed thread on one line and reports a missing
+    rollout for a different thread on another is evidence about that other
+    conversation, not this one.
+    """
+    mixed = (
+        f"Error: resuming thread {THREAD_A}\n"
+        f"Error: no rollout found for thread id {THREAD_B} (code -32600)"
+    )
+
+    assert not runner.reports_missing_session(mixed, THREAD_A)
+    assert runner.reports_missing_session(mixed, THREAD_B)
+
+
+def test_a_wrong_thread_turn_is_stopped_before_it_can_act(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: refuse at the event that names it, not after the turn.
+
+    Checking only after the subprocess exits gives the wrong conversation the
+    whole turn to edit the checkout, push, or comment first.
+    """
+    marker = tmp_path / "wrong_conversation_acted.txt"
+    fake = tmp_path / "fake-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys, time\n"
+        "sys.stdin.read()\n"
+        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_B!r}}}))\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(3)\n"
+        f"open({str(marker)!r}, 'w').write('acted')\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_NO_THREAD_EVENT
+
+    assert not marker.exists(), "the wrong conversation must be stopped, not awaited"
+    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "stopping the turn now" in log_text
+
+
+def test_drain_reports_how_many_it_could_not_stop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A leak has to be countable, because the lock frees regardless."""
+    messages: list[str] = []
+    monkeypatch.setattr(runner, "process_group_members", lambda *a, **k: [999999])
+    monkeypatch.setattr(
+        runner,
+        "scan_process_group",
+        lambda *a, **k: runner.GroupScan(members=[999999], unreadable=0, vanished=0),
+    )
+    monkeypatch.setattr(runner.os, "killpg", lambda *a, **k: None)
+    monkeypatch.setattr(runner.os, "kill", lambda *a, **k: None)
+
+    leaked = runner.drain_process_group(
+        deadline_seconds=0.0, report=messages.append
+    )
+
+    assert leaked == 1
+    assert any("released when this process exits" in m for m in messages)
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 

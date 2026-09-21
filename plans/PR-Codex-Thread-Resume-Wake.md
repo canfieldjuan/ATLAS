@@ -197,10 +197,21 @@ Max files: 10
   - A persistence failure that only appears mid-turn ends in a controlled exit
     rather than a traceback out of running work -- settled by
     `tests/test_codex_wake_run.py::test_a_persist_failure_mid_turn_is_a_controlled_outcome`.
-  - A turn that finishes normally but left a background process running does
-    not release the lock until that process is gone -- settled by
+  - A turn that finishes normally but left a background process running has
+    that process stopped before the supervisor returns -- settled by
     `tests/test_codex_wake_run.py::test_a_background_process_does_not_outlive_the_lock`,
     with the clean case `::test_a_clean_turn_is_not_slowed_by_the_drain`.
+  - When the drain cannot stop something, the turn exits
+    `EXIT_TURN_NOT_CONTAINED` instead of reporting success, because the lock is
+    released on process exit regardless and a silent leak would read as a clean
+    turn -- settled by
+    `tests/test_codex_wake_run.py::test_drain_reports_how_many_it_could_not_stop`.
+  - A wrong-conversation resume is stopped at the event that names it, before
+    it can act -- settled by
+    `tests/test_codex_wake_run.py::test_a_wrong_thread_turn_is_stopped_before_it_can_act`.
+  - The missing-thread diagnostic is matched as one record, so output about a
+    different thread cannot quarantine this one -- settled by
+    `tests/test_codex_wake_run.py::test_a_split_diagnostic_does_not_quarantine`.
   - The drain's process scan reports what it could not read, so a scan that
     saw almost nothing is distinguishable from an empty group -- settled by
     `tests/test_codex_wake_run.py::test_scan_reports_what_it_could_not_read`.
@@ -475,7 +486,14 @@ diagnostic writes never change a completed turn's outcome.
   pushed, or commented. Failing the wake because that copy could not be written
   would make the caller retry and repeat those side effects, so the failure is
   logged and the turn still reports success.
-- Quarantine requires the canonical diagnostic AND the id it names. An earlier
+- The lock cannot be held past process exit, so a drain that cannot stop
+  everything reports the leak and exits non-zero rather than returning a clean
+  turn. Holding ownership until the group is genuinely empty would mean
+  blocking indefinitely on something this runner cannot kill; making the leak
+  loud is the honest alternative, and issue #2526 carries the containment that
+  would remove the case.
+- Quarantine requires the canonical diagnostic AND the id it names, captured
+  from the same match. An earlier
   version also accepted bare phrases like "session not found", which an
   unrelated message such as "MCP server session not found" satisfies, throwing
   away a valid thread over a failure that had nothing to do with it. That is
@@ -551,30 +569,40 @@ Parked hardening: none.
 
 ## Verification
 
-Run on this branch before push:
+Run against the final tree on this branch, not carried over from an earlier
+round:
 
-- `pytest tests/test_codex_wake_run.py tests/test_install_codex_wake_bridge.py
-  tests/test_codex_wake_bridge.py tests/test_audit_pr_watcher_safety.py
-  tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py -q`
-  -- **234 passed**.
+- `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py
+  tests/test_install_codex_wake_bridge.py tests/test_codex_wake_bridge.py
+  tests/test_audit_pr_watcher_safety.py tests/test_pr_watcher.py
+  tests/test_report_pr_watcher_state.py -q` -- **312 passed**.
 - `python scripts/audit_pr_watcher_safety.py` -- exit 0, "watcher
   docs/config/source grant no merge authority".
-- Negative probe of that audit: appending `gh pr merge --delete-branch` to the
-  runner made it exit 1 and name `scripts/codex_wake_run.py`, so the scan
-  detects rather than merely passing. Reverted; the durable version of that
-  probe is `test_fails_on_codex_wake_runner_with_merge_command`.
 - `bash scripts/check_ascii_python.sh` -- exit 0.
-- `--dry-run` against the real CLI printed
-  `codex exec --json -c sandbox_mode="read-only" -` for the fresh path and
-  `codex exec resume <id> --json -c sandbox_mode="read-only" -` for the seeded
-  path, with cwd set to the repo dir on both.
-- End-to-end against the **real** `codex-cli 0.155.1`, three wakes on one
-  watcher id: wake 1 started a thread and recorded
-  `01a0bfdf-c300-7e40-aff1-2c4c1949a2a9`; wakes 2 and 3 resumed that same id;
-  wake 3 was asked for a codeword stored in wake 1 and answered `ANVIL-3392`.
-  That is the continuity proof -- the argv the runner builds is accepted by the
-  installed binary, and the resumed thread carries the arc.
-- `python scripts/install_codex_wake_bridge.py --check` now reports
+- `python scripts/maturity_sweep.py scripts --tests-root tests --baseline
+  tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob
+  'scripts/**'` -- exit 0, no new brittleness above baseline.
+- End-to-end against the **real** `codex-cli 0.155.1`: a fresh wake stored
+  codeword `GUNWALE-9903` and a resumed wake recalled it, through the
+  supervisor and with the current identity and quarantine rules in place.
+
+Probes that shaped specific fixes, each reproduced before the change and
+re-run after it:
+
+- Safety-audit detection: appending `gh pr merge --delete-branch` to the runner
+  made `audit_pr_watcher_safety.py` exit 1 and name the file, so the scan
+  detects rather than merely passing. Reverted; the durable form is
+  `test_fails_on_codex_wake_runner_with_merge_command`.
+- Orphaned child: SIGKILLing the runner left Codex alive with the lock free
+  without the parent-death hook, and killed it with the hook.
+- Escaped descendant: a Codex that backgrounds a sleeper left it running and
+  the lock free before the group drain, and nothing after it.
+- Blocking thread path: with the path as a FIFO, the pre-fix code hung even on
+  `--dry-run`; the fixed code returns `EXIT_STATE_UNUSABLE` immediately.
+- Wrong-conversation resume: a resume of A reporting B used to overwrite the
+  stored id, return 0, and let that turn write a side-effect marker first. It
+  now stops the turn at the event and keeps A.
+- `python scripts/install_codex_wake_bridge.py --check` reports
   `content drift: ~/.local/bin/atlas-codex-wake-run`, which is the broken local
   script this slice replaces becoming visible to tooling for the first time.
 

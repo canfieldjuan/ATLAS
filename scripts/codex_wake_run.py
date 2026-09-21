@@ -58,6 +58,10 @@ EXIT_PARENT_GONE = 77
 # Exit code when the runner cannot keep the state a turn would produce.
 # Raised before launch where possible, so retrying is safe.
 EXIT_STATE_UNUSABLE = 78
+# Exit code when a turn ended with processes of its own still running.
+# The lock cannot be held past process exit, so the only honest option is
+# to make the leak loud instead of returning success over it.
+EXIT_TURN_NOT_CONTAINED = 79
 # How long the supervisor gives a turn's leftovers to exit on SIGTERM
 # before killing them, once the turn itself has finished.
 GROUP_DRAIN_SECONDS = 5.0
@@ -79,7 +83,10 @@ SANDBOX_CHOICES = ("read-only", "workspace-write", "danger-full-access")
 # an unrelated message such as "MCP server session not found" satisfies. That
 # threw away a valid thread over a failure that had nothing to do with it,
 # which is the exact loss quarantining exists to prevent.
-MISSING_SESSION_RE = re.compile(r"no rollout found for thread", re.IGNORECASE)
+MISSING_SESSION_RE = re.compile(
+    r"no rollout found for thread id\s+(?P<thread>[0-9a-fA-F-]{36})",
+    re.IGNORECASE,
+)
 
 
 def _now() -> str:
@@ -177,7 +184,7 @@ def process_group_members(pgid: int, *, exclude_pid: int) -> list[int]:
     return scan_process_group(pgid, exclude_pid=exclude_pid).members
 
 
-def drain_process_group(*, deadline_seconds: float, report: Any) -> None:
+def drain_process_group(*, deadline_seconds: float, report: Any) -> int:
     """Stop what the turn left running in this process group.
 
     The turn's own process exiting does not mean the turn is over. Codex can
@@ -197,7 +204,7 @@ def drain_process_group(*, deadline_seconds: float, report: Any) -> None:
         pgid = os.getpgid(0)
     except OSError as exc:
         report(f"supervisor could not read its process group: {exc}")
-        return
+        return 0
 
     scan = scan_process_group(pgid, exclude_pid=me)
     if scan.vanished:
@@ -208,7 +215,7 @@ def drain_process_group(*, deadline_seconds: float, report: Any) -> None:
             "leftovers; some may not have been stopped"
         )
     if not scan.members:
-        return
+        return 0
     report(f"turn left {len(scan.members)} process(es) running; stopping them")
 
     # Ignore the signal we are about to send to the whole group, so the
@@ -224,7 +231,7 @@ def drain_process_group(*, deadline_seconds: float, report: Any) -> None:
         while time.monotonic() < end:
             _reap_children()
             if not process_group_members(pgid, exclude_pid=me):
-                return
+                return 0
             time.sleep(0.1)
 
         already_gone = 0
@@ -243,7 +250,16 @@ def drain_process_group(*, deadline_seconds: float, report: Any) -> None:
             )
         remaining = process_group_members(pgid, exclude_pid=me)
         if remaining:
-            report(f"supervisor could not stop {remaining}; releasing the lock anyway")
+            # The lock cannot be held past this process exiting, so it WILL be
+            # released with these still alive. Saying so is the only honest
+            # option; the caller turns it into a non-zero exit so a leak is
+            # visible rather than reported as a clean turn.
+            report(
+                f"supervisor could not stop {remaining}; the wake lock is "
+                "released when this process exits, so a later wake can overlap "
+                "them"
+            )
+        return len(remaining)
     finally:
         signal.signal(signal.SIGTERM, previous)
 
@@ -344,10 +360,13 @@ def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
 
     if own_group:
         # The turn is not over just because its own process exited.
-        drain_process_group(
+        leaked = drain_process_group(
             deadline_seconds=GROUP_DRAIN_SECONDS,
             report=lambda message: print(message, file=sys.stderr),
         )
+        if leaked and exit_code == 0:
+            # Do not report a clean turn when part of it is still running.
+            return EXIT_TURN_NOT_CONTAINED
     return exit_code
 
 
@@ -531,13 +550,17 @@ def build_argv(*, codex_bin: str, thread_id: str | None, sandbox: str) -> list[s
 def reports_missing_session(stderr_text: str, thread_id: str) -> bool:
     """True only when Codex says THIS thread does not exist.
 
-    Both halves matter. The canonical phrase alone could come from an
-    unrelated subsystem, and the id alone appears in any echo of the failing
-    command, so quarantine requires the diagnostic naming the id it resumed.
+    The id is captured out of the diagnostic itself rather than searched for
+    separately. Searching independently lets unrelated output satisfy both
+    halves: stderr mentioning the resumed thread on one line while reporting a
+    missing rollout for a different thread on another would quarantine valid
+    state on evidence about some other conversation.
     """
-    if not MISSING_SESSION_RE.search(stderr_text):
-        return False
-    return thread_id.lower() in stderr_text.lower()
+    wanted = thread_id.strip().lower()
+    for match in MISSING_SESSION_RE.finditer(stderr_text):
+        if match.group("thread").strip().lower() == wanted:
+            return True
+    return False
 
 
 def _consume_events(
@@ -675,13 +698,31 @@ def run_one_turn(
 
     persist_failure: list[str] = []
 
+    # Holds the running turn so the event callback can stop it the moment it
+    # identifies itself as the wrong conversation.
+    live_process: list[Any] = []
+    wrong_thread: list[str] = []
+
     def _persist(new_id: str) -> None:
         if new_id == thread_id:
             return
         if thread_id is not None:
-            # A resume of one thread reporting another would silently redirect
-            # this arc and every later wake with it. Never write it; the turn
-            # is failed below instead.
+            # A resume of one thread reporting another is the wrong
+            # conversation. Stop it at the event that names it rather than
+            # after the turn, because by then it has had the whole turn to
+            # edit the checkout, push, or comment in that other context.
+            wrong_thread.append(new_id)
+            _log(
+                log_handle,
+                f"resume of {thread_id} reported thread {new_id}; stopping the "
+                "turn now rather than letting the wrong conversation continue",
+            )
+            running = next(iter(live_process), None)
+            if running is not None:
+                try:
+                    running.terminate()
+                except OSError as exc:
+                    _log(log_handle, f"could not stop the wrong-thread turn: {exc}")
             return
         try:
             write_thread_id(thread_path, new_id)
@@ -733,6 +774,7 @@ def run_one_turn(
                     _log(log_handle, f"codex binary not found: {codex_bin}")
                     print(f"codex binary not found: {codex_bin}", file=sys.stderr)
                     return TurnResult(2, binary_missing=True)
+                live_process.append(process)
                 with process:
                     observed_thread, usage, last_message = _consume_events(
                         process.stdout, log_handle, on_thread_started=_persist
@@ -820,15 +862,16 @@ def run_one_turn(
         _log(log_handle, f"turn complete exit={EXIT_STATE_UNUSABLE}")
         return TurnResult(EXIT_STATE_UNUSABLE)
 
-    if (
+    if wrong_thread or (
         thread_id is not None
         and observed_thread is not None
         and observed_thread != thread_id
     ):
+        reported = next(iter(wrong_thread), observed_thread)
         _log(
             log_handle,
-            f"resume of {thread_id} reported thread {observed_thread}; keeping "
-            f"{thread_id} and failing this turn rather than switching arcs",
+            f"resume of {thread_id} reported thread {reported}; kept "
+            f"{thread_id} and failed this turn rather than switching arcs",
         )
         _log(log_handle, f"turn complete exit={EXIT_NO_THREAD_EVENT}")
         return TurnResult(EXIT_NO_THREAD_EVENT)
