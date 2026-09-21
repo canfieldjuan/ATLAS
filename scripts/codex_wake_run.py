@@ -214,10 +214,14 @@ def drain_process_group(*, deadline_seconds: float, report: Any) -> int:
     if scan.vanished:
         report(f"{scan.vanished} process(es) exited while the group was scanned")
     if scan.unreadable:
+        # Not knowing whether anything is left is not the same as nothing
+        # being left. Reporting a clean turn here would release the lock on an
+        # assumption, so it is counted as uncontained and the caller fails.
         report(
-            f"could not read {scan.unreadable} /proc entries while looking for "
-            "leftovers; some may not have been stopped"
+            f"could not read {scan.unreadable} /proc entries, so this turn's "
+            "containment could not be established"
         )
+        return scan.unreadable
     if not scan.members:
         return 0
     report(f"turn left {len(scan.members)} process(es) running; stopping them")
@@ -319,7 +323,12 @@ def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
         # so it is disabled rather than aimed at the wrong target. The death
         # signal below still covers the immediate Codex process.
         own_group = False
-        print(f"supervisor could not create its own process group: {exc}", file=sys.stderr)
+        print(
+            f"supervisor could not create its own process group: {exc}. Only "
+            "the immediate Codex process can be stopped, so this turn cannot "
+            "report a contained result.",
+            file=sys.stderr,
+        )
     libc, _reason = parent_death_signal_support()
     if libc is not None:
         libc.prctl(_PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
@@ -369,8 +378,13 @@ def supervise(codex_argv: Sequence[str], *, expected_ppid: int) -> int:
             report=lambda message: print(message, file=sys.stderr),
         )
         if leaked and exit_code == 0:
-            # Do not report a clean turn when part of it is still running.
+            # Do not report a clean turn when part of it is still running, or
+            # when we could not tell.
             return EXIT_TURN_NOT_CONTAINED
+    elif exit_code == 0:
+        # Without our own process group the drain cannot cover descendants, so
+        # a clean result here would be an assumption rather than a check.
+        return EXIT_TURN_NOT_CONTAINED
     return exit_code
 
 
@@ -441,6 +455,17 @@ def valid_watcher_id(watcher_id: str) -> bool:
     return ".." not in watcher_id and not watcher_id.startswith(".")
 
 
+def canonical_thread_id(value: str) -> str:
+    """The one spelling this runner compares and stores.
+
+    Codex session ids are UUIDs, and a UUID's identity is not its casing. The
+    shape check accepts uppercase hex, so without normalising here a stored
+    `01A0...` and a reported `01a0...` are the same conversation spelled two
+    ways, and a case-sensitive comparison would kill the correct turn.
+    """
+    return value.strip().lower()
+
+
 def valid_thread_id(value: str) -> bool:
     """Accept only the canonical Codex session-id shape.
 
@@ -477,7 +502,7 @@ def read_thread_id(path: Path) -> tuple[str | None, str | None]:
         return None, f"could not read stored thread id: {exc}"
     except UnicodeDecodeError:
         return None, "stored thread id is not valid UTF-8"
-    candidate = raw.strip()
+    candidate = canonical_thread_id(raw)
     if not candidate:
         return None, "stored thread id is empty"
     if not valid_thread_id(candidate):
@@ -582,9 +607,9 @@ def reports_missing_session(stderr_text: str, thread_id: str) -> bool:
     missing rollout for a different thread on another would quarantine valid
     state on evidence about some other conversation.
     """
-    wanted = thread_id.strip().lower()
+    wanted = canonical_thread_id(thread_id)
     for match in MISSING_SESSION_RE.finditer(stderr_text):
-        if match.group("thread").strip().lower() == wanted:
+        if canonical_thread_id(match.group("thread")) == wanted:
             return True
     return False
 
@@ -627,8 +652,10 @@ def _consume_events(
         kind = event.get("type")
         if kind == "thread.started":
             candidate = event.get("thread_id")
-            if isinstance(candidate, str) and valid_thread_id(candidate.strip()):
-                thread_id = candidate.strip()
+            if isinstance(candidate, str) and valid_thread_id(
+                canonical_thread_id(candidate)
+            ):
+                thread_id = canonical_thread_id(candidate)
                 # Persist immediately, not at end of turn. Codex has already
                 # created the session by this point; if the runner is killed,
                 # the unit stopped, or the host restarts before the turn ends,

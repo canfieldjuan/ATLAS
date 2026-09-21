@@ -226,6 +226,16 @@ Max files: 10
   - The missing-thread diagnostic is matched as one record, so output about a
     different thread cannot quarantine this one -- settled by
     `tests/test_codex_wake_run.py::test_a_split_diagnostic_does_not_quarantine`.
+  - Thread identity compares UUIDs, not spellings, so a stored uppercase id
+    and a reported lowercase one are the same conversation -- settled by
+    `tests/test_codex_wake_run.py::test_thread_identity_ignores_casing`, with
+    the still-refused case `::test_a_genuinely_different_thread_is_still_refused`
+    and `::test_missing_session_match_ignores_casing`.
+  - Containment that could not be checked is not reported as contained, so a
+    host where `/proc` is unreadable or `setsid` fails fails the turn rather
+    than releasing the lock on an assumption -- settled by
+    `tests/test_codex_wake_run.py::test_unknown_containment_is_not_reported_as_contained`
+    with the clean side `::test_a_readable_empty_group_is_contained`.
   - A non-UTF-8 byte in the event stream does not discard the turn: decoding
     replaces it, the junk line is counted, and the thread stays resumable --
     settled by
@@ -499,6 +509,15 @@ diagnostic writes never change a completed turn's outcome.
   whose thread id cannot be stored still edits files, pushes, and comments, and
   nothing can resume it, so every retry repeats that work. The check runs ahead
   of the turn; the residual mid-turn case ends in a controlled exit code.
+- Thread ids are canonicalised at every admission point. The shape check
+  accepts uppercase hex, and a UUID's identity is not its casing, so comparing
+  spellings would treat one conversation written two ways as two and kill the
+  correct turn.
+- Containment that cannot be established is treated as absent, not as
+  unnecessary. If `/proc` cannot be read or `setsid` fails, the drain cannot
+  know what is still running, and reporting a clean turn there would release
+  the lock on an assumption. This is the fail-open half of the containment
+  story; the escape half a descendant chooses is issue #2526.
 - Codex stdout is decoded with replacement rather than strictly. One
   undecodable byte would otherwise abort the stream, and because the decoder
   buffers it takes a valid `thread.started` already emitted down with it. The
@@ -616,7 +635,7 @@ round:
 - `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py
   tests/test_install_codex_wake_bridge.py tests/test_codex_wake_bridge.py
   tests/test_audit_pr_watcher_safety.py tests/test_pr_watcher.py
-  tests/test_report_pr_watcher_state.py -q` -- **323 passed**.
+  tests/test_report_pr_watcher_state.py -q` -- **330 passed**.
 - `python scripts/audit_pr_watcher_safety.py` -- exit 0, "watcher
   docs/config/source grant no merge authority".
 - `bash scripts/check_ascii_python.sh` -- exit 0.
@@ -624,7 +643,7 @@ round:
   tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob
   'scripts/**'` -- exit 0, no new brittleness above baseline.
 - End-to-end against the **real** `codex-cli 0.155.1`: a fresh wake stored
-  codeword `BINNACLE-5140` and a resumed wake recalled it, through the
+  codeword `HAWSER-6628` and a resumed wake recalled it, through the
   supervisor and with the current identity and quarantine rules in place.
 
 Probes that shaped specific fixes, each reproduced before the change and

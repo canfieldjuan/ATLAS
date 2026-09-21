@@ -1566,6 +1566,96 @@ def test_a_non_utf8_byte_does_not_discard_the_turn(
     assert "not JSON events" in log_text, "the junk line must still be counted"
 
 
+@pytest.mark.parametrize(
+    ("stored", "reported"),
+    [
+        (THREAD_A.upper(), THREAD_A),
+        (THREAD_A, THREAD_A.upper()),
+        (THREAD_A.upper(), THREAD_A.upper()),
+    ],
+)
+def test_thread_identity_ignores_casing(
+    tmp_path: Path, repo_dir: Path, stored: str, reported: str
+) -> None:
+    """Regression: a UUID's identity is not its spelling.
+
+    The shape check admits uppercase hex, so a case-sensitive comparison
+    treats one conversation written two ways as two conversations and kills
+    the correct turn.
+    """
+    fake, _record = _fake_codex(tmp_path, thread_id=reported)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(stored + "\n", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    # The file keeps whatever spelling it had; what matters is that the id the
+    # runner resolves from it, and therefore puts in argv, is canonical.
+    resolved, reason = runner.read_thread_id(thread_path)
+    assert reason is None
+    assert resolved == THREAD_A.lower()
+
+
+def test_a_genuinely_different_thread_is_still_refused(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The other side: canonicalizing must not blunt the identity check."""
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_B.upper())
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "slice-123.codex-thread").write_text(
+        THREAD_A + "\n", encoding="utf-8"
+    )
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_NO_THREAD_EVENT
+
+
+def test_missing_session_match_ignores_casing() -> None:
+    upper = (
+        "Error: no rollout found for thread id "
+        f"{THREAD_A.upper()} (code -32600)"
+    )
+
+    assert runner.reports_missing_session(upper, THREAD_A)
+    assert not runner.reports_missing_session(upper, THREAD_B)
+
+
+def test_unknown_containment_is_not_reported_as_contained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not knowing whether anything is left is not the same as nothing left.
+
+    On a host where /proc cannot be read, returning a clean turn releases the
+    lock on an assumption rather than a check.
+    """
+    monkeypatch.setattr(
+        runner,
+        "scan_process_group",
+        lambda *a, **k: runner.GroupScan(members=[], unreadable=7, vanished=0),
+    )
+    messages: list[str] = []
+
+    leaked = runner.drain_process_group(deadline_seconds=0.0, report=messages.append)
+
+    assert leaked == 7
+    assert any("could not be established" in m for m in messages)
+
+
+def test_a_readable_empty_group_is_contained(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other side: a clean scan that found nothing really is clean."""
+    monkeypatch.setattr(
+        runner,
+        "scan_process_group",
+        lambda *a, **k: runner.GroupScan(members=[], unreadable=0, vanished=3),
+    )
+
+    assert runner.drain_process_group(deadline_seconds=0.0, report=lambda _m: None) == 0
+
+
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
 
