@@ -729,19 +729,28 @@ def run_one_turn(
     live_process: list[Any] = []
     wrong_thread: list[str] = []
 
+    # The turn's identity is whatever was decided first: the stored id when
+    # resuming, or the first thread.started on a fresh turn. Both paths are
+    # pinned by the same rule, because a later event naming a different
+    # conversation is the same defect either way.
+    pinned: list[str] = [thread_id] if thread_id is not None else []
+
     def _persist(new_id: str) -> None:
-        if new_id == thread_id:
-            return
-        if thread_id is not None:
-            # A resume of one thread reporting another is the wrong
-            # conversation. Stop it at the event that names it rather than
-            # after the turn, because by then it has had the whole turn to
-            # edit the checkout, push, or comment in that other context.
+        expected = next(iter(pinned), None)
+        if expected is None:
+            # Fresh turn: the first valid id this stream names IS the arc.
+            pinned.append(new_id)
+        elif new_id != expected:
+            # A turn reporting a conversation other than the one it is pinned
+            # to is the wrong conversation. Stop it at the event that names it
+            # rather than after the turn, because by then it has had the whole
+            # turn to edit the checkout, push, or comment in that context.
             wrong_thread.append(new_id)
             _log(
                 log_handle,
-                f"resume of {thread_id} reported thread {new_id}; stopping the "
-                "turn now rather than letting the wrong conversation continue",
+                f"turn pinned to thread {expected} reported thread {new_id}; "
+                "stopping it now rather than letting the wrong conversation "
+                "continue",
             )
             running = next(iter(live_process), None)
             if running is not None:
@@ -749,6 +758,10 @@ def run_one_turn(
                     running.terminate()
                 except OSError as exc:
                     _log(log_handle, f"could not stop the wrong-thread turn: {exc}")
+            return
+        else:
+            return
+        if new_id == thread_id:
             return
         try:
             write_thread_id(thread_path, new_id)
@@ -874,10 +887,11 @@ def run_one_turn(
         and observed_thread != thread_id
     ):
         reported = next(iter(wrong_thread), observed_thread)
+        expected = next(iter(pinned), thread_id)
         _log(
             log_handle,
-            f"resume of {thread_id} reported thread {reported}; kept "
-            f"{thread_id} and failed this turn rather than switching arcs",
+            f"turn pinned to thread {expected} reported thread {reported}; kept "
+            f"{expected} and failed this turn rather than switching arcs",
         )
         _log(log_handle, f"turn complete exit={EXIT_NO_THREAD_EVENT}")
         return TurnResult(EXIT_NO_THREAD_EVENT)

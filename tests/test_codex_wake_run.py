@@ -1334,7 +1334,8 @@ def test_a_wrong_thread_turn_is_stopped_before_it_can_act(
     assert not marker.exists(), "the wrong conversation must be stopped, not awaited"
     assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "stopping the turn now" in log_text
+    assert "stopping it now" in log_text
+    assert "wrong conversation" in log_text
 
 
 def test_drain_reports_how_many_it_could_not_stop(
@@ -1456,6 +1457,73 @@ def test_a_silent_turn_does_not_leave_the_previous_result_standing(
     record = (state_dir / "slice-123.codex-wake.last.md").read_text(encoding="utf-8")
     assert "ok" not in record.split("\n")[0] or "no agent message" in record
     assert "no agent message" in record
+
+
+def _multi_thread_codex(tmp_path: Path, thread_ids: list[str]) -> Path:
+    """A Codex whose stream names several threads before finishing."""
+    events = "".join(
+        f"print(json.dumps({{'type': 'thread.started', 'thread_id': {t!r}}}))\n"
+        for t in thread_ids
+    )
+    fake = tmp_path / "multi-codex"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdin.read()\n"
+        + events
+        + "print(json.dumps({'type': 'item.completed', 'item':"
+        " {'id': 'i', 'type': 'agent_message', 'text': 'ok'}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
+def test_a_fresh_turn_is_pinned_to_its_first_thread(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the first id a fresh stream names is the arc.
+
+    Accepting a later one means every subsequent wake resumes a different
+    conversation than the turn actually started, which is the resume defect
+    on its other side.
+    """
+    fake = _multi_thread_codex(tmp_path, [THREAD_A, THREAD_B])
+    state_dir = tmp_path / "state"
+
+    exit_code = _run(tmp_path, fake=fake, state_dir=state_dir)
+
+    assert exit_code == runner.EXIT_NO_THREAD_EVENT
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A, "the first id must survive a contradicting one"
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "stopping it now" in log_text
+
+
+def test_a_fresh_turn_repeating_one_thread_is_fine(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The other side: repeating the same id is not a contradiction."""
+    fake = _multi_thread_codex(tmp_path, [THREAD_A, THREAD_A])
+    state_dir = tmp_path / "state"
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A
+
+
+def test_a_resume_repeating_its_own_thread_is_fine(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    fake = _multi_thread_codex(tmp_path, [THREAD_A, THREAD_A])
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
 
 def test_usage_is_recorded_for_cost_visibility(tmp_path: Path, repo_dir: Path) -> None:

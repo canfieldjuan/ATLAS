@@ -143,10 +143,14 @@ Max files: 10
     `::test_next_wake_after_quarantine_starts_fresh`,
     `::test_an_unrelated_not_found_does_not_quarantine`, and
     `::test_reports_missing_session_requires_the_phrase_and_the_id`.
-  - A resume comes back as the thread it asked for, or the turn fails and the
-    stored id survives, so an arc cannot be silently redirected -- settled by
-    `tests/test_codex_wake_run.py::test_a_resume_reporting_a_different_thread_is_refused`
-    with the fresh-thread side
+  - A turn is pinned to one thread for its whole life, whether that came from
+    the store on a resume or from the first event on a fresh turn, and a later
+    event naming a different one fails the turn with the pinned id intact --
+    settled by
+    `tests/test_codex_wake_run.py::test_a_resume_reporting_a_different_thread_is_refused`,
+    `::test_a_fresh_turn_is_pinned_to_its_first_thread`, and the
+    not-a-contradiction cases `::test_a_fresh_turn_repeating_one_thread_is_fine`,
+    `::test_a_resume_repeating_its_own_thread_is_fine`, and
     `::test_a_fresh_turn_still_records_whatever_thread_it_started`.
   - The other side of that boundary: a transient pre-attach failure (network,
     auth, config, empty stderr) KEEPS the id, because a wrong quarantine
@@ -524,10 +528,12 @@ diagnostic writes never change a completed turn's outcome.
   away a valid thread over a failure that had nothing to do with it. That is
   the precise harm quarantining exists to prevent, so the matcher is now the
   verified phrase plus the thread being resumed.
-- A resume must report the thread it asked for. Writing a different id would
-  redirect the arc and every later wake with it, so a mismatch keeps the stored
-  id and fails the turn. A fresh turn, with nothing stored, still records
-  whatever thread it starts.
+- A turn's identity is pinned once and then immutable. On a resume it comes
+  from the stored id; on a fresh turn it is the first `thread.started` the
+  stream names. Either way a later event naming a different conversation fails
+  the turn with the pinned id kept. Pinning only the resume side left the fresh
+  side able to overwrite its own identity mid-stream, which is the same defect
+  approached from the other direction.
 - Quarantine is keyed to a confirmed missing-session signature on stderr, not
   to a nonzero exit. Codex reports it as
   `no rollout found for thread id <uuid> (code -32600)`, which is why stderr is
@@ -600,7 +606,7 @@ round:
 - `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py
   tests/test_install_codex_wake_bridge.py tests/test_codex_wake_bridge.py
   tests/test_audit_pr_watcher_safety.py tests/test_pr_watcher.py
-  tests/test_report_pr_watcher_state.py -q` -- **319 passed**.
+  tests/test_report_pr_watcher_state.py -q` -- **322 passed**.
 - `python scripts/audit_pr_watcher_safety.py` -- exit 0, "watcher
   docs/config/source grant no merge authority".
 - `bash scripts/check_ascii_python.sh` -- exit 0.
@@ -608,7 +614,7 @@ round:
   tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob
   'scripts/**'` -- exit 0, no new brittleness above baseline.
 - End-to-end against the **real** `codex-cli 0.155.1`: a fresh wake stored
-  codeword `FORECASTLE-2286` and a resumed wake recalled it, through the
+  codeword `CAPSTAN-7715` and a resumed wake recalled it, through the
   supervisor and with the current identity and quarantine rules in place.
 
 Probes that shaped specific fixes, each reproduced before the change and
