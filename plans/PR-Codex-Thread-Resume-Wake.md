@@ -291,6 +291,10 @@ Max files: 10
     `::test_a_thread_less_turn_does_not_leave_the_previous_result_standing`,
     `::test_a_silent_turn_does_not_leave_the_previous_result_standing`, and
     structurally by `::test_every_post_launch_exit_refreshes_the_wake_record`.
+  - Neither reading nor writing the thread id goes through a name another
+    process may have prepared -- settled by
+    `tests/test_codex_wake_run.py::test_the_staged_thread_write_refuses_a_planted_name`
+    and `::test_the_thread_id_still_round_trips_through_the_staged_write`.
   - A wake that cannot say what it cost does not report success -- settled by
     `tests/test_codex_wake_run.py::test_a_turn_without_a_usage_receipt_is_a_protocol_failure`,
     with both sides of the receipt rule in `::test_what_counts_as_a_cost_receipt`
@@ -577,7 +581,11 @@ diagnostic writes never change a completed turn's outcome.
 - The stored thread id is opened once and judged on the descriptor, never
   re-resolved by name. Validating the path and then opening the path leaves a
   window in which the checked regular file is replaced by a FIFO, and that
-  open blocks forever while the wake holds the lock.
+  open blocks forever while the wake holds the lock. The staged write follows
+  the same rule from the other direction: `O_CREAT|O_EXCL|O_NOFOLLOW` refuses
+  to write through a name something else prepared, so a symlink planted at the
+  predictable staging name cannot redirect the write and a stale file from a
+  recycled pid is an error rather than a silent overwrite.
 - Only `EAGAIN`/`EWOULDBLOCK` count as contention on the lock. Treating `EIO`,
   `EBADF` or `ENOLCK` as another holder would stall every wake for the full
   wait window and then report a timeout that hides the real fault; `EINTR`
@@ -713,9 +721,9 @@ re-run after it:
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +2161 |
-| `scripts/codex_wake_run.py` | +1261 |
-| `plans/PR-Codex-Thread-Resume-Wake.md` | +728 |
+| `tests/test_codex_wake_run.py` | +2194 |
+| `scripts/codex_wake_run.py` | +1271 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | +736 |
 | `tests/test_codex_wake_end_to_end.py` | +238 |
 | `tests/test_audit_pr_watcher_safety.py` | +89 |
 | `docs/long_running_session_watcher_handoff.md` | +67 / -4 |
@@ -723,6 +731,6 @@ re-run after it:
 | `scripts/install_codex_wake_bridge.py` | +13 |
 | `scripts/audit_pr_watcher_safety.py` | +11 |
 | `.github/workflows/codex_wake_bridge_checks.yml` | +5 |
-| **Total** | **4623** |
+| **Total** | **4674** |
 
 Over the 400 LOC soft cap. Runtime code is 508 lines; the remainder is tests (794), this plan (381), and docs (51). The growth over the first push is six Codex review findings and their regression tests, all fixed rather than waived.

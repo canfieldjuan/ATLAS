@@ -561,7 +561,17 @@ def _atomic_write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
-        with staged.open("w", encoding="utf-8") as handle:
+        # Same rule as reading the id: never write through a name something
+        # else may have prepared. O_EXCL refuses to reuse anything already at
+        # the staging name, which also makes a stale file from a recycled pid
+        # an error rather than a silent overwrite, and O_NOFOLLOW refuses a
+        # symlink planted there to redirect the write.
+        fd = os.open(
+            staged,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())

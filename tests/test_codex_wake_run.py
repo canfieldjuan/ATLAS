@@ -2159,3 +2159,36 @@ def test_a_failing_turn_keeps_its_own_exit_code_when_usage_is_missing(
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
     assert "usage=unavailable" in log_text
 
+
+def test_the_staged_thread_write_refuses_a_planted_name(tmp_path: Path) -> None:
+    """Same rule as the read: never write through a name someone else prepared.
+
+    The staging name is predictable -- it is derived from the thread file and
+    this process's pid -- so a symlink planted there would redirect the write
+    out of the state directory.
+    """
+    target = tmp_path / "slice-123.codex-thread"
+    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_text("untouched", encoding="utf-8")
+    staged.symlink_to(elsewhere)
+
+    with pytest.raises(OSError):
+        runner.write_thread_id(target, THREAD_A)
+
+    assert elsewhere.read_text(encoding="utf-8") == "untouched"
+    assert not target.exists()
+
+
+def test_the_thread_id_still_round_trips_through_the_staged_write(
+    tmp_path: Path,
+) -> None:
+    """The boundary's other side: an ordinary write must still work."""
+    target = tmp_path / "slice-123.codex-thread"
+
+    runner.write_thread_id(target, THREAD_A)
+
+    assert runner.read_thread_id(target) == (THREAD_A, None)
+    leftovers = [entry.name for entry in tmp_path.iterdir() if entry.name.startswith(".")]
+    assert leftovers == [], f"staging file left behind: {leftovers}"
+
