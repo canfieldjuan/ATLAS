@@ -285,6 +285,21 @@ Max files: 10
     pytest marker, and by its enrollment in
     `.github/workflows/codex_wake_bridge_checks.yml` both as a path filter and
     in the explicit test list.
+  - Every post-launch exit leaves the wake record describing THIS wake, and no
+    post-launch exit can bypass that -- settled by
+    `tests/test_codex_wake_run.py::test_a_wrong_thread_turn_does_not_leave_the_previous_result_standing`,
+    `::test_a_thread_less_turn_does_not_leave_the_previous_result_standing`,
+    `::test_a_silent_turn_does_not_leave_the_previous_result_standing`, and
+    structurally by `::test_every_post_launch_exit_refreshes_the_wake_record`.
+  - A wake that cannot say what it cost does not report success -- settled by
+    `tests/test_codex_wake_run.py::test_a_turn_without_a_usage_receipt_is_a_protocol_failure`,
+    with both sides of the receipt rule in `::test_what_counts_as_a_cost_receipt`
+    and the failed-turn case in
+    `::test_a_failing_turn_keeps_its_own_exit_code_when_usage_is_missing`.
+  - Reading the stored thread id cannot be made to block the wake lock, and
+    the opened descriptor decides the outcome rather than the name -- settled
+    by `tests/test_codex_wake_run.py::test_a_fifo_at_the_thread_path_does_not_block_the_wake`
+    and `::test_the_opened_descriptor_decides_the_thread_file_not_the_name`.
   - Codex exiting 0 without naming a thread is treated as a protocol failure,
     not success -- settled by
     `tests/test_codex_wake_run.py::test_zero_exit_without_a_thread_event_is_a_protocol_failure`
@@ -299,7 +314,8 @@ Max files: 10
   --source event -> CODEX_WAKE_COMMAND`. Observable effect is a Codex turn
   recorded against a stable thread id in
   `~/.local/state/atlas-pr-watchers/<id>.codex-thread` plus a usage line in
-  `<id>.codex-wake.log`. The runner's `--dry-run` prints the exact argv without
+  `<id>.codex-wake.log` -- one carrying the token counts, or one naming the
+  cost as unavailable, on every wake that launched a turn. The runner's `--dry-run` prints the exact argv without
   spending tokens, which is how the operator verifies wiring.
 - Affected surfaces: `scripts/codex_wake_run.py` (new),
   `scripts/install_codex_wake_bridge.py`, `scripts/audit_pr_watcher_safety.py`
@@ -539,12 +555,29 @@ diagnostic writes never change a completed turn's outcome.
   full disk after Codex has edited files would otherwise raise out of a
   finished turn and make the caller repeat that work. It falls back to stderr
   and carries the reason.
-- The per-wake record is always overwritten, including when a turn says
-  nothing. Leaving the previous message in place makes a stale result read as
-  this wake's result, which defeats the point of keeping one for an operator
-  who was not watching. A silent turn that otherwise succeeded exits
-  `EXIT_NO_AGENT_MESSAGE`; a turn that already failed keeps its own exit code,
-  because that is the more useful diagnosis.
+- Once Codex has been launched, `finish` is the only way out of `run_one_turn`,
+  and it is the only place the per-wake record is written. The record is
+  therefore always overwritten -- by a turn that said nothing, by one that
+  named the wrong conversation, by one that never named a thread, and by one
+  whose id could not be stored. Leaving the previous message in place makes a
+  stale result read as this wake's result, which defeats the point of keeping
+  one for an operator who was not watching. Giving each protocol failure its
+  own early return is what let three of them skip the refresh, so the
+  invariant is structural rather than repeated per branch. A silent turn that
+  otherwise succeeded exits `EXIT_NO_AGENT_MESSAGE`; a turn that already
+  failed keeps its own exit code, because that is the more useful diagnosis.
+- A turn that reports success without pricing itself exits `EXIT_NO_USAGE`.
+  This runner exists because unattended wakes burned a weekly quota, so an
+  unpriced wake is a failed wake even when its work succeeded: the agent
+  message and the thread id are kept, and the distinct exit code is what makes
+  the missing receipt visible to an operator who was asleep for it. A usage
+  object counts as a receipt only when it carries at least one integer token
+  count; an empty object and a boolean dressed as a count do not, and a count
+  of zero does. A turn that already failed keeps its own exit code.
+- The stored thread id is opened once and judged on the descriptor, never
+  re-resolved by name. Validating the path and then opening the path leaves a
+  window in which the checked regular file is replaced by a FIFO, and that
+  open blocks forever while the wake holds the lock.
 - Only `EAGAIN`/`EWOULDBLOCK` count as contention on the lock. Treating `EIO`,
   `EBADF` or `ENOLCK` as another holder would stall every wake for the full
   wait window and then report a timeout that hides the real fault; `EINTR`
@@ -680,16 +713,16 @@ re-run after it:
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +1891 |
-| `scripts/codex_wake_run.py` | +1189 |
-| `plans/PR-Codex-Thread-Resume-Wake.md` | +695 |
+| `tests/test_codex_wake_run.py` | +2161 |
+| `scripts/codex_wake_run.py` | +1261 |
+| `plans/PR-Codex-Thread-Resume-Wake.md` | +728 |
 | `tests/test_codex_wake_end_to_end.py` | +238 |
 | `tests/test_audit_pr_watcher_safety.py` | +89 |
-| `docs/long_running_session_watcher_handoff.md` | +63 / -4 |
+| `docs/long_running_session_watcher_handoff.md` | +67 / -4 |
 | `tests/test_install_codex_wake_bridge.py` | +46 |
 | `scripts/install_codex_wake_bridge.py` | +13 |
 | `scripts/audit_pr_watcher_safety.py` | +11 |
 | `.github/workflows/codex_wake_bridge_checks.yml` | +5 |
-| **Total** | **4244** |
+| **Total** | **4623** |
 
 Over the 400 LOC soft cap. Runtime code is 508 lines; the remainder is tests (794), this plan (381), and docs (51). The growth over the first push is six Codex review findings and their regression tests, all fixed rather than waived.

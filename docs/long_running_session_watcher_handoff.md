@@ -175,7 +175,11 @@ Verify wiring without spending tokens:
 
 Each wake appends its mode, argv, the turn's token usage, and the agent's final
 message to `~/.local/state/atlas-pr-watchers/<session-id>.codex-wake.log`, so
-wake cost and outcome are readable rather than inferred. Concurrent wakes are
+wake cost and outcome are readable rather than inferred. A turn that Codex
+never priced is not reported as a success: the log says `usage=unavailable`
+and the wake exits 81, because a wake whose cost is unknown is the failure
+this runner was built to make visible. The work itself still happened, so the
+thread id and the agent message are kept and the arc continues. Concurrent wakes are
 serialized by a lock: a wake that arrives while one is in flight waits for the
 lock and then runs its own prompt. It is not dropped, because the running turn
 may already have taken its snapshot of the PR and cannot see a review posted

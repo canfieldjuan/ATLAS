@@ -10,7 +10,10 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import threading
 import time
+
+from typing import Any
 
 import pytest
 
@@ -599,7 +602,7 @@ def test_zero_exit_without_a_thread_event_is_a_protocol_failure(
         "#!/usr/bin/env python3\n"
         "import json, sys\n"
         "sys.stdin.read()\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n"
         "sys.exit(0)\n",
         encoding="utf-8",
     )
@@ -622,7 +625,7 @@ def test_zero_exit_with_a_malformed_thread_id_is_a_protocol_failure(
         "import json, sys\n"
         "sys.stdin.read()\n"
         "print(json.dumps({'type': 'thread.started', 'thread_id': 'not-a-uuid'}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n"
         "sys.exit(0)\n",
         encoding="utf-8",
     )
@@ -953,7 +956,7 @@ def test_a_background_process_does_not_outlive_the_lock(
         f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
         "print(json.dumps({'type': 'item.completed', 'item':"
         " {'id': 'i', 'type': 'agent_message', 'text': 'started something'}}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n"
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n"
         "sys.exit(0)\n",
         encoding="utf-8",
     )
@@ -1191,7 +1194,7 @@ def test_a_special_thread_file_is_rejected_without_being_opened(
 
 
 def test_a_symlinked_thread_file_is_judged_on_its_own(tmp_path: Path) -> None:
-    """lstat, so a link to a FIFO cannot smuggle the blocking open back in."""
+    """O_NOFOLLOW, so a link to a FIFO cannot smuggle the blocking open back in."""
     fifo = tmp_path / "target-fifo"
     os.mkfifo(fifo)
     link = tmp_path / "slice-123.codex-thread"
@@ -1446,7 +1449,7 @@ def test_a_silent_turn_does_not_leave_the_previous_result_standing(
         "import json, sys\n"
         "sys.stdin.read()\n"
         f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n",
         encoding="utf-8",
     )
     silent.chmod(silent.stat().st_mode | stat.S_IXUSR)
@@ -1473,7 +1476,7 @@ def _multi_thread_codex(tmp_path: Path, thread_ids: list[str]) -> Path:
         + events
         + "print(json.dumps({'type': 'item.completed', 'item':"
         " {'id': 'i', 'type': 'agent_message', 'text': 'ok'}}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n",
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -1549,7 +1552,7 @@ def test_a_non_utf8_byte_does_not_discard_the_turn(
         f"open({str(side_effect)!r}, 'w').write('did work')\n"
         "print(json.dumps({'type': 'item.completed', 'item':"
         " {'id': 'i', 'type': 'agent_message', 'text': 'ok'}}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n",
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -1754,7 +1757,7 @@ def test_long_agent_message_is_truncated_in_the_log_but_kept_in_full(
         f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
         "print(json.dumps({'type': 'item.completed', 'item': "
         f"{{'id': 'i', 'type': 'agent_message', 'text': {long_text!r}}}}}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n",
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -1837,7 +1840,7 @@ def test_non_json_stdout_lines_are_counted_not_silently_dropped(
         f"print(json.dumps({{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}))\n"
         "print(json.dumps({'type': 'item.completed', 'item':"
         " {'id': 'i', 'type': 'agent_message', 'text': 'ok'}}))\n"
-        "print(json.dumps({'type': 'turn.completed', 'usage': {}}))\n",
+        "print(json.dumps({'type': 'turn.completed', 'usage': {'input_tokens': 11, 'output_tokens': 2}}))\n",
         encoding="utf-8",
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
@@ -1889,3 +1892,270 @@ def test_temp_prompt_file_is_cleaned_up(tmp_path: Path, repo_dir: Path) -> None:
 
 def test_missing_codex_binary_is_reported(tmp_path: Path, repo_dir: Path) -> None:
     assert _run(tmp_path, fake=tmp_path / "definitely-not-here") == 2
+
+
+def _call_with_deadline(fn: Any, seconds: float) -> tuple[bool, Any]:
+    """Run `fn` on a thread and say whether it finished inside `seconds`.
+
+    A blocking open cannot be caught with pytest.raises; the only observable
+    difference between the defect and the fix is whether the call ever
+    returns, so the deadline is the assertion.
+    """
+    box: dict[str, Any] = {}
+    worker = threading.Thread(target=lambda: box.setdefault("value", fn()), daemon=True)
+    worker.start()
+    worker.join(timeout=seconds)
+    if worker.is_alive():
+        return False, None
+    return True, box.get("value")
+
+
+def test_a_fifo_at_the_thread_path_does_not_block_the_wake(tmp_path: Path) -> None:
+    """Regression: the wake lock is held across this read.
+
+    A FIFO with no writer blocks a by-name open forever, so a wake that hit
+    one would hold the lock until the host was rebooted and every later wake
+    would time out behind it.
+    """
+    fifo = tmp_path / "slice-123.codex-thread"
+    os.mkfifo(fifo)
+
+    finished, result = _call_with_deadline(lambda: runner.read_thread_id(fifo), 10.0)
+
+    assert finished, "read_thread_id blocked on a FIFO while holding the wake lock"
+    stored, reason = result
+    assert stored is None
+    assert reason is not None and "not a regular file" in reason
+
+
+def test_the_opened_descriptor_decides_the_thread_file_not_the_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: validating the name and then opening the name is a race.
+
+    This reproduces the admitted interleaving exactly -- the regular file is
+    replaced by a FIFO the instant after the runner looks at it -- and the
+    read must still complete off the descriptor it already holds.
+    """
+    target = tmp_path / "slice-123.codex-thread"
+    target.write_text(THREAD_A + "\n", encoding="utf-8")
+    real_open = os.open
+    swapped: list[bool] = []
+
+    def racing_open(path: Any, flags: int, *args: Any, **kwargs: Any) -> int:
+        opened = real_open(path, flags, *args, **kwargs)
+        if str(path) == str(target) and not swapped:
+            swapped.append(True)
+            os.unlink(target)
+            os.mkfifo(target)
+        return opened
+
+    monkeypatch.setattr(os, "open", racing_open)
+
+    finished, result = _call_with_deadline(
+        lambda: runner.read_thread_id(target), 10.0
+    )
+
+    assert finished, "the swapped-in FIFO blocked the read"
+    assert swapped, "the race never fired, so this proves nothing"
+    assert result == (THREAD_A, None)
+
+
+def _codex_emitting(tmp_path: Path, name: str, events: list[str], exit_code: int = 0) -> Path:
+    fake = tmp_path / name
+    body = "".join(f"print(json.dumps({event}))\n" for event in events)
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n"
+        "sys.stdin.read()\n"
+        + body
+        + f"sys.exit({exit_code})\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
+def test_a_wrong_thread_turn_does_not_leave_the_previous_result_standing(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a protocol failure returned before the record was refreshed."""
+    state_dir = tmp_path / "state"
+    first = _codex_emitting(
+        tmp_path,
+        "codex-first",
+        [
+            f"{{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}",
+            "{'type': 'item.completed', 'item': {'type': 'agent_message',"
+            " 'text': 'FIRST WAKE: opened PR 4242 and pushed'}}",
+            "{'type': 'turn.completed', 'usage': {'input_tokens': 11}}",
+        ],
+    )
+    assert _run(tmp_path, fake=first, state_dir=state_dir) == 0
+    record_path = state_dir / "slice-123.codex-wake.last.md"
+    assert "FIRST WAKE" in record_path.read_text(encoding="utf-8")
+
+    wrong = _codex_emitting(
+        tmp_path,
+        "codex-wrong",
+        [f"{{'type': 'thread.started', 'thread_id': {THREAD_B!r}}}"],
+    )
+
+    assert _run(tmp_path, fake=wrong, state_dir=state_dir) == runner.EXIT_NO_THREAD_EVENT
+
+    record = record_path.read_text(encoding="utf-8")
+    assert "FIRST WAKE" not in record
+    assert THREAD_B in record and THREAD_A in record
+
+
+def test_a_thread_less_turn_does_not_leave_the_previous_result_standing(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the same missed refresh on the no-thread-event return."""
+    state_dir = tmp_path / "state"
+    first, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run(tmp_path, fake=first, state_dir=state_dir) == 0
+    record_path = state_dir / "slice-123.codex-wake.last.md"
+    assert record_path.read_text(encoding="utf-8").strip() == "ok"
+
+    (state_dir / "slice-123.codex-thread").unlink()
+    nameless = _codex_emitting(
+        tmp_path,
+        "codex-nameless",
+        [
+            "{'type': 'item.completed', 'item': {'type': 'agent_message',"
+            " 'text': 'worked but never said where'}}",
+            "{'type': 'turn.completed', 'usage': {'input_tokens': 11}}",
+        ],
+    )
+
+    assert (
+        _run(tmp_path, fake=nameless, state_dir=state_dir)
+        == runner.EXIT_NO_THREAD_EVENT
+    )
+
+    record = record_path.read_text(encoding="utf-8")
+    assert record.strip() != "ok"
+    assert "never named a thread" in record
+
+
+def test_every_post_launch_exit_refreshes_the_wake_record() -> None:
+    """Close the class, not the three instances of it.
+
+    Each protocol failure added to this runner came with its own early return,
+    and each one had to remember to refresh the record. The invariant is
+    structural: once Codex has been launched, `finish` is the only way out.
+    """
+    source = SCRIPT.read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(source) if line.startswith("def run_one_turn("))
+    launch = next(
+        i for i, line in enumerate(source) if i > start and "subprocess.Popen(" in line
+    )
+    after = [
+        line.strip()
+        for line in source[launch:]
+        if line.strip().startswith("return TurnResult(")
+    ]
+
+    assert after == ["return TurnResult(2, binary_missing=True)"], (
+        "a post-launch exit bypasses finish() and can leave the previous "
+        f"wake's record standing: {after}"
+    )
+    assert sum(1 for line in source if "return finish(" in line) >= 5
+
+
+def test_a_turn_without_a_usage_receipt_is_a_protocol_failure(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The runner exists to make unattended token burn visible.
+
+    A wake that reports success without saying what it cost is the exact hole
+    this tool was built to close, so it fails with its own code and keeps the
+    agent message.
+    """
+    state_dir = tmp_path / "state"
+    fake = _codex_emitting(
+        tmp_path,
+        "codex-unpriced",
+        [
+            f"{{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}",
+            "{'type': 'item.completed', 'item': {'type': 'agent_message',"
+            " 'text': 'did the work'}}",
+            "{'type': 'turn.completed'}",
+        ],
+    )
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_NO_USAGE
+
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "usage=unavailable" in log_text
+    record = (state_dir / "slice-123.codex-wake.last.md").read_text(encoding="utf-8")
+    assert "did the work" in record
+    assert "unpriced" in record
+    # The turn still happened, so the thread id is kept and the arc survives.
+    assert (state_dir / "slice-123.codex-thread").read_text(
+        encoding="utf-8"
+    ).strip() == THREAD_A
+
+
+@pytest.mark.parametrize(
+    "usage_literal, expected_exit",
+    [
+        ("{}", "no-usage"),
+        ("{'note': 'hi'}", "no-usage"),
+        ("{'input_tokens': 'many'}", "no-usage"),
+        ("{'input_tokens': True}", "no-usage"),
+        ("{'input_tokens': 0}", "priced"),
+        ("{'cached_input_tokens': 0, 'output_tokens': 0}", "priced"),
+        ("{'input_tokens': 29048, 'output_tokens': 5}", "priced"),
+    ],
+)
+def test_what_counts_as_a_cost_receipt(
+    tmp_path: Path, repo_dir: Path, usage_literal: str, expected_exit: str
+) -> None:
+    """Both sides of the receipt rule, including the falsy ones.
+
+    Zero tokens is an answer and must pass; an empty object and a boolean
+    dressed up as a count are not answers and must not.
+    """
+    state_dir = tmp_path / "state"
+    fake = _codex_emitting(
+        tmp_path,
+        "codex-usage-shape",
+        [
+            f"{{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}",
+            "{'type': 'item.completed', 'item': {'type': 'agent_message',"
+            " 'text': 'done'}}",
+            "{'type': 'turn.completed', 'usage': " + usage_literal + "}",
+        ],
+    )
+
+    exit_code = _run(tmp_path, fake=fake, state_dir=state_dir)
+
+    if expected_exit == "priced":
+        assert exit_code == 0
+    else:
+        assert exit_code == runner.EXIT_NO_USAGE
+
+
+def test_a_failing_turn_keeps_its_own_exit_code_when_usage_is_missing(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A real failure is the more useful diagnosis than its missing receipt."""
+    state_dir = tmp_path / "state"
+    fake = _codex_emitting(
+        tmp_path,
+        "codex-failed",
+        [
+            f"{{'type': 'thread.started', 'thread_id': {THREAD_A!r}}}",
+            "{'type': 'item.completed', 'item': {'type': 'agent_message',"
+            " 'text': 'ran out of credit'}}",
+        ],
+        exit_code=3,
+    )
+
+    assert _run(tmp_path, fake=fake, state_dir=state_dir) == 3
+
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "usage=unavailable" in log_text
+

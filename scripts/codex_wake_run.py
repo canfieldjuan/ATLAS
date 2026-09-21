@@ -66,6 +66,10 @@ EXIT_TURN_NOT_CONTAINED = 79
 # Exit code when a turn finished without ever saying what it did. The wake
 # record is the only account of work done while nobody was watching.
 EXIT_NO_AGENT_MESSAGE = 80
+# Exit code when a turn finished without ever saying what it cost. This runner
+# exists because wakes were burning a weekly quota unattended, so a turn whose
+# price is unknown is a failed wake even when its work succeeded.
+EXIT_NO_USAGE = 81
 # How long the supervisor gives a turn's leftovers to exit on SIGTERM
 # before killing them, once the turn itself has finished.
 GROUP_DRAIN_SECONDS = 5.0
@@ -486,6 +490,19 @@ def valid_thread_id(value: str) -> bool:
     return bool(THREAD_ID_RE.fullmatch(value))
 
 
+def _read_bounded(fd: int, limit: int) -> bytes:
+    """Read at most `limit` bytes from an already-opened descriptor."""
+    chunks: list[bytes] = []
+    remaining = limit
+    while remaining > 0:
+        chunk = os.read(fd, remaining)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 def read_thread_id(path: Path) -> tuple[str | None, str | None]:
     """Return (thread_id, reason_ignored).
 
@@ -493,26 +510,36 @@ def read_thread_id(path: Path) -> tuple[str | None, str | None]:
     wake: a wake that runs on a new thread still does the operator's work, but a
     wake that refuses to run loses the review event entirely.
     """
-    # The type check has to come before the open, not after. A FIFO reports a
-    # zero size and blocks on open until a writer appears, so a later
-    # is_file() check never runs and the wake hangs holding the lock. lstat
-    # also means a symlink is judged on its own merits rather than its target.
+    # One path lookup, and everything after it is judged on the descriptor.
+    # Validating the name and then opening the name leaves a window in which
+    # the checked regular file is replaced by a FIFO, and that open blocks
+    # forever while this wake holds the lock. O_NONBLOCK means even a FIFO
+    # that wins the race opens immediately instead of waiting for a writer,
+    # O_NOFOLLOW refuses a symlink at the final component, and the fstat below
+    # judges what was actually opened rather than what the name once pointed
+    # at. The read is bounded because st_size cannot be trusted for anything
+    # that is not a regular file.
     try:
-        info = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except FileNotFoundError:
         return None, None
     except OSError as exc:
-        return None, f"could not inspect the stored thread id: {exc}"
-    if not stat.S_ISREG(info.st_mode):
-        return None, f"stored thread id at {path} is not a regular file"
+        if exc.errno == errno.ELOOP:
+            return None, f"stored thread id at {path} is not a regular file"
+        return None, f"could not open the stored thread id: {exc}"
     try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None, f"stored thread id at {path} is not a regular file"
         if info.st_size > MAX_THREAD_FILE_BYTES:
             return None, "stored thread id file is too large"
-        raw = path.read_text(encoding="utf-8")
+        raw = _read_bounded(fd, MAX_THREAD_FILE_BYTES).decode("utf-8")
     except OSError as exc:
         return None, f"could not read stored thread id: {exc}"
     except UnicodeDecodeError:
         return None, "stored thread id is not valid UTF-8"
+    finally:
+        os.close(fd)
     candidate = canonical_thread_id(raw)
     if not candidate:
         return None, "stored thread id is empty"
@@ -625,6 +652,23 @@ def reports_missing_session(stderr_text: str, thread_id: str) -> bool:
     return False
 
 
+def _usage_receipt(usage: Any) -> bool:
+    """Say whether a reported usage object actually prices the turn.
+
+    An empty object, or one carrying no token count, is the same as no usage
+    at all for the operator who has to answer what this wake cost. A count of
+    zero is a real answer and is accepted; the receipt is the number being
+    present, not the number being large. `bool` is excluded because it is an
+    `int` subclass and `True` is not a token count.
+    """
+    if not isinstance(usage, dict):
+        return False
+    return any(
+        key.endswith("_tokens") and isinstance(value, int) and not isinstance(value, bool)
+        for key, value in usage.items()
+    )
+
+
 def _consume_events(
     stream: Any,
     log_handle: Any,
@@ -676,7 +720,7 @@ def _consume_events(
                     on_thread_started(thread_id)
         elif kind == "turn.completed":
             reported = event.get("usage")
-            if isinstance(reported, dict):
+            if _usage_receipt(reported):
                 usage = reported
         elif kind == "item.completed":
             item = event.get("item")
@@ -761,6 +805,29 @@ def run_one_turn(
     die_with_parent = make_die_with_parent(os.getpid())
 
     persist_failure: list[str] = []
+
+    # The wake record is what the operator reads when they come back, so it
+    # must describe THIS wake or nothing. Every post-launch exit goes through
+    # `finish`, which is the only place the record is written and the only
+    # place a turn result is returned. Leaving the write to each exit path is
+    # what let the protocol-failure returns keep presenting the previous
+    # wake's message as the current result.
+    last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
+
+    def finish(code: int, record: str) -> TurnResult:
+        try:
+            last_path.write_text(record, encoding="utf-8")
+        except OSError as exc:
+            # The turn already ran. Codex may have edited files, pushed, or
+            # commented, so a failure to write the record must not turn a
+            # completed turn into a reported failure the caller would retry.
+            _log(
+                log_handle,
+                f"could not refresh the wake record at {last_path}: {exc}; "
+                "the turn itself completed and is not being failed for this",
+            )
+        _log(log_handle, f"turn complete exit={code}")
+        return TurnResult(code)
 
     # Holds the running turn so the event callback can stop it the moment it
     # identifies itself as the wrong conversation.
@@ -856,6 +923,11 @@ def run_one_turn(
                         pass_fds=() if lock_fd is None else (lock_fd,),
                     )
                 except FileNotFoundError:
+                    # Not a post-launch exit: exec never happened, so no turn
+                    # ran and the record still correctly describes the last
+                    # wake that did run. The two returns above are the same
+                    # case. Every exit from here on is a turn that happened,
+                    # and those all go through `finish`.
                     _log(log_handle, f"codex binary not found: {codex_bin}")
                     print(f"codex binary not found: {codex_bin}", file=sys.stderr)
                     return TurnResult(2, binary_missing=True)
@@ -916,6 +988,11 @@ def run_one_turn(
 
     if usage is not None:
         _log(log_handle, "usage=" + json.dumps(usage, sort_keys=True))
+    else:
+        # Logged even on a failed turn. "No usage line" and "this wake was
+        # never priced" have to read differently to someone scanning the log
+        # for what the night cost.
+        _log(log_handle, "usage=unavailable; codex reported no token counts")
 
     for failure in persist_failure:
         _log(
@@ -924,8 +1001,12 @@ def run_one_turn(
             "resume it; do not retry blindly.",
         )
     if persist_failure:
-        _log(log_handle, f"turn complete exit={EXIT_STATE_UNUSABLE}")
-        return TurnResult(EXIT_STATE_UNUSABLE)
+        return finish(
+            EXIT_STATE_UNUSABLE,
+            f"[{_now()}] this wake ran a turn but could not record its thread "
+            f"id: {persist_failure[0]}. The work is done and cannot be "
+            "resumed; do not retry blindly.\n",
+        )
 
     if wrong_thread or (
         thread_id is not None
@@ -939,8 +1020,12 @@ def run_one_turn(
             f"turn pinned to thread {expected} reported thread {reported}; kept "
             f"{expected} and failed this turn rather than switching arcs",
         )
-        _log(log_handle, f"turn complete exit={EXIT_NO_THREAD_EVENT}")
-        return TurnResult(EXIT_NO_THREAD_EVENT)
+        return finish(
+            EXIT_NO_THREAD_EVENT,
+            f"[{_now()}] this wake was stopped: the turn was pinned to thread "
+            f"{expected} and reported thread {reported}, so it was killed "
+            "rather than allowed to continue the wrong conversation\n",
+        )
 
     if exit_code == 0 and observed_thread is None:
         # Codex claimed success but never named a thread, so nothing was
@@ -952,59 +1037,46 @@ def run_one_turn(
             "codex exited 0 but emitted no valid thread.started event; "
             "no thread id was recorded, so this turn cannot be resumed",
         )
-        _log(log_handle, f"turn complete exit={EXIT_NO_THREAD_EVENT}")
-        return TurnResult(EXIT_NO_THREAD_EVENT)
-
-    last_path = state_dir / f"{watcher_id}.codex-wake.last.md"
-    if last_message is None:
-        # Always overwrite, so the record cannot keep describing an earlier
-        # wake. A stale message reads exactly like this wake's result to
-        # whoever comes back to it, which is the whole point of keeping one.
-        placeholder = (
-            f"[{_now()}] this wake produced no agent message; "
-            f"the turn exited {exit_code} and left no account of what it did\n"
+        return finish(
+            EXIT_NO_THREAD_EVENT,
+            f"[{_now()}] this wake exited 0 but never named a thread, so "
+            "nothing was recorded to resume\n",
         )
-        try:
-            last_path.write_text(placeholder, encoding="utf-8")
-        except OSError as exc:
-            _log(log_handle, f"could not clear the stale wake record: {exc}")
-        else:
-            _log(
-                log_handle,
-                "no agent message in this turn; the wake record was marked "
-                "empty rather than left showing the previous wake",
-            )
-        if exit_code == 0:
-            # A turn that reports success while saying nothing about what it
-            # did is a protocol failure. A turn that already failed keeps its
-            # own exit code, which is the more useful diagnosis.
-            _log(log_handle, f"turn complete exit={EXIT_NO_AGENT_MESSAGE}")
-            return TurnResult(EXIT_NO_AGENT_MESSAGE)
-        _log(log_handle, f"turn complete exit={exit_code}")
-        return TurnResult(exit_code)
 
-    if last_message is not None:
-        summary = " ".join(last_message.split())
-        if len(summary) > 500:
-            summary = summary[:500] + " [truncated]"
-        _log(log_handle, f"agent message: {summary}")
-        # Everything past this point is diagnostics about a turn that already
-        # happened. Codex may have edited files, pushed, or commented, so a
-        # failure to record that must not turn a completed turn into a reported
-        # failure: the caller would retry and repeat real side effects.
-        try:
-            last_path.write_text(last_message + "\n", encoding="utf-8")
-        except OSError as exc:
-            _log(
-                log_handle,
-                f"could not write the agent message to {last_path}: {exc}; "
-                "the turn itself completed and is not being failed for this",
-            )
-        else:
-            _log(log_handle, f"full agent message written to {last_path}")
+    if last_message is None:
+        # A turn that reports success while saying nothing about what it did
+        # is a protocol failure. A turn that already failed keeps its own exit
+        # code, which is the more useful diagnosis.
+        return finish(
+            EXIT_NO_AGENT_MESSAGE if exit_code == 0 else exit_code,
+            f"[{_now()}] this wake produced no agent message; "
+            f"the turn exited {exit_code} and left no account of what it did\n",
+        )
 
-    _log(log_handle, f"turn complete exit={exit_code}")
-    return TurnResult(exit_code)
+    summary = " ".join(last_message.split())
+    if len(summary) > 500:
+        summary = summary[:500] + " [truncated]"
+    _log(log_handle, f"agent message: {summary}")
+
+    if exit_code == 0 and usage is None:
+        # The turn worked and said what it did, but nothing priced it. This
+        # runner was built because unattended wakes burned a weekly quota, so
+        # an unpriced wake is a failed wake: the agent message is kept, and
+        # the distinct exit code is what makes the missing receipt visible to
+        # an operator who was asleep for it.
+        _log(
+            log_handle,
+            "codex exited 0 and reported no token usage for this turn; the "
+            "work is done but its cost is unknown",
+        )
+        return finish(
+            EXIT_NO_USAGE,
+            last_message
+            + f"\n\n[{_now()}] codex reported no token usage for this turn, "
+            "so this wake is unpriced\n",
+        )
+
+    return finish(exit_code, last_message + "\n")
 
 
 def run_wake(
