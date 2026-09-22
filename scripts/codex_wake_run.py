@@ -19,6 +19,7 @@ import argparse
 import datetime as dt
 import errno
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -503,38 +504,6 @@ def _read_bounded(fd: int, limit: int) -> bytes:
     return b"".join(chunks)
 
 
-def read_small_state_file(path: Path, limit: int) -> tuple[str | None, str | None]:
-    """Read a small state file the same way the thread id is read.
-
-    Every state file this runner reads goes through here. Validating a name and
-    then opening the name leaves a window in which the checked regular file is
-    replaced by a FIFO, and that open blocks forever while the wake holds the
-    lock; `O_NONBLOCK` means even a FIFO that wins the race opens immediately,
-    `O_NOFOLLOW` refuses a symlink, and the fstat judges what was opened.
-    """
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
-    except FileNotFoundError:
-        return None, None
-    except OSError as exc:
-        if exc.errno == errno.ELOOP:
-            return None, f"{path} is not a regular file"
-        return None, f"could not open {path}: {exc}"
-    try:
-        info = os.fstat(fd)
-        if not stat.S_ISREG(info.st_mode):
-            return None, f"{path} is not a regular file"
-        if info.st_size > limit:
-            return None, f"{path} is larger than {limit} bytes"
-        return _read_bounded(fd, limit).decode("utf-8"), None
-    except OSError as exc:
-        return None, f"could not read {path}: {exc}"
-    except UnicodeDecodeError:
-        return None, f"{path} is not valid UTF-8"
-    finally:
-        os.close(fd)
-
-
 def read_thread_id(path: Path) -> tuple[str | None, str | None]:
     """Return (thread_id, reason_ignored).
 
@@ -620,6 +589,11 @@ def _atomic_write(path: Path, text: str) -> None:
             os.close(dir_fd)
     finally:
         staged.unlink(missing_ok=True)
+
+
+def write_thread_id(path: Path, thread_id: str) -> None:
+    """Persist atomically so a killed wake cannot leave a partial id."""
+    _atomic_write(path, thread_id + "\n")
 
 
 PROFILE_UNSET = "<unset>"
@@ -739,183 +713,39 @@ def child_environment(profile: WakeProfile) -> dict[str, str] | None:
     return env
 
 
-# A thread map holds one id per profile. Small by construction: a watcher sees
-# a handful of profiles at most, and each entry is a path plus a UUID.
-# The only bound on the map is its size, because size is what the reader
-# enforces. At roughly a hundred bytes per entry this holds dozens of profiles.
-# A count cap was tried and removed: it evicted representable arcs well under
-# the byte limit, breaking "switching back resumes the original arc".
-MAX_THREAD_MAP_BYTES = 8192
+def profile_thread_path(state_dir: Path, watcher_id: str, profile: WakeProfile) -> Path:
+    """The file holding this profile's thread id for this watcher.
 
+    A rollout lives only inside the CODEX_HOME that created it, so a thread id
+    is meaningful only under that profile. Each profile therefore gets its own
+    thread file rather than a share of one document: a single-valued file per
+    profile needs no read-modify-write, so no interleaving of writers can lose
+    another profile's arc, and switching back to a profile finds its file where
+    it left it.
 
-def thread_map_path(thread_path: Path) -> Path:
-    """Where the per-profile thread ids live."""
-    return thread_path.with_name(thread_path.name + "s.json")
-
-
-class ThreadMap(NamedTuple):
-    """One observation of the thread map, taken through one descriptor.
-
-    `present` comes from the same open that produced `mapping`. Deciding
-    presence with a second lookup by name lets an operator's out-of-band
-    removal land between the two, so the wake reads a map and then acts as if
-    none existed.
+    The baseline profile -- the one in effect with no profile arguments, which
+    is every deployment that predates this change -- keeps exactly the file,
+    reader, writer and quarantine it had before. Other profiles get a sibling
+    keyed by a digest of the effective CODEX_HOME, because that value can be a
+    long absolute path that is not safe to embed in a filename.
     """
-
-    mapping: dict[str, str]
-    problem: str | None
-    present: bool
-
-
-def observe_thread_map(thread_path: Path) -> ThreadMap:
-    text, problem = read_small_state_file(thread_map_path(thread_path), MAX_THREAD_MAP_BYTES)
-    if problem:
-        # Something is at the path but it is unusable, so the map is present.
-        return ThreadMap({}, problem, True)
-    if text is None:
-        return ThreadMap({}, None, False)
-    mapping, problem = _parse_thread_map(text)
-    return ThreadMap(mapping, problem, True)
-
-
-def read_thread_map(thread_path: Path) -> tuple[dict[str, str], str | None]:
-    """Return ({codex_home: thread_id}, problem).
-
-    One record rather than an id file plus an owner file. Two independent
-    durable writes can disagree if the process dies between them, leaving a
-    valid new id paired with the previous owner, after which the next wake
-    treats its own thread as foreign and starts another. Pairing them inside a
-    single atomically-replaced document makes that state unrepresentable.
-    """
-    observed = observe_thread_map(thread_path)
-    return observed.mapping, observed.problem
-
-
-def _parse_thread_map(text: str) -> tuple[dict[str, str], str | None]:
-    try:
-        loaded = json.loads(text)
-    except json.JSONDecodeError as exc:
-        return {}, f"the thread map is not valid JSON: {exc}"
-    if not isinstance(loaded, dict):
-        return {}, "the thread map is not a JSON object"
-    mapping: dict[str, str] = {}
-    for key, value in loaded.items():
-        if not isinstance(key, str) or not isinstance(value, str):
-            return {}, "the thread map has a non-string entry"
-        candidate = canonical_thread_id(value)
-        if not valid_thread_id(candidate):
-            return {}, f"the thread map holds a value that is not a Codex session id: {value!r}"
-        mapping[key] = candidate
-    return mapping, None
-
-
-def _serialize_thread_map(mapping: dict[str, str]) -> str:
-    return json.dumps(mapping, indent=2, sort_keys=True) + "\n"
-
-
-def bound_thread_map(mapping: dict[str, str], keep: str) -> dict[str, str]:
-    """Trim the map so the writer can never exceed the reader's limit.
-
-    An unbounded writer and a bounded reader disagree exactly once: the write
-    succeeds, every later read rejects the file as oversized, and the wake
-    silently loses every remembered arc. Eviction is deterministic and always
-    keeps the profile being written, because that is the arc in use.
-    """
-    def too_big(candidate: dict[str, str]) -> bool:
-        return (
-            len(_serialize_thread_map(candidate).encode("utf-8"))
-            > MAX_THREAD_MAP_BYTES
-        )
-
-    bounded = dict(mapping)
-    if keep in bounded and too_big({keep: bounded[keep]}):
-        # Decide whether the retained entry can be represented at all BEFORE
-        # evicting anything for it. A path near PATH_MAX made of characters
-        # JSON escapes reaches this: 4,091 characters serialize to 8,230 bytes.
-        # Checking only after eviction meant every other profile was deleted to
-        # make room for an entry that was then dropped anyway, leaving an empty
-        # map and losing arcs that fitted perfectly well without it.
-        del bounded[keep]
-    evictable = sorted(k for k in bounded if k != keep)
-    while evictable and too_big(bounded):
-        del bounded[evictable.pop(0)]
-    return bounded
-
-
-def write_thread_map(thread_path: Path, mapping: dict[str, str]) -> None:
-    """Persist the whole map in one atomic replacement."""
-    _atomic_write(thread_map_path(thread_path), _serialize_thread_map(mapping))
-
-
-def forget_thread(thread_path: Path, profile: "WakeProfile") -> bool:
-    """Drop this profile's arc from the map, keeping every other profile's.
-
-    The map is the source of truth, so quarantining only the single-id mirror
-    leaves the dead id in the map and every later wake for this profile
-    resumes it again.
-    """
-    mapping, problem = read_thread_map(thread_path)
-    if problem or profile.effective_codex_home not in mapping:
-        return False
-    del mapping[profile.effective_codex_home]
-    write_thread_map(thread_path, mapping)
-    return True
-
-
-def remember_thread(
-    thread_path: Path, profile: "WakeProfile", thread_id: str
-) -> str | None:
-    """Record `thread_id` as this profile's arc, keeping every other profile's.
-
-    Dropping the other entries is what would make "switch away and switch back"
-    lose the original arc, so the map is read, amended and rewritten rather
-    than replaced with a single pair.
-    """
-    observed = observe_thread_map(thread_path)
-    mapping, problem = dict(observed.mapping), observed.problem
+    legacy = state_dir / f"{watcher_id}.codex-thread"
     baseline = resolve_profile(codex_home=None, agent_home=None)
-    if not observed.present:
-        # First write for a watcher that predates the map. Record the legacy
-        # arc against the home that created it before adding this one, so
-        # enabling a profile cannot orphan it.
-        legacy, _legacy_reason = read_thread_id(thread_path)
-        if legacy:
-            mapping.setdefault(baseline.effective_codex_home, legacy)
-    mapping[profile.effective_codex_home] = thread_id
-    bounded = bound_thread_map(mapping, profile.effective_codex_home)
-    write_thread_map(thread_path, bounded)
-    # Eviction is only ever forced by the byte limit, and when it happens the
-    # operator is told which arcs stopped being resumable rather than finding
-    # out when switching back starts a fresh thread.
-    evicted = sorted(k for k in mapping if k not in bounded)
-    notes = [problem] if problem else []
-    if profile.effective_codex_home in evicted:
-        notes.append(
-            f"the profile path {profile.effective_codex_home} is too long to "
-            "record in the thread map, so this arc will not be resumable"
-        )
-    others = [k for k in evicted if k != profile.effective_codex_home]
-    if others:
-        notes.append(
-            "the thread map reached its size limit, so these profiles' arcs are "
-            "no longer resumable: " + ", ".join(others)
-        )
-    problem = "; ".join(notes) or None
-    # The single-id file is written for the baseline home only, so every id it
-    # ever holds belongs to that home. That is what makes the migration read
-    # safe: when no map is present, the file is attributed to the baseline
-    # home, and if other profiles had written their ids into it, a wake after
-    # the map was removed -- say, halfway through a manual reset -- would
-    # resume another profile's arc under the baseline home. Unconfigured
-    # deployments are the baseline, so they keep writing it exactly as before.
     if profile.effective_codex_home == baseline.effective_codex_home:
-        write_thread_id(thread_path, thread_id)
-    return problem
+        return legacy
+    digest = hashlib.sha256(profile.effective_codex_home.encode("utf-8")).hexdigest()[:16]
+    return state_dir / f"{watcher_id}.codex-thread.{digest}"
 
 
-def write_thread_id(path: Path, thread_id: str) -> None:
-    """Persist atomically so a killed wake cannot leave a partial id."""
-    _atomic_write(path, thread_id + "\n")
+
+def profile_receipt(profile: WakeProfile, thread_path: Path) -> str:
+    """One log line naming the effective profile and the thread file in use."""
+    return (
+        "profile "
+        f"codex_home={profile.effective_codex_home} ({profile.codex_home_origin}) "
+        f"home={profile.effective_home} ({profile.home_origin}) "
+        f"thread_file={thread_path.name}"
+    )
 
 
 def thread_path_problem(path: Path) -> str | None:
@@ -937,18 +767,6 @@ def thread_path_problem(path: Path) -> str | None:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return f"cannot create the state directory {path.parent}: {exc}"
-    map_path = thread_map_path(path)
-    try:
-        map_info = os.lstat(map_path)
-    except FileNotFoundError:
-        map_info = None
-    except OSError as exc:
-        return f"cannot inspect {map_path}: {exc}"
-    if map_info is not None and not stat.S_ISREG(map_info.st_mode):
-        # Checked here for the same reason the thread path is: discovering it
-        # after the turn means Codex has already acted and there is no
-        # resumable id to show for it.
-        return f"{map_path} exists but is not a regular file"
     probe = path.with_name(f".{path.name}.probe.{os.getpid()}")
     try:
         probe.write_text("", encoding="utf-8")
@@ -1087,68 +905,6 @@ def _consume_events(
     return thread_id, usage, last_message
 
 
-def thread_id_for_profile(
-    thread_path: Path, profile: "WakeProfile"
-) -> tuple[str | None, str | None]:
-    """The thread id this profile may resume, and why another was set aside.
-
-    A rollout lives only inside the `CODEX_HOME` that created it, so resuming
-    another profile's id returns `no rollout found` and gets quarantined, which
-    discards an arc that is still perfectly resumable by switching back. The
-    map keeps every profile's arc, so switching away and back resumes the
-    original thread.
-    """
-    observed = observe_thread_map(thread_path)
-    mapping, problem = observed.mapping, observed.problem
-    if problem:
-        # The map cannot be trusted, so neither can any ownership claim in it.
-        # Starting fresh costs a thread; resuming blind costs a thread AND a
-        # wake spent discovering the resume fails.
-        return None, (
-            f"{problem}; this wake cannot tell which profile owns the stored "
-            "thread ids, so it starts a fresh thread rather than risk a resume "
-            "into a profile that does not hold the rollout"
-        )
-
-    mine = mapping.get(profile.effective_codex_home)
-    if mine is not None:
-        return mine, None
-
-    if observed.present:
-        # The map is the only authority for which arc a profile resumes. The
-        # single-id file is shared by every profile, so it cannot express
-        # per-profile state and must never invalidate one: a quarantine renames
-        # it, and treating that absence as "start fresh" discarded arcs that
-        # were still resumable under other profiles.
-        named = ", ".join(sorted(mapping)) or "no profile"
-        return None, (
-            f"the thread map holds arcs for {named} but not for "
-            f"{profile.effective_codex_home}; this wake starts a fresh thread "
-            "and those arcs stay resumable by switching back"
-        )
-
-    legacy, legacy_reason = read_thread_id(thread_path)
-    if legacy_reason:
-        return None, legacy_reason
-    if legacy is None:
-        return None, None
-
-    # No map file: this watcher predates it, and its id was created before any
-    # profile argument existed, so it belongs to the home that would be in
-    # effect with no arguments at all. Adopting it for a newly enabled profile
-    # resumes a rollout that home does not hold; the missing-session path then
-    # renames the only mirror and strands the original arc.
-    baseline = resolve_profile(codex_home=None, agent_home=None)
-    if baseline.effective_codex_home == profile.effective_codex_home:
-        return legacy, None
-    return None, (
-        f"the stored thread id predates the profile arguments and belongs to "
-        f"{baseline.effective_codex_home}, not {profile.effective_codex_home}; "
-        "this wake starts a fresh thread and the original arc stays resumable "
-        "under the home that created it"
-    )
-
-
 class TurnResult(NamedTuple):
     """Outcome of one Codex turn."""
 
@@ -1178,11 +934,8 @@ def run_one_turn(
     # one then acquires the lock still holding None, starts a second thread,
     # and overwrites the id. One thread per watcher is the contract, so the
     # read has to happen inside the critical section.
-    thread_id, ignored_reason = thread_id_for_profile(thread_path, profile)
+    thread_id, ignored_reason = read_thread_id(thread_path)
     if ignored_reason:
-        # Never a quarantine here. A thread belonging to another profile is not
-        # dead, and discarding it would lose an arc the operator can still
-        # reach by switching back.
         _log(log_handle, f"starting fresh thread: {ignored_reason}")
 
     if shutil.which(codex_bin) is None and not os.access(codex_bin, os.X_OK):
@@ -1209,16 +962,11 @@ def run_one_turn(
     mode = "resume" if thread_id else "fresh"
     _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
     _log(log_handle, "argv=" + " ".join(argv))
-    # The receipt for which profile this turn ran under. Logged on every
-    # launching turn, including when nothing is configured, because "no line"
-    # and "ran on the inherited profile" have to read differently to whoever
-    # comes back to the log.
-    _log(
-        log_handle,
-        "profile "
-        f"codex_home={profile.effective_codex_home} ({profile.codex_home_origin}) "
-        f"home={profile.effective_home} ({profile.home_origin})",
-    )
+    # The receipt for which profile this turn ran under, and which thread file
+    # holds its arc. Logged on every launching turn, including when nothing is
+    # configured, because "no line" and "ran on the inherited profile" have to
+    # read differently to whoever comes back to the log.
+    _log(log_handle, profile_receipt(profile, thread_path))
     partial = profile.partial_reason
     if partial:
         _log(log_handle, f"partial profile isolation: {partial}")
@@ -1294,23 +1042,12 @@ def run_one_turn(
                 except OSError as exc:
                     _log(log_handle, f"could not stop the wrong-thread turn: {exc}")
             return
-        # Falls through on both cases that keep the arc: a fresh turn naming its
-        # first id, and a resume naming the id it was pinned to. Returning early
-        # on the resume is what left a legacy watcher's ownership unrecorded
-        # until a profile change tried a cross-profile resume and quarantined it.
+        else:
+            return
+        if new_id == thread_id:
+            return
         try:
-            # Written even when the id is unchanged. A legacy watcher resumes an
-            # id that no map has ever claimed, and returning early here is what
-            # would leave that ownership unrecorded until a profile change tried
-            # a cross-profile resume and quarantined it.
-            map_problem = remember_thread(thread_path, profile, new_id)
-            if map_problem:
-                _log(
-                    log_handle,
-                    f"the previous thread map was unusable ({map_problem}); it "
-                    "has been replaced and any arcs it held for other profiles "
-                    "are not resumable",
-                )
+            write_thread_id(thread_path, new_id)
         except OSError as exc:
             # Raising here would abandon a turn that is already running and
             # already having effects. Record it and report a controlled
@@ -1405,15 +1142,7 @@ def run_one_turn(
             # rather than delete, so the id stays inspectable.
             stale_path = thread_path.with_name(thread_path.name + ".stale")
             try:
-                # The map first: it is what the next wake reads. Quarantining
-                # only the mirror would leave this profile resuming the same
-                # dead id forever while the log claimed it would start fresh.
-                forget_thread(thread_path, profile)
-                # The id file holds only the baseline home's arc, so rename it
-                # only when that is the arc that died. Renaming it for another
-                # profile's dead session would discard a live baseline arc.
-                if read_thread_id(thread_path)[0] == thread_id:
-                    os.replace(thread_path, stale_path)
+                os.replace(thread_path, stale_path)
             except OSError as exc:
                 _log(log_handle, f"could not quarantine missing-session id: {exc}")
             else:
@@ -1433,8 +1162,7 @@ def run_one_turn(
                 f"resume of {thread_id} failed before attaching (exit {exit_code}) "
                 "and codex did not report a missing session; keeping the id. If "
                 "wakes keep failing this way, remove "
-                f"{thread_path} and {thread_map_path(thread_path)} to force a "
-                "fresh thread.",
+                f"{thread_path} to force a fresh thread.",
             )
 
     if usage is not None:
@@ -1551,25 +1279,20 @@ def run_wake(
         # the very first filesystem touch is not one.
         print(f"cannot use the state directory {state_dir}: {exc}", file=sys.stderr)
         return EXIT_STATE_UNUSABLE
-    thread_path = state_dir / f"{watcher_id}.codex-thread"
+    thread_path = profile_thread_path(state_dir, watcher_id, profile)
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
 
     if dry_run:
-        thread_id, ignored_reason = thread_id_for_profile(thread_path, profile)
+        thread_id, ignored_reason = read_thread_id(thread_path)
         argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
         print(f"mode={'resume' if thread_id else 'fresh'}")
         print(f"cwd={repo_dir}")
         if ignored_reason:
             print(f"ignored_stored_thread_id={ignored_reason}")
-        print(
-            "profile "
-            f"codex_home={profile.effective_codex_home} ({profile.codex_home_origin}) "
-            f"home={profile.effective_home} ({profile.home_origin})"
-        )
-        partial = profile.partial_reason
-        if partial:
-            print(f"partial_profile_isolation={partial}")
+        print(profile_receipt(profile, thread_path))
+        if profile.partial_reason:
+            print(f"partial_profile_isolation={profile.partial_reason}")
         print("argv=" + " ".join(argv))
         return 0
 
@@ -1652,6 +1375,30 @@ def run_wake(
             return result.exit_code
 
 
+def profile_directory_argument(value: str) -> str:
+    """Admit only a non-empty absolute path, lexically normalized.
+
+    The admitted domain is closed and derived from what Codex itself does with
+    the value. An empty string is not a profile: Codex treats an empty
+    CODEX_HOME as unset and falls back to $HOME/.codex, verified with
+    `codex doctor --json`, so accepting "" would key two different Codex homes
+    as one. A relative path is resolved by Codex against its working directory,
+    which is the repository, not what an operator reading the watcher config
+    would assume, and `~` is not expanded because the bridge runs no shell.
+    Normalization is lexical only (trailing slashes, `.` and `..`); it touches
+    no filesystem, so it cannot race, and a symlinked alias still reads as a
+    different profile, which errs toward a fresh thread rather than a wrong one.
+    Everything outside the domain is rejected here, before any turn exists.
+    """
+    if not value or not value.strip():
+        raise argparse.ArgumentTypeError("profile directory must not be empty")
+    if not os.path.isabs(value):
+        raise argparse.ArgumentTypeError(
+            f"profile directory must be an absolute path, got {value!r}"
+        )
+    return os.path.normpath(value)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watcher-id", required=True)
@@ -1670,18 +1417,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--codex-home",
         default=None,
+        type=profile_directory_argument,
         help=(
             "Run Codex under this CODEX_HOME instead of the one this process "
-            "inherited. Isolates config, memories and built-in skills."
+            "inherited. Absolute path. Isolates config, memories and built-in "
+            "skills."
         ),
     )
     parser.add_argument(
         "--agent-home",
         default=None,
+        type=profile_directory_argument,
         help=(
-            "Run Codex under this HOME instead of the inherited one. The "
-            "shared skills catalogue lives at $HOME/.agents/skills, so this is "
-            "a separate root from --codex-home and each takes effect alone."
+            "Run Codex under this HOME instead of the inherited one. Absolute "
+            "path. The shared skills catalogue lives at $HOME/.agents/skills, "
+            "so this is a separate root from --codex-home and each takes "
+            "effect alone."
         ),
     )
     parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)

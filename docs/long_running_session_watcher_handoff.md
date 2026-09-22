@@ -151,23 +151,27 @@ A wake `HOME` still needs the tools the agent uses. Symlink `.gitconfig`,
 `.ssh` and `.config/gh` into it from the real home, or the woken agent loses its
 git identity and `gh` auth. The runner does not probe for them.
 
-The runner does not validate a profile. Codex already refuses a nonexistent
+Both arguments must be non-empty absolute paths; anything else is rejected
+before a turn starts. An empty value is not a profile, because Codex treats an
+empty `CODEX_HOME` as unset and falls back to `$HOME/.codex`, and a relative or
+`~` path would be resolved against a directory the watcher config does not
+name. Beyond that, the runner does not validate a profile. Codex already refuses a nonexistent
 `CODEX_HOME` before any model call, and fails an unauthenticated or
 non-writable one without billing tokens, so a check here would duplicate that
 and could reject a profile Codex accepts. Every launching turn logs which
 profile it used, including when none is configured.
 
-A stored thread id belongs to the `CODEX_HOME` that created it. Switching
-profiles starts a fresh thread and says so in the log rather than failing a
-resume; switching back resumes the original arc, because each profile's id is
-remembered beside the thread file.
+A stored thread id belongs to the `CODEX_HOME` that created it, so each
+profile keeps its own thread file. A wake with no profile arguments uses
+`<session-id>.codex-thread`, exactly as before. Any other profile uses a sibling
+named `<session-id>.codex-thread.<digest>`, where the digest is taken from the
+effective `CODEX_HOME`, and the wake log's `profile ...` line names the file in
+use. Switching profiles starts a fresh thread in the new profile's file;
+switching back finds the original file untouched and resumes it.
 
-To force a fresh thread, at post-merge teardown or when a resume keeps failing,
-remove both the thread id file and the thread map beside it. The id file alone
-is not enough and deliberately so: it is shared by every profile, so treating
-its absence as a reset would also discard arcs that are still resumable under
-other profiles, which is exactly the state a quarantine of one profile leaves
-behind.
+To force a fresh thread for one profile, remove that profile's file. To reset a
+watcher entirely, at post-merge teardown or when resumes keep failing, remove
+every `<session-id>.codex-thread*` file.
 
 Use absolute paths, and quote each one individually as shown. The bridge does
 not run this through a shell: it `shlex.split`s the value and hands the argv
@@ -231,15 +235,12 @@ Codex process and the ordinary commands it starts do not outlive the wake lock.
 A descendant that calls `setsid` leaves that group and is not covered; issue
 #2526 tracks containment a descendant cannot opt out of.
 
-A merged PR leaves its thread state behind: the `.codex-thread` file and the
-thread map beside it. Remove both during the post-merge teardown in AGENTS 3c.1
-so the next PR on that watcher id does not resume a finished arc. Removing only
-the `.codex-thread` file is not a reset, because the map is what a wake reads.
-
-The map is bounded by size, not by a count of profiles, and holds dozens of
-typical profile paths. If a very large set of long paths ever forces an older
-profile out, the wake log names the profiles whose arcs stopped being
-resumable.
+A merged PR leaves its thread state behind: one `.codex-thread` file per
+profile the watcher ever ran under. Remove every `<session-id>.codex-thread*`
+file during the post-merge teardown in AGENTS 3c.1, after the watcher's timer is
+disabled, so the next PR on that watcher id does not resume a finished arc. A
+wake already in flight when the files are removed writes its own profile's file
+back when it records its thread, which is why the timer goes first.
 
 Wake-source rules:
 

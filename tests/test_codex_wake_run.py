@@ -2184,34 +2184,6 @@ def test_a_name_planted_at_the_old_staging_path_is_neither_followed_nor_fatal(
     assert runner.read_thread_id(target) == (THREAD_A, None)
 
 
-def test_a_stale_staging_file_does_not_fail_the_post_turn_write(
-    tmp_path: Path,
-) -> None:
-    """Regression: a killed wake's leftover plus a reused pid broke the write.
-
-    Reproduced: with `.<map>.<pid>.tmp` left behind, preflight reported no
-    problem, and the post-turn map write then raised FileExistsError after
-    Codex had already acted.
-    """
-    thread_path = tmp_path / "slice-123.codex-thread"
-    map_path = runner.thread_map_path(thread_path)
-    for leftover in (map_path, thread_path):
-        leftover.with_name(f".{leftover.name}.{os.getpid()}.tmp").write_text(
-            "left by a killed wake\n", encoding="utf-8"
-        )
-    # The baseline profile writes both the map and the id file, so both
-    # staging collisions are exercised.
-    profile = runner.resolve_profile(codex_home=None, agent_home=None)
-
-    assert runner.thread_path_problem(thread_path) is None
-    runner.remember_thread(thread_path, profile, THREAD_A)
-
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None
-    assert mapping == {profile.effective_codex_home: THREAD_A}
-    assert runner.read_thread_id(thread_path) == (THREAD_A, None)
-
-
 def test_the_thread_id_still_round_trips_through_the_staged_write(
     tmp_path: Path,
 ) -> None:
@@ -2384,143 +2356,9 @@ def test_a_missing_profile_is_launched_into_and_fails_closed(
     assert exit_code == 7, "the turn's own exit code must survive"
     assert record.exists(), "Codex must be invoked, not pre-empted by a runner check"
     assert json.loads(record.read_text(encoding="utf-8"))["codex_home"] == str(missing)
-    assert not (state_dir / "slice-123.codex-thread").exists()
-
-
-def _profile(codex_home: str | None = None, agent_home: str | None = None):
-    return runner.resolve_profile(codex_home=codex_home, agent_home=agent_home)
-
-
-def test_switching_profiles_and_back_resumes_the_original_arc(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Regression: the headline guarantee of the profile-scoped thread id.
-
-    A rollout lives only inside the CODEX_HOME that created it, so each profile
-    needs its own remembered arc. Keeping one id meant switching away and back
-    started a third thread and silently abandoned the first.
-    """
-    state_dir = tmp_path / "state"
-    home_a = tmp_path / "home-a"
-    home_b = tmp_path / "home-b"
-    for d in (home_a, home_b):
-        d.mkdir()
-
-    fake_a, _ra = _fake_codex(tmp_path, thread_id=THREAD_A)
-    assert _run_profile(tmp_path, fake=fake_a, codex_home=str(home_a), state_dir=state_dir) == 0
-
-    other = tmp_path / "other"
-    other.mkdir()
-    fake_b, record_b = _fake_codex(other, thread_id=THREAD_B)
-    assert _run_profile(tmp_path, fake=fake_b, codex_home=str(home_b), state_dir=state_dir) == 0
-    argv_b = json.loads(record_b.read_text(encoding="utf-8"))["argv"]
-    assert "resume" not in argv_b, "must not resume profile A's arc under profile B"
-
-    back = tmp_path / "back"
-    back.mkdir()
-    fake_back, record_back = _fake_codex(back, thread_id=THREAD_A)
-    assert _run_profile(tmp_path, fake=fake_back, codex_home=str(home_a), state_dir=state_dir) == 0
-
-    argv_back = json.loads(record_back.read_text(encoding="utf-8"))["argv"]
-    assert "resume" in argv_back and THREAD_A in argv_back, (
-        f"switching back must resume the original arc, got {argv_back}"
+    assert not list(state_dir.glob("slice-123.codex-thread*")), (
+        "a turn that never started must record no thread for any profile"
     )
-    thread_path = state_dir / "slice-123.codex-thread"
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None
-    assert mapping == {str(home_a): THREAD_A, str(home_b): THREAD_B}
-
-
-def test_a_legacy_thread_id_is_adopted_and_recorded_on_attach(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Regression: ownership must be backfilled, not left unknown.
-
-    A watcher predating the map resumes its id, but if that attach records no
-    ownership the next profile change still attempts a cross-profile resume and
-    quarantines the arc.
-    """
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
-    assert not runner.thread_map_path(thread_path).exists()
-
-    # No profile argument: the wake runs under the same home that created the
-    # id, which is the only case where adopting it is correct.
-    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
-
-    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" in argv and THREAD_A in argv, "a legacy id must still resume"
-    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None
-    assert mapping == {baseline.effective_codex_home: THREAD_A}, (
-        "the attach must record the home that owns it"
-    )
-
-
-def test_the_thread_id_and_its_owner_are_one_record(tmp_path: Path) -> None:
-    """Regression: two durable writes can disagree after a crash between them.
-
-    Pairing the id with its profile inside a single atomically replaced
-    document makes a mismatched pair unrepresentable rather than merely
-    unlikely.
-    """
-    thread_path = tmp_path / "slice-123.codex-thread"
-    profile = _profile(codex_home=str(tmp_path / "home"))
-
-    runner.remember_thread(thread_path, profile, THREAD_A)
-
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None
-    assert mapping == {profile.effective_codex_home: THREAD_A}
-    # The pairing lives in one file, so there is no second file to fall behind.
-    assert runner.thread_map_path(thread_path).exists()
-    # A non-baseline profile never writes the shared id file.
-    assert not thread_path.exists()
-
-
-def test_the_thread_map_is_read_through_the_bounded_safe_path(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Regression: the same FIFO hazard the thread file was hardened against.
-
-    A by-name read of a planted FIFO blocks forever while the wake holds the
-    lock, so every later wake times out behind it.
-    """
-    thread_path = tmp_path / "slice-123.codex-thread"
-    os.mkfifo(runner.thread_map_path(thread_path))
-
-    finished, result = _call_with_deadline(
-        lambda: runner.read_thread_map(thread_path), 10.0
-    )
-
-    assert finished, "reading the thread map blocked while holding the wake lock"
-    mapping, problem = result
-    assert mapping == {}
-    assert problem is not None and "not a regular file" in problem
-
-
-def test_an_unusable_thread_map_starts_fresh_rather_than_guessing(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """The other side of the map boundary: unknown ownership is not no ownership."""
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
-    runner.thread_map_path(thread_path).write_text("{not json", encoding="utf-8")
-
-    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
-
-    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" not in argv
-    assert not thread_path.with_name(thread_path.name + ".stale").exists()
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "cannot tell which profile owns" in log_text
 
 
 def test_codex_home_is_derived_from_an_isolated_home(tmp_path: Path) -> None:
@@ -2546,50 +2384,6 @@ def test_codex_home_is_derived_from_an_isolated_home(tmp_path: Path) -> None:
     )
     assert only_codex.partial_reason is not None
     assert "HOME is not isolated" in only_codex.partial_reason
-
-
-def test_a_dead_session_is_forgotten_in_the_map_not_only_the_mirror(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Regression: the map is what the next wake reads.
-
-    Quarantining only the single-id mirror left the dead id in the map, so
-    every later wake for that profile resumed it again while the log claimed
-    the next wake would start fresh.
-    """
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    home = tmp_path / "home"
-    other = tmp_path / "other-home"
-    for d in (home, other):
-        d.mkdir()
-    runner.write_thread_map(
-        thread_path, {str(home): THREAD_A, str(other): THREAD_B}
-    )
-    runner.write_thread_id(thread_path, THREAD_A)
-
-    fake = tmp_path / "codex-missing-session"
-    fake.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "sys.stdin.read()\n"
-        f"sys.stderr.write('Error: thread/resume: thread/resume failed: no rollout "
-        f"found for thread id {THREAD_A} (code -32600)\\n')\n"
-        "sys.exit(1)\n",
-        encoding="utf-8",
-    )
-    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
-
-    assert _run_profile(
-        tmp_path, fake=fake, codex_home=str(home), state_dir=state_dir
-    ) == 1
-
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None
-    assert str(home) not in mapping, "the dead id must not survive in the map"
-    assert mapping == {str(other): THREAD_B}, "other profiles keep their arcs"
-    assert thread_path.with_name(thread_path.name + ".stale").exists()
 
 
 def test_an_inherited_codex_home_with_an_isolated_home_is_partial(
@@ -2619,314 +2413,89 @@ def test_an_inherited_codex_home_with_an_isolated_home_is_partial(
     assert derived.partial_reason is None
 
 
-def test_the_thread_map_destination_is_preflighted(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Regression: a turn whose id cannot be stored must not run.
-
-    The map is a second place the id has to land, so an unusable map path is
-    exactly as fatal as an unusable thread path: Codex would edit, push or
-    comment and leave nothing resumable behind.
-    """
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    runner.thread_map_path(state_dir / "slice-123.codex-thread").mkdir()
-
-    exit_code = _run_profile(tmp_path, fake=fake, state_dir=state_dir)
-
-    assert exit_code == runner.EXIT_STATE_UNUSABLE
-    assert not record.exists(), "Codex must not be launched"
-
-
-def test_resetting_a_watcher_clears_both_the_id_file_and_the_map(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """The reset contract, corrected.
-
-    An earlier revision treated the single-id file's absence as a global reset.
-    That could not work: the file is shared by every profile, so a quarantine
-    of one profile invalidated the rest. Reset now names both files, and the
-    runner's own diagnostic and the handoff doc say so.
-    """
-    # The resume leg must be answered with the id it resumes, or the runner
-    # correctly fails the turn as a wrong-conversation turn.
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    home = tmp_path / "home"
-    home.mkdir()
-    runner.write_thread_map(thread_path, {str(home): THREAD_A})
-    runner.write_thread_id(thread_path, THREAD_A)
-
-    # Removing only the id file must NOT discard the arc: that is the state a
-    # quarantine of another profile leaves behind.
-    thread_path.unlink()
-    assert _run_profile(
-        tmp_path, fake=fake, codex_home=str(home), state_dir=state_dir
-    ) == 0
-    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" in argv and THREAD_A in argv, (
-        "a missing id file must not invalidate a mapped arc"
+def _profile_thread(state_dir: Path, codex_home: str | None) -> Path:
+    return runner.profile_thread_path(
+        state_dir, "slice-123", runner.resolve_profile(codex_home=codex_home, agent_home=None)
     )
 
-    # Removing both is the documented reset and does force a fresh thread.
-    fresh = tmp_path / "fresh"
-    fresh.mkdir()
-    fake2, record2 = _fake_codex(fresh, thread_id=THREAD_B)
-    thread_path.unlink(missing_ok=True)
-    runner.thread_map_path(thread_path).unlink()
-    assert _run_profile(
-        tmp_path, fake=fake2, codex_home=str(home), state_dir=state_dir
-    ) == 0
-    argv2 = json.loads(record2.read_text(encoding="utf-8"))["argv"]
-    assert "resume" not in argv2
 
+def test_no_profile_keeps_the_legacy_thread_file_exactly(tmp_path: Path, repo_dir: Path) -> None:
+    """Persistence is unchanged for every deployment that configures no profile.
 
-def test_an_emptied_map_does_not_re_adopt_the_quarantined_mirror(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """Regression: the crash window between emptying the map and renaming.
-
-    A confirmed dead session empties the map and then renames the mirror. If
-    the host dies between the two, the mirror still holds the dead id; falling
-    back to it because the map is empty would resume exactly what was just
-    confirmed gone.
+    The baseline profile reads and writes the same `<watcher>.codex-thread`
+    file, through the same reader, writer and quarantine, as before this
+    change.
     """
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
     state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
-    runner.write_thread_map(thread_path, {})
+    assert _profile_thread(state_dir, None) == state_dir / "slice-123.codex-thread"
 
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
     assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
 
-    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" not in argv
-    assert THREAD_A not in " ".join(argv)
+    assert sorted(p.name for p in state_dir.glob("slice-123.codex-thread*")) == [
+        "slice-123.codex-thread"
+    ]
+    assert runner.read_thread_id(state_dir / "slice-123.codex-thread") == (THREAD_A, None)
 
 
-def test_the_thread_map_writer_cannot_outgrow_the_reader(tmp_path: Path) -> None:
-    """Regression: an unbounded writer plus a bounded reader loses every arc.
-
-    The write succeeds, every later read rejects the file as oversized, and the
-    wake silently starts over having forgotten each remembered profile.
-    """
-    thread_path = tmp_path / "slice-123.codex-thread"
-    current = "/profiles/" + "c" * 200
-    crowded = {f"/profiles/{'p' * 200}-{i}": THREAD_A for i in range(40)}
-    crowded[current] = THREAD_B
-
-    bounded = runner.bound_thread_map(crowded, current)
-    runner.write_thread_map(thread_path, bounded)
-
-    assert current in bounded, "the profile being written must always survive"
-    raw = runner.thread_map_path(thread_path).read_bytes()
-    assert len(raw) <= runner.MAX_THREAD_MAP_BYTES
-    read_back, problem = runner.read_thread_map(thread_path)
-    assert problem is None, "anything the writer produced must be readable"
-    assert read_back[current] == THREAD_B
-
-
-def test_quarantining_one_profile_leaves_another_profiles_arc_resumable(
+def test_each_profile_keeps_its_own_arc_and_switching_back_resumes(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """Regression: a shared mirror cannot express per-profile state.
+    """A rollout lives only inside the CODEX_HOME that created it, so each
+    profile keeps its own thread file and switching back finds it untouched."""
+    state_dir = tmp_path / "state"
+    home_a = str(tmp_path / "home-a")
+    home_b = str(tmp_path / "home-b")
 
-    Quarantine renames the one mirror, so treating its absence as "start fresh"
-    invalidated every profile at once, including arcs that are still perfectly
-    resumable.
-    """
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, codex_home=home_a, state_dir=state_dir) == 0
+
+    other = tmp_path / "other"
+    other.mkdir()
+    fake_b, record_b = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, codex_home=home_b, state_dir=state_dir) == 0
+    assert "resume" not in json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+
+    back = tmp_path / "back"
+    back.mkdir()
+    fake_back, record_back = _fake_codex(back, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_back, codex_home=home_a, state_dir=state_dir) == 0
+    argv = json.loads(record_back.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv
+
+    assert runner.read_thread_id(_profile_thread(state_dir, home_a))[0] == THREAD_A
+    assert runner.read_thread_id(_profile_thread(state_dir, home_b))[0] == THREAD_B
+
+
+def test_enabling_a_profile_leaves_the_legacy_arc_resumable(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The legacy id was created under the baseline home. A newly enabled
+    profile starts fresh in its own file and never touches the legacy one."""
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    home_a = tmp_path / "home-a"
-    home_b = tmp_path / "home-b"
-    for d in (home_a, home_b):
-        d.mkdir()
-    # The state a confirmed-dead session under A leaves behind: B kept, mirror
-    # renamed away.
-    runner.write_thread_map(thread_path, {str(home_b): THREAD_B})
-    thread_path.with_name(thread_path.name + ".stale").write_text(
-        THREAD_A + "\n", encoding="utf-8"
-    )
-    assert not thread_path.exists()
+    legacy = state_dir / "slice-123.codex-thread"
+    legacy.write_text(THREAD_A + "\n", encoding="utf-8")
 
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
     assert _run_profile(
-        tmp_path, fake=fake, codex_home=str(home_b), state_dir=state_dir
+        tmp_path, fake=fake, codex_home=str(tmp_path / "new-home"), state_dir=state_dir
     ) == 0
 
-    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" in argv and THREAD_B in argv, (
-        f"profile B's arc must survive a quarantine of profile A, got {argv}"
-    )
+    assert "resume" not in json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert runner.read_thread_id(legacy) == (THREAD_A, None)
 
 
-def test_enabling_a_profile_keeps_the_legacy_arc_for_its_own_home(
+def test_a_dead_session_quarantines_only_its_own_profile_file(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """Regression: a legacy id belongs to the home that created it.
-
-    The id predates any profile argument, so it was created under the inherited
-    home. Adopting it for a newly enabled --codex-home resumes a rollout that
-    home does not hold; Codex reports it missing and the quarantine renames the
-    only mirror, after which the original arc is unreachable.
-    """
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
-    new_home = tmp_path / "new-home"
-    new_home.mkdir()
-
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
-    assert _run_profile(
-        tmp_path, fake=fake, codex_home=str(new_home), state_dir=state_dir
-    ) == 0
-
-    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" not in argv, (
-        f"a legacy id must not be resumed under a newly enabled profile: {argv}"
-    )
-    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None
-    assert mapping.get(baseline.effective_codex_home) == THREAD_A, (
-        "the legacy arc must be remembered against the home that created it"
-    )
-    assert mapping.get(str(new_home)) == THREAD_B
-
-
-def test_a_retained_profile_that_cannot_fit_is_dropped_not_written_oversized(
-    tmp_path: Path,
-) -> None:
-    """Regression: eviction can run out while the kept entry still does not fit.
-
-    Backslash is a legal Linux filename character and JSON escapes it to two
-    bytes, so a path well inside PATH_MAX serializes past the read limit.
-    Reproduced at 4,091 characters serializing to 8,230 bytes, after which the
-    written map read back as a size error and every arc was lost.
-    """
-    thread_path = tmp_path / "slice-123.codex-thread"
-    huge = "/" + "\\" * 4090
-    other = "/other-home"
-
-    bounded = runner.bound_thread_map({huge: THREAD_A, other: THREAD_B}, huge)
-    runner.write_thread_map(thread_path, bounded)
-
-    assert huge not in bounded, "an unrepresentable profile must be dropped"
-    # The earlier version of this test asserted only readability, which an
-    # empty map satisfies, so it passed while every other arc was deleted.
-    assert bounded == {other: THREAD_B}, "profiles that fit must survive"
-    read_back, problem = runner.read_thread_map(thread_path)
-    assert problem is None, "whatever the writer produces must be readable"
-    assert read_back == {other: THREAD_B}
-
-
-def test_representable_profiles_are_never_evicted_by_count(tmp_path: Path) -> None:
-    """Regression: an eight-entry cap evicted arcs far below the byte limit.
-
-    Reproduced: nine short profiles serialize to 444 bytes against an 8,192
-    byte limit, yet the ninth write evicted the first, so switching back to it
-    started a fresh thread. Size is the only bound the reader enforces, so it
-    is the only bound the writer applies.
-    """
-    thread_path = tmp_path / "slice-123.codex-thread"
-    profiles = [str(tmp_path / f"home-{i}") for i in range(20)]
-    for home in profiles:
-        runner.remember_thread(
-            thread_path, runner.resolve_profile(codex_home=home, agent_home=None), THREAD_A
-        )
-
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None
-    assert sorted(mapping) == sorted(profiles), "every representable arc survives"
-
-
-def test_size_forced_eviction_is_reported_not_silent(tmp_path: Path) -> None:
-    """When the byte limit does force eviction, the caller is told which arcs."""
-    thread_path = tmp_path / "slice-123.codex-thread"
-    big = [f"/profiles/{'p' * 1000}-{i}" for i in range(12)]
-    problems = []
-    for home in big:
-        problems.append(runner.remember_thread(
-            thread_path, runner.resolve_profile(codex_home=home, agent_home=None), THREAD_A
-        ))
-
-    assert any(p and "no longer resumable" in p for p in problems)
-    mapping, problem = runner.read_thread_map(thread_path)
-    assert problem is None and big[-1] in mapping
-
-
-def _attach_profile_a(tmp_path: Path) -> tuple[Path, Any]:
-    thread_path = tmp_path / "state" / "slice-123.codex-thread"
-    thread_path.parent.mkdir(parents=True, exist_ok=True)
-    profile_a = runner.resolve_profile(codex_home=str(tmp_path / "home-a"), agent_home=None)
-    runner.remember_thread(thread_path, profile_a, THREAD_A)
-    return thread_path, profile_a
-
-
-def test_the_shared_id_file_only_ever_holds_the_baseline_arc(tmp_path: Path) -> None:
-    """Regression: another profile's id in the shared file became the baseline's.
-
-    Reproduced: after profile A attached, the id file held A's id. With the map
-    then removed, as the first step of a manual reset does, the migration path
-    attributed that file to the baseline home and a baseline wake would resume
-    A's arc. Returning map presence from the same read does not close this on
-    its own, because a map removed before the read is observed as absent.
-    """
-    thread_path, _profile_a = _attach_profile_a(tmp_path)
-    assert not thread_path.exists(), "profile A must not write the shared id file"
-
-    runner.thread_map_path(thread_path).unlink()
-    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
-    resumed, _why = runner.thread_id_for_profile(thread_path, baseline)
-
-    assert resumed != THREAD_A
-
-
-def test_map_presence_is_decided_by_the_same_read(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Regression: the map was read, then its presence re-checked by name.
-
-    Reproduced: removing the map between the two made a wake that had just
-    read a present map fall into the migration branch.
-    """
-    thread_path, _profile_a = _attach_profile_a(tmp_path)
-    runner.write_thread_id(thread_path, THREAD_A)  # worst case: file holds A's id
-    real = runner.observe_thread_map
-
-    def remove_after_reading(path: Path):
-        observed = real(path)
-        runner.thread_map_path(path).unlink()
-        return observed
-
-    monkeypatch.setattr(runner, "observe_thread_map", remove_after_reading)
-    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
-    resumed, _why = runner.thread_id_for_profile(thread_path, baseline)
-
-    assert resumed is None, "a map observed as present must not fall into migration"
-
-
-def test_quarantining_another_profile_leaves_the_baseline_id_file(
-    tmp_path: Path, repo_dir: Path
-) -> None:
-    """The id file holds the baseline arc, so another profile's dead session
-    must not rename it away."""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
-    home_a = tmp_path / "home-a"
-    home_a.mkdir()
-    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
-    runner.write_thread_map(
-        thread_path, {baseline.effective_codex_home: THREAD_B, str(home_a): THREAD_A}
-    )
-    runner.write_thread_id(thread_path, THREAD_B)
+    home_a = str(tmp_path / "home-a")
+    a_file = _profile_thread(state_dir, home_a)
+    legacy = state_dir / "slice-123.codex-thread"
+    a_file.write_text(THREAD_A + "\n", encoding="utf-8")
+    legacy.write_text(THREAD_B + "\n", encoding="utf-8")
 
     fake = tmp_path / "codex-missing-a"
     fake.write_text(
@@ -2940,10 +2509,112 @@ def test_quarantining_another_profile_leaves_the_baseline_id_file(
     )
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
 
-    assert _run_profile(tmp_path, fake=fake, codex_home=str(home_a), state_dir=state_dir) == 1
+    assert _run_profile(tmp_path, fake=fake, codex_home=home_a, state_dir=state_dir) == 1
 
-    assert runner.read_thread_id(thread_path) == (THREAD_B, None)
-    assert not thread_path.with_name(thread_path.name + ".stale").exists()
-    mapping, _problem = runner.read_thread_map(thread_path)
-    assert mapping == {baseline.effective_codex_home: THREAD_B}
+    assert not a_file.exists()
+    assert a_file.with_name(a_file.name + ".stale").exists()
+    assert runner.read_thread_id(legacy) == (THREAD_B, None)
+
+
+def test_writers_for_different_profiles_cannot_lose_each_others_arc(tmp_path: Path) -> None:
+    """Regression for the lost update a shared thread map allowed.
+
+    Reproduced against the map implementation: an out-of-band writer recording
+    profile B between profile A's read and write was erased, because A replaced
+    the whole shared document with its stale snapshot. With one single-valued
+    file per profile there is no read-modify-write to lose, which this pins with
+    the same interleaving. It cannot fail against the map code for the same
+    reason it now passes: the variable changed was the storage model itself.
+    """
+    state_dir = tmp_path / "state"
+    a_file = _profile_thread(state_dir, "/profiles/a")
+    b_file = _profile_thread(state_dir, "/profiles/b")
+
+    runner.read_thread_id(a_file)
+    runner.write_thread_id(b_file, THREAD_B)
+    runner.write_thread_id(a_file, THREAD_A)
+
+    assert runner.read_thread_id(a_file) == (THREAD_A, None)
+    assert runner.read_thread_id(b_file) == (THREAD_B, None)
+
+
+def test_the_selected_profile_thread_file_is_preflighted(tmp_path: Path, repo_dir: Path) -> None:
+    """The file this profile will write is the one that must be usable before launch."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    home = str(tmp_path / "home")
+    _profile_thread(state_dir, home).mkdir()
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=home, state_dir=state_dir) == (
+        runner.EXIT_STATE_UNUSABLE
+    )
+    assert not record.exists(), "Codex must not be launched"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "relative/home", "~/.codex-wake"])
+@pytest.mark.parametrize("flag", ["--codex-home", "--agent-home"])
+def test_profile_arguments_outside_the_admitted_domain_never_launch(
+    tmp_path: Path, repo_dir: Path, flag: str, bad: str
+) -> None:
+    """Regression: an empty profile argument keyed two different Codex homes as one.
+
+    Reproduced: Codex treats an empty CODEX_HOME as unset and uses $HOME/.codex,
+    verified with `codex doctor --json`, while the runner keyed it as "", so an
+    empty --codex-home with --agent-home /a and then /b shared one thread slot.
+    Relative and tilde paths are rejected for the same reason: Codex would
+    resolve them against a directory the operator did not name.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    argv = [
+        "--watcher-id", "slice-123",
+        "--repo-dir", str(tmp_path / "repo"),
+        "--state-dir", str(tmp_path / "state"),
+        "--codex-bin", str(fake),
+        flag, bad,
+    ]
+    class _Stdin:
+        @staticmethod
+        def read() -> str:
+            return "wake prompt"
+
+    original = sys.stdin
+    sys.stdin = _Stdin()  # type: ignore[assignment]
+    try:
+        try:
+            outcome = runner.main(argv)
+        except SystemExit as exc:
+            outcome = exc.code
+    finally:
+        sys.stdin = original
+
+    assert not record.exists(), "a rejected profile must not start a turn"
+    assert outcome == 2
+
+
+def test_trailing_slash_spellings_of_one_home_share_one_thread_file(tmp_path: Path) -> None:
+    """Normalization is lexical, so spellings of one path are one profile."""
+    assert runner.profile_directory_argument("/srv/codex-wake/") == "/srv/codex-wake"
+    assert runner.profile_directory_argument("/srv/./codex-wake") == "/srv/codex-wake"
+    state_dir = tmp_path / "state"
+    assert _profile_thread(state_dir, runner.profile_directory_argument("/srv/codex-wake/")) == (
+        _profile_thread(state_dir, "/srv/codex-wake")
+    )
+
+
+def test_a_stale_staging_file_does_not_fail_the_thread_write(tmp_path: Path) -> None:
+    """Regression: a killed wake's pid-named leftover plus a reused pid.
+
+    Reproduced against the pid-derived staging name: preflight passed and the
+    post-turn write raised FileExistsError after Codex had acted.
+    """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    thread_path.with_name(f".{thread_path.name}.{os.getpid()}.tmp").write_text(
+        "left by a killed wake\n", encoding="utf-8"
+    )
+
+    assert runner.thread_path_problem(thread_path) is None
+    runner.write_thread_id(thread_path, THREAD_A)
+
+    assert runner.read_thread_id(thread_path) == (THREAD_A, None)
 
