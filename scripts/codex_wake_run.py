@@ -753,6 +753,31 @@ def thread_map_path(thread_path: Path) -> Path:
     return thread_path.with_name(thread_path.name + "s.json")
 
 
+class ThreadMap(NamedTuple):
+    """One observation of the thread map, taken through one descriptor.
+
+    `present` comes from the same open that produced `mapping`. Deciding
+    presence with a second lookup by name lets an operator's out-of-band
+    removal land between the two, so the wake reads a map and then acts as if
+    none existed.
+    """
+
+    mapping: dict[str, str]
+    problem: str | None
+    present: bool
+
+
+def observe_thread_map(thread_path: Path) -> ThreadMap:
+    text, problem = read_small_state_file(thread_map_path(thread_path), MAX_THREAD_MAP_BYTES)
+    if problem:
+        # Something is at the path but it is unusable, so the map is present.
+        return ThreadMap({}, problem, True)
+    if text is None:
+        return ThreadMap({}, None, False)
+    mapping, problem = _parse_thread_map(text)
+    return ThreadMap(mapping, problem, True)
+
+
 def read_thread_map(thread_path: Path) -> tuple[dict[str, str], str | None]:
     """Return ({codex_home: thread_id}, problem).
 
@@ -762,11 +787,11 @@ def read_thread_map(thread_path: Path) -> tuple[dict[str, str], str | None]:
     treats its own thread as foreign and starts another. Pairing them inside a
     single atomically-replaced document makes that state unrepresentable.
     """
-    text, problem = read_small_state_file(thread_map_path(thread_path), MAX_THREAD_MAP_BYTES)
-    if problem:
-        return {}, problem
-    if text is None:
-        return {}, None
+    observed = observe_thread_map(thread_path)
+    return observed.mapping, observed.problem
+
+
+def _parse_thread_map(text: str) -> tuple[dict[str, str], str | None]:
     try:
         loaded = json.loads(text)
     except json.JSONDecodeError as exc:
@@ -846,14 +871,15 @@ def remember_thread(
     lose the original arc, so the map is read, amended and rewritten rather
     than replaced with a single pair.
     """
-    mapping, problem = read_thread_map(thread_path)
-    if not thread_map_path(thread_path).exists():
+    observed = observe_thread_map(thread_path)
+    mapping, problem = dict(observed.mapping), observed.problem
+    baseline = resolve_profile(codex_home=None, agent_home=None)
+    if not observed.present:
         # First write for a watcher that predates the map. Record the legacy
         # arc against the home that created it before adding this one, so
         # enabling a profile cannot orphan it.
         legacy, _legacy_reason = read_thread_id(thread_path)
         if legacy:
-            baseline = resolve_profile(codex_home=None, agent_home=None)
             mapping.setdefault(baseline.effective_codex_home, legacy)
     mapping[profile.effective_codex_home] = thread_id
     bounded = bound_thread_map(mapping, profile.effective_codex_home)
@@ -875,9 +901,15 @@ def remember_thread(
             "no longer resumable: " + ", ".join(others)
         )
     problem = "; ".join(notes) or None
-    # The single-id file stays as the documented, human-readable pointer to the
-    # arc this profile is on. It is a mirror; the map is the source of truth.
-    write_thread_id(thread_path, thread_id)
+    # The single-id file is written for the baseline home only, so every id it
+    # ever holds belongs to that home. That is what makes the migration read
+    # safe: when no map is present, the file is attributed to the baseline
+    # home, and if other profiles had written their ids into it, a wake after
+    # the map was removed -- say, halfway through a manual reset -- would
+    # resume another profile's arc under the baseline home. Unconfigured
+    # deployments are the baseline, so they keep writing it exactly as before.
+    if profile.effective_codex_home == baseline.effective_codex_home:
+        write_thread_id(thread_path, thread_id)
     return problem
 
 
@@ -1066,7 +1098,8 @@ def thread_id_for_profile(
     map keeps every profile's arc, so switching away and back resumes the
     original thread.
     """
-    mapping, problem = read_thread_map(thread_path)
+    observed = observe_thread_map(thread_path)
+    mapping, problem = observed.mapping, observed.problem
     if problem:
         # The map cannot be trusted, so neither can any ownership claim in it.
         # Starting fresh costs a thread; resuming blind costs a thread AND a
@@ -1081,7 +1114,7 @@ def thread_id_for_profile(
     if mine is not None:
         return mine, None
 
-    if thread_map_path(thread_path).exists():
+    if observed.present:
         # The map is the only authority for which arc a profile resumes. The
         # single-id file is shared by every profile, so it cannot express
         # per-profile state and must never invalidate one: a quarantine renames
@@ -1376,7 +1409,11 @@ def run_one_turn(
                 # only the mirror would leave this profile resuming the same
                 # dead id forever while the log claimed it would start fresh.
                 forget_thread(thread_path, profile)
-                os.replace(thread_path, stale_path)
+                # The id file holds only the baseline home's arc, so rename it
+                # only when that is the arc that died. Renaming it for another
+                # profile's dead session would discard a live baseline arc.
+                if read_thread_id(thread_path)[0] == thread_id:
+                    os.replace(thread_path, stale_path)
             except OSError as exc:
                 _log(log_handle, f"could not quarantine missing-session id: {exc}")
             else:

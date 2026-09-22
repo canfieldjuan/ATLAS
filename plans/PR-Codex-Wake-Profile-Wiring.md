@@ -13,6 +13,15 @@ implements it yet, so every wake still inherits the interactive profile: 75,685
 tokens on a first wake and 87,509 added per wake after, against a conversation
 of about 90 tokens.
 
+Diff-budget override: this PR is over the 400-line soft cap; the generated
+Estimated diff size section carries the exact figure. Runtime change is about
+a third of it. The rest is the regression tests this slice's review demanded,
+each shown to fail on the pre-fix code, and a plan whose execution model and
+reconciled findings the repo rules require. Splitting the tests from the
+behaviour they pin would leave a window in which a cross-profile resume can
+silently discard or misattribute an arc, which is the defect this slice
+exists to prevent.
+
 ### Problem-derived contract
 
 **Root cause.** `scripts/codex_wake_run.py` builds a child process for `codex`
@@ -59,10 +68,10 @@ Max files: 5
 
 ### Files touched
 
+- `docs/long_running_session_watcher_handoff.md`
+- `plans/PR-Codex-Wake-Profile-Wiring.md`
 - `scripts/codex_wake_run.py`
 - `tests/test_codex_wake_run.py`
-- `docs/long_running_session_watcher_handoff.md`
-- `plans/PR-Codex-Wake-Profile-Wiring.md` (new)
 
 ### Review Contract
 
@@ -126,6 +135,18 @@ Max files: 5
   -- settled by the same test, strengthened: it previously asserted only that
   the output was readable, which an empty map satisfies, so it passed while
   every other arc was being deleted. It now asserts the other profile survives.
+- The shared id file only ever holds the baseline home's arc, so no map
+  removal can make one profile resume another's -- settled by
+  `::test_the_shared_id_file_only_ever_holds_the_baseline_arc`. Reproduced
+  first: after profile A attached, the file held A's id, and with the map
+  removed a baseline wake would have resumed A's arc. Returning presence from
+  the same read does not close this alone, because a map removed before the
+  read is observed as absent; that variant was reproduced too.
+- Map presence is decided by the same read as its contents -- settled by
+  `::test_map_presence_is_decided_by_the_same_read`. Reproduced first by
+  removing the map between the read and the old name-based check.
+- Quarantining another profile's dead session leaves the baseline id file --
+  settled by `::test_quarantining_another_profile_leaves_the_baseline_id_file`.
 - A leftover staging file cannot fail the post-turn write, and a name planted
   where the staging file used to be named is never followed -- settled by
   `::test_a_stale_staging_file_does_not_fail_the_post_turn_write` and
@@ -152,7 +173,7 @@ Max files: 5
 - `CODEX_HOME` is derived from an isolated `HOME` rather than reported unset --
   settled by `::test_codex_home_is_derived_from_an_isolated_home`.
   Negative-probed: removing the derivation makes it fail.
-- Nothing PR #2525 settled regressed -- settled by the eight-file wake suite, the command and its 391-pass count recorded in Verification.
+- Nothing PR #2525 settled regressed -- settled by the eight-file wake suite, the command and its 394-pass count recorded in Verification.
 
 **Reachability proof.** The configured chain was run against this head, not the
 runner directly and not an earlier installed build:
@@ -241,11 +262,22 @@ cannot produce one. Both observable states are correct: the previous map means
 the most recent attach is forgotten and that profile starts fresh, which costs
 a thread and never resumes a wrong one; the new map means it is remembered.
 
-The single-id file is derived output and never an input to that decision, with
-one stated exception: when no map file exists at all, it is read once to
-migrate a watcher created before this change, attributed to the home that would
-be in effect with no profile arguments. After the first attach a map always
-exists, so that exception cannot be reached again.
+Whether the map is present is decided by the same descriptor read that loads
+it, never by a second lookup by name, so the decision and the contents come
+from one observation.
+
+The single-id file is not an input to that decision, with one exception: when
+no map is observed, it is read to migrate a watcher created before this change,
+and attributed to the home that would be in effect with no profile arguments.
+An earlier revision claimed that exception was unreachable after the first
+attach. That was false under this model's own out-of-band mutation, since an
+operator can remove the map at any time, and while the id file held whichever
+profile wrote last, a baseline wake after that removal resumed another
+profile's arc. The id file is now written only for the baseline home, so every
+id it can ever hold belongs to that home. The migration read is therefore safe
+whenever it is reached: the worst it can do is resume the baseline home's own
+arc under the baseline home. A wrong-context resume is unreachable, not merely
+unlikely.
 
 Those two sentences are the whole model. Every question of the form "what if it
 dies between X and Y" resolves to "does a map file exist, and if so it is
@@ -261,9 +293,9 @@ complete", which needs no schedule to be enumerated.
   with the lock bypassed, last-writer-wins applies; the map is still never
   partial, so the failure is a forgotten arc, not a corrupt one.
 - An operator who removes only the map returns that watcher to the migration
-  path, which re-adopts the id file under the baseline home. This is a
-  consequence of the model, not a defect, and the documented reset removes both
-  files.
+  path, which re-adopts the id file under the baseline home. Because only the
+  baseline home ever writes that file, this resumes the baseline's own arc and
+  never another profile's. The documented reset removes both files.
 - Nothing here is safe against a filesystem that reorders a renamed entry past
   its own data without honouring fsync. That is assumed not to happen.
 
@@ -325,12 +357,13 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 173 passed - Environment: local
-- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 391 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 176 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 394 passed - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "another_profile or effective_profile"` with the cross-profile check disabled - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "effective_profile or partial_isolation"` with the receipt line removed - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof` - Result: pass - Environment: local
 - Command: `bash scripts/check_ascii_python.sh` - Result: pass - Environment: local
+- Command: `python scripts/sync_pr_plan.py plans/PR-Codex-Wake-Profile-Wiring.md origin/main --check` - Result: pass - Environment: local
 
 - Command: `pytest tests/test_codex_wake_run.py -q -k "map_destination_is_preflighted or removing_the_thread_id_file or emptied_map_does_not_re_adopt or writer_cannot_outgrow"` against the pre-fix runner - Result: fail - Environment: local
 
@@ -345,15 +378,10 @@ to fail with its fix removed and pass with it restored.
 
 ## Estimated diff size
 
-| File | +/- |
+| File | LOC |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +675 |
-| `scripts/codex_wake_run.py` | +458 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | +359 |
-| `docs/long_running_session_watcher_handoff.md` | +49 |
-| **Total** | **1573** |
-
-Diff-budget override: 1573 lines against a 400-line soft cap. Runtime change is 458 lines; the other two thirds are the regression tests the contract names and
-the plan. Splitting tests from the behavior they pin would leave a window where
-a cross-profile resume silently discards an arc with nothing to catch it, which
-is the defect this slice exists to prevent.
+| `docs/long_running_session_watcher_handoff.md` | 52 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | 387 |
+| `scripts/codex_wake_run.py` | 516 |
+| `tests/test_codex_wake_run.py` | 775 |
+| **Total** | **1730** |

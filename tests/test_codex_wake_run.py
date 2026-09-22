@@ -2199,7 +2199,9 @@ def test_a_stale_staging_file_does_not_fail_the_post_turn_write(
         leftover.with_name(f".{leftover.name}.{os.getpid()}.tmp").write_text(
             "left by a killed wake\n", encoding="utf-8"
         )
-    profile = runner.resolve_profile(codex_home=str(tmp_path / "home"), agent_home=None)
+    # The baseline profile writes both the map and the id file, so both
+    # staging collisions are exercised.
+    profile = runner.resolve_profile(codex_home=None, agent_home=None)
 
     assert runner.thread_path_problem(thread_path) is None
     runner.remember_thread(thread_path, profile, THREAD_A)
@@ -2476,7 +2478,8 @@ def test_the_thread_id_and_its_owner_are_one_record(tmp_path: Path) -> None:
     assert mapping == {profile.effective_codex_home: THREAD_A}
     # The pairing lives in one file, so there is no second file to fall behind.
     assert runner.thread_map_path(thread_path).exists()
-    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
+    # A non-baseline profile never writes the shared id file.
+    assert not thread_path.exists()
 
 
 def test_the_thread_map_is_read_through_the_bounded_safe_path(
@@ -2672,7 +2675,7 @@ def test_resetting_a_watcher_clears_both_the_id_file_and_the_map(
     fresh = tmp_path / "fresh"
     fresh.mkdir()
     fake2, record2 = _fake_codex(fresh, thread_id=THREAD_B)
-    thread_path.unlink()
+    thread_path.unlink(missing_ok=True)
     runner.thread_map_path(thread_path).unlink()
     assert _run_profile(
         tmp_path, fake=fake2, codex_home=str(home), state_dir=state_dir
@@ -2856,4 +2859,91 @@ def test_size_forced_eviction_is_reported_not_silent(tmp_path: Path) -> None:
     assert any(p and "no longer resumable" in p for p in problems)
     mapping, problem = runner.read_thread_map(thread_path)
     assert problem is None and big[-1] in mapping
+
+
+def _attach_profile_a(tmp_path: Path) -> tuple[Path, Any]:
+    thread_path = tmp_path / "state" / "slice-123.codex-thread"
+    thread_path.parent.mkdir(parents=True, exist_ok=True)
+    profile_a = runner.resolve_profile(codex_home=str(tmp_path / "home-a"), agent_home=None)
+    runner.remember_thread(thread_path, profile_a, THREAD_A)
+    return thread_path, profile_a
+
+
+def test_the_shared_id_file_only_ever_holds_the_baseline_arc(tmp_path: Path) -> None:
+    """Regression: another profile's id in the shared file became the baseline's.
+
+    Reproduced: after profile A attached, the id file held A's id. With the map
+    then removed, as the first step of a manual reset does, the migration path
+    attributed that file to the baseline home and a baseline wake would resume
+    A's arc. Returning map presence from the same read does not close this on
+    its own, because a map removed before the read is observed as absent.
+    """
+    thread_path, _profile_a = _attach_profile_a(tmp_path)
+    assert not thread_path.exists(), "profile A must not write the shared id file"
+
+    runner.thread_map_path(thread_path).unlink()
+    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
+    resumed, _why = runner.thread_id_for_profile(thread_path, baseline)
+
+    assert resumed != THREAD_A
+
+
+def test_map_presence_is_decided_by_the_same_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the map was read, then its presence re-checked by name.
+
+    Reproduced: removing the map between the two made a wake that had just
+    read a present map fall into the migration branch.
+    """
+    thread_path, _profile_a = _attach_profile_a(tmp_path)
+    runner.write_thread_id(thread_path, THREAD_A)  # worst case: file holds A's id
+    real = runner.observe_thread_map
+
+    def remove_after_reading(path: Path):
+        observed = real(path)
+        runner.thread_map_path(path).unlink()
+        return observed
+
+    monkeypatch.setattr(runner, "observe_thread_map", remove_after_reading)
+    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
+    resumed, _why = runner.thread_id_for_profile(thread_path, baseline)
+
+    assert resumed is None, "a map observed as present must not fall into migration"
+
+
+def test_quarantining_another_profile_leaves_the_baseline_id_file(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The id file holds the baseline arc, so another profile's dead session
+    must not rename it away."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    home_a = tmp_path / "home-a"
+    home_a.mkdir()
+    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
+    runner.write_thread_map(
+        thread_path, {baseline.effective_codex_home: THREAD_B, str(home_a): THREAD_A}
+    )
+    runner.write_thread_id(thread_path, THREAD_B)
+
+    fake = tmp_path / "codex-missing-a"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.read()\n"
+        f"sys.stderr.write('Error: thread/resume: thread/resume failed: no rollout "
+        f"found for thread id {THREAD_A} (code -32600)\\n')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=str(home_a), state_dir=state_dir) == 1
+
+    assert runner.read_thread_id(thread_path) == (THREAD_B, None)
+    assert not thread_path.with_name(thread_path.name + ".stale").exists()
+    mapping, _problem = runner.read_thread_map(thread_path)
+    assert mapping == {baseline.effective_codex_home: THREAD_B}
 
