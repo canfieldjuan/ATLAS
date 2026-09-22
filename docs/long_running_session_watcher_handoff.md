@@ -129,6 +129,38 @@ session's watcher config. Use the installed runner, not a bare `codex exec`:
 CODEX_WAKE_COMMAND="'/home/<you>/.local/bin/atlas-codex-wake-run' --watcher-id '<session-id>' --repo-dir '/home/<you>/path/to/repo'"
 ```
 
+A wake can also be given its own Codex profile, which is where nearly all of a
+wake's cost lives. Measured on this host with one identical prompt, an
+interactive profile cost 75,685 tokens on the first wake and added 87,509 per
+wake after, while the whole two-turn conversation was about 90 tokens. The rest
+is context re-injected every turn: a list of plugins that are not installed, a
+capped copy of `AGENTS.md`, memory-folder guidance, and a skills catalogue sent
+twice. Under an isolated profile the same pair cost 27,495 and 13,862.
+
+```bash
+CODEX_WAKE_COMMAND="'/home/<you>/.local/bin/atlas-codex-wake-run' --watcher-id '<session-id>' --repo-dir '<repo>' --codex-home '/home/<you>/.codex-wake' --agent-home '/home/<you>/.codex-wake-home'"
+```
+
+`--codex-home` sets `CODEX_HOME`, which supplies config, memories and built-in
+skills. `--agent-home` sets `HOME`, because the shared skills catalogue lives at
+`$HOME/.agents/skills` and is not under `CODEX_HOME`. They are independent: each
+takes effect alone, and isolating only one is recorded in the wake log as
+partial, because `CODEX_HOME` alone still carried all 26 shared skills.
+
+A wake `HOME` still needs the tools the agent uses. Symlink `.gitconfig`,
+`.ssh` and `.config/gh` into it from the real home, or the woken agent loses its
+git identity and `gh` auth. The runner does not probe for them.
+
+The runner does not validate a profile. Codex already refuses a nonexistent
+`CODEX_HOME` before any model call, and fails an unauthenticated or
+non-writable one without billing tokens, so a check here would duplicate that
+and could reject a profile Codex accepts. Every launching turn logs which
+profile it used, including when none is configured.
+
+A stored thread id belongs to the `CODEX_HOME` that created it. Switching
+profiles starts a fresh thread and says so in the log rather than failing a
+resume; switching back resumes the original arc.
+
 Use absolute paths, and quote each one individually as shown. The bridge does
 not run this through a shell: it `shlex.split`s the value and hands the argv
 straight to `subprocess.run`. Two consequences follow. A `${HOME}` or `~` stays

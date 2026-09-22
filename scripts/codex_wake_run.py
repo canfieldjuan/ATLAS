@@ -586,6 +586,170 @@ def _atomic_write(path: Path, text: str) -> None:
         staged.unlink(missing_ok=True)
 
 
+PROFILE_UNSET = "<unset>"
+
+
+class WakeProfile(NamedTuple):
+    """Which Codex profile this wake runs under, and where that came from.
+
+    Codex reads its injected context from two roots resolved from two separate
+    environment variables: `CODEX_HOME` supplies config, memories and built-in
+    skills, and `$HOME/.agents/skills` supplies the shared skills catalogue.
+    Neither is a per-invocation flag, so the only way an unattended wake can
+    avoid inheriting the operator's interactive surface is to run under a
+    different profile.
+    """
+
+    codex_home: str | None
+    agent_home: str | None
+    effective_codex_home: str
+    effective_home: str
+    codex_home_origin: str
+    home_origin: str
+
+    @property
+    def isolates_anything(self) -> bool:
+        return self.codex_home is not None or self.agent_home is not None
+
+    @property
+    def partial_reason(self) -> str | None:
+        """Name the root this wake did NOT isolate, or None when moot.
+
+        Partial isolation measurably under-delivers -- `CODEX_HOME` alone still
+        carried all 26 shared skills -- so it is allowed but must not read like
+        full isolation in the log.
+        """
+        if not self.isolates_anything:
+            return None
+        if self.codex_home is None:
+            return (
+                "CODEX_HOME is not isolated, so this wake still uses that "
+                "profile's config, memories and built-in skills"
+            )
+        if self.agent_home is None:
+            return (
+                "HOME is not isolated, so this wake still loads the shared "
+                "skills catalogue from that home's .agents/skills"
+            )
+        return None
+
+
+def resolve_profile(
+    *,
+    codex_home: str | None,
+    agent_home: str | None,
+    environ: Any = None,
+) -> WakeProfile:
+    """Decide the profile and record what the child will actually see.
+
+    The effective values matter more than the arguments. An operator can set
+    either variable in a systemd unit, in which case the child uses it and no
+    argument names it; a receipt built from arguments alone would be blind in
+    exactly that case.
+    """
+    source = os.environ if environ is None else environ
+
+    def effective(argument: str | None, key: str) -> tuple[str, str]:
+        if argument is not None:
+            return argument, "argument"
+        inherited = source.get(key)
+        if inherited:
+            return inherited, "inherited"
+        return PROFILE_UNSET, "unset"
+
+    codex_value, codex_origin = effective(codex_home, "CODEX_HOME")
+    home_value, home_origin = effective(agent_home, "HOME")
+    return WakeProfile(
+        codex_home=codex_home,
+        agent_home=agent_home,
+        effective_codex_home=codex_value,
+        effective_home=home_value,
+        codex_home_origin=codex_origin,
+        home_origin=home_origin,
+    )
+
+
+def child_environment(profile: WakeProfile) -> dict[str, str] | None:
+    """Return the child environment, or None to inherit unchanged.
+
+    None rather than a copy of `os.environ` on purpose: with no profile
+    configured the child must be launched exactly as it is today, and not
+    passing `env=` at all is the only way to guarantee that.
+    """
+    if not profile.isolates_anything:
+        return None
+    env = dict(os.environ)
+    if profile.codex_home is not None:
+        env["CODEX_HOME"] = profile.codex_home
+    if profile.agent_home is not None:
+        env["HOME"] = profile.agent_home
+    return env
+
+
+def profile_marker_path(thread_path: Path) -> Path:
+    """Where the profile that owns a stored thread id is recorded."""
+    return thread_path.with_name(thread_path.name + ".profile")
+
+
+def stored_thread_profile(thread_path: Path) -> tuple[str | None, str | None]:
+    """Return (owner, problem) for the profile that owns the stored thread id.
+
+    A missing marker and an unreadable one are different states and must not
+    collapse into one. Missing is the expected state for every watcher that
+    predates the marker, and resuming is right. Unreadable means the owner
+    cannot be determined at all, which is an anomaly the caller has to hear
+    about rather than a silent "no owner".
+    """
+    marker = profile_marker_path(thread_path)
+    try:
+        text = marker.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, f"could not read the thread profile marker: {exc}"
+    except UnicodeDecodeError:
+        return None, "the thread profile marker is not valid UTF-8"
+    value = text.strip()
+    if not value:
+        return None, "the thread profile marker is empty"
+    return value, None
+
+
+def record_thread_profile(thread_path: Path, profile: WakeProfile) -> None:
+    """Remember which profile owns the thread id now stored at `thread_path`."""
+    _atomic_write(profile_marker_path(thread_path), profile.effective_codex_home + "\n")
+
+
+def foreign_thread_reason(thread_path: Path, profile: WakeProfile) -> str | None:
+    """Say why a stored thread id belongs to a different profile.
+
+    A rollout lives only inside the `CODEX_HOME` that created it, so a stored
+    id is meaningless under another one. Resuming it anyway costs a wake and
+    ends in a quarantine that discards the arc, so the mismatch is detected
+    here instead and the wake simply starts fresh. An unrecorded owner is
+    treated as a match, which keeps every watcher that predates this marker
+    resuming exactly as before.
+    """
+    owner, problem = stored_thread_profile(thread_path)
+    if problem:
+        # The owner cannot be determined. Starting fresh loses the arc; resuming
+        # anyway risks a cross-profile resume, which loses the arc AND spends a
+        # wake discovering it. The cheaper failure wins, and it is logged.
+        return (
+            f"{problem}; this wake cannot tell which profile owns the stored "
+            "thread id, so it starts a fresh thread rather than risk a resume "
+            "into a profile that does not hold the rollout"
+        )
+    if owner is None or owner == profile.effective_codex_home:
+        return None
+    return (
+        f"the stored thread id was created under CODEX_HOME {owner} and this "
+        f"wake runs under {profile.effective_codex_home}; a rollout does not "
+        "exist outside the profile that created it, so this wake starts a "
+        "fresh thread rather than failing a resume"
+    )
+
+
 def write_thread_id(path: Path, thread_id: str) -> None:
     """Persist atomically so a killed wake cannot leave a partial id."""
     _atomic_write(path, thread_id + "\n")
@@ -765,9 +929,12 @@ def run_one_turn(
     sandbox: str,
     codex_bin: str,
     log_handle: Any,
+    profile: WakeProfile | None = None,
     lock_fd: int | None = None,
 ) -> TurnResult:
     """Spend exactly one Codex turn. The caller must already hold the wake lock."""
+    if profile is None:
+        profile = resolve_profile(codex_home=None, agent_home=None)
     # Read the thread id under the lock. Reading it before acquiring the lock
     # leaves a stale-read interleaving: this process can read "no thread" while
     # another holds the lock, that one records a new id and releases, and this
@@ -777,6 +944,14 @@ def run_one_turn(
     thread_id, ignored_reason = read_thread_id(thread_path)
     if ignored_reason:
         _log(log_handle, f"starting fresh thread: {ignored_reason}")
+    if thread_id is not None:
+        foreign = foreign_thread_reason(thread_path, profile)
+        if foreign:
+            # Deliberately not a quarantine. The session is not dead, it simply
+            # lives in another profile, and quarantining it would discard an
+            # arc that is still resumable by switching back.
+            _log(log_handle, f"starting fresh thread: {foreign}")
+            thread_id = None
 
     if shutil.which(codex_bin) is None and not os.access(codex_bin, os.X_OK):
         # Resolved here rather than at the spawn, because the supervisor now
@@ -802,6 +977,19 @@ def run_one_turn(
     mode = "resume" if thread_id else "fresh"
     _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
     _log(log_handle, "argv=" + " ".join(argv))
+    # The receipt for which profile this turn ran under. Logged on every
+    # launching turn, including when nothing is configured, because "no line"
+    # and "ran on the inherited profile" have to read differently to whoever
+    # comes back to the log.
+    _log(
+        log_handle,
+        "profile "
+        f"codex_home={profile.effective_codex_home} ({profile.codex_home_origin}) "
+        f"home={profile.effective_home} ({profile.home_origin})",
+    )
+    partial = profile.partial_reason
+    if partial:
+        _log(log_handle, f"partial profile isolation: {partial}")
 
     _libc, pdeath_reason = parent_death_signal_support()
     if pdeath_reason:
@@ -880,6 +1068,7 @@ def run_one_turn(
             return
         try:
             write_thread_id(thread_path, new_id)
+            record_thread_profile(thread_path, profile)
         except OSError as exc:
             # Raising here would abandon a turn that is already running and
             # already having effects. Record it and report a controlled
@@ -925,6 +1114,7 @@ def run_one_turn(
                         # way to resume work that already happened.
                         encoding="utf-8",
                         errors="replace",
+                        env=child_environment(profile),
                         preexec_fn=die_with_parent,
                         # The wake lock is an open file description, which fork
                         # and exec preserve. The supervisor holds it for the
@@ -1098,7 +1288,10 @@ def run_wake(
     sandbox: str,
     codex_bin: str,
     dry_run: bool,
+    profile: WakeProfile | None = None,
 ) -> int:
+    if profile is None:
+        profile = resolve_profile(codex_home=None, agent_home=None)
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1113,11 +1306,28 @@ def run_wake(
 
     if dry_run:
         thread_id, ignored_reason = read_thread_id(thread_path)
+        foreign = (
+            foreign_thread_reason(thread_path, profile)
+            if thread_id is not None
+            else None
+        )
+        if foreign:
+            thread_id = None
         argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
         print(f"mode={'resume' if thread_id else 'fresh'}")
         print(f"cwd={repo_dir}")
         if ignored_reason:
             print(f"ignored_stored_thread_id={ignored_reason}")
+        if foreign:
+            print(f"ignored_stored_thread_id={foreign}")
+        print(
+            "profile "
+            f"codex_home={profile.effective_codex_home} ({profile.codex_home_origin}) "
+            f"home={profile.effective_home} ({profile.home_origin})"
+        )
+        partial = profile.partial_reason
+        if partial:
+            print(f"partial_profile_isolation={partial}")
         print("argv=" + " ".join(argv))
         return 0
 
@@ -1193,6 +1403,7 @@ def run_wake(
                 sandbox=sandbox,
                 codex_bin=codex_bin,
                 log_handle=log_handle,
+                profile=profile,
                 lock_fd=lock_handle.fileno(),
             )
             _log(log_handle, f"wake complete exit={result.exit_code}")
@@ -1212,6 +1423,23 @@ def _build_parser() -> argparse.ArgumentParser:
             "Codex sandbox policy for this wake. The prompt is built from PR "
             "and review text, which the watcher treats as untrusted, so the "
             "default stays workspace-write."
+        ),
+    )
+    parser.add_argument(
+        "--codex-home",
+        default=None,
+        help=(
+            "Run Codex under this CODEX_HOME instead of the one this process "
+            "inherited. Isolates config, memories and built-in skills."
+        ),
+    )
+    parser.add_argument(
+        "--agent-home",
+        default=None,
+        help=(
+            "Run Codex under this HOME instead of the inherited one. The "
+            "shared skills catalogue lives at $HOME/.agents/skills, so this is "
+            "a separate root from --codex-home and each takes effect alone."
         ),
     )
     parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
@@ -1256,6 +1484,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("refusing to start a Codex turn with an empty prompt", file=sys.stderr)
         return 2
 
+    profile = resolve_profile(
+        codex_home=args.codex_home,
+        agent_home=args.agent_home,
+    )
+
     return run_wake(
         watcher_id=args.watcher_id,
         repo_dir=repo_dir,
@@ -1264,6 +1497,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sandbox=args.sandbox,
         codex_bin=args.codex_bin,
         dry_run=args.dry_run,
+        profile=profile,
     )
 
 

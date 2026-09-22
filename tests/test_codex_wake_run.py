@@ -48,6 +48,8 @@ def _fake_codex(tmp_path: Path, *, thread_id: str, exit_code: int = 0) -> tuple[
         "    'argv': sys.argv[1:],\n"
         "    'cwd': os.getcwd(),\n"
         "    'stdin': sys.stdin.read(),\n"
+        "    'codex_home': os.environ.get('CODEX_HOME'),\n"
+        "    'home': os.environ.get('HOME'),\n"
         "}\n"
         "with open(record, 'w', encoding='utf-8') as handle:\n"
         "    json.dump(payload, handle)\n"
@@ -2191,4 +2193,252 @@ def test_the_thread_id_still_round_trips_through_the_staged_write(
     assert runner.read_thread_id(target) == (THREAD_A, None)
     leftovers = [entry.name for entry in tmp_path.iterdir() if entry.name.startswith(".")]
     assert leftovers == [], f"staging file left behind: {leftovers}"
+
+
+def _run_profile(
+    tmp_path: Path,
+    *,
+    fake: Path,
+    codex_home: str | None = None,
+    agent_home: str | None = None,
+    state_dir: Path | None = None,
+    repo: Path | None = None,
+    prompt: str = "wake prompt",
+) -> int:
+    """Run one wake with an explicit profile, the way a watcher config would."""
+    argv = [
+        "--watcher-id", "slice-123",
+        "--repo-dir", str(repo if repo is not None else (tmp_path / "repo")),
+        "--state-dir", str(state_dir if state_dir is not None else (tmp_path / "state")),
+        "--codex-bin", str(fake),
+    ]
+    if codex_home is not None:
+        argv += ["--codex-home", codex_home]
+    if agent_home is not None:
+        argv += ["--agent-home", agent_home]
+
+    class _Stdin:
+        @staticmethod
+        def read() -> str:
+            return prompt
+
+    original = sys.stdin
+    sys.stdin = _Stdin()  # type: ignore[assignment]
+    try:
+        return runner.main(argv)
+    finally:
+        sys.stdin = original
+
+
+@pytest.mark.parametrize(
+    "give_codex_home, give_agent_home",
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_every_profile_argument_combination_reaches_the_child(
+    tmp_path: Path, repo_dir: Path, give_codex_home: bool, give_agent_home: bool
+) -> None:
+    """The argument inventory is CLOSED at four states, so all four are pinned.
+
+    Two independent roots means four combinations and no fifth: Codex reads its
+    config from CODEX_HOME and the shared skills catalogue from
+    $HOME/.agents/skills, so isolating one does not isolate the other.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    ch = tmp_path / "wake-codex-home"
+    ah = tmp_path / "wake-agent-home"
+    ch.mkdir()
+    ah.mkdir()
+
+    exit_code = _run_profile(
+        tmp_path,
+        fake=fake,
+        codex_home=str(ch) if give_codex_home else None,
+        agent_home=str(ah) if give_agent_home else None,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    if give_codex_home:
+        assert payload["codex_home"] == str(ch)
+    else:
+        assert payload["codex_home"] == os.environ.get("CODEX_HOME")
+    if give_agent_home:
+        assert payload["home"] == str(ah)
+    else:
+        assert payload["home"] == os.environ.get("HOME")
+
+
+def test_no_profile_leaves_the_child_environment_untouched(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression for I2: this feature is opt-in and must not move a deployment."""
+    assert runner.child_environment(
+        runner.resolve_profile(codex_home=None, agent_home=None)
+    ) is None
+
+
+def test_the_receipt_names_the_effective_profile_however_it_was_set(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a receipt built from arguments alone is blind to the env.
+
+    Reproduced against the shipped runner before this change: with CODEX_HOME
+    and HOME set in the environment and neither passed as an argument, the
+    output was byte-identical to a run with no profile at all.
+    """
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    inherited = tmp_path / "inherited-codex-home"
+    inherited.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(inherited))
+    state_dir = tmp_path / "state"
+
+    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert f"codex_home={inherited} (inherited)" in log_text
+
+
+def test_partial_isolation_is_recorded_as_partial(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Isolating one root measurably under-delivers, so it must not read as full."""
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    ch = tmp_path / "only-codex-home"
+    ch.mkdir()
+    state_dir = tmp_path / "state"
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=str(ch), state_dir=state_dir) == 0
+
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "partial profile isolation" in log_text
+    assert "HOME is not isolated" in log_text
+
+    both = tmp_path / "state-both"
+    ah = tmp_path / "both-agent-home"
+    ah.mkdir()
+    assert _run_profile(
+        tmp_path, fake=fake, codex_home=str(ch), agent_home=str(ah), state_dir=both
+    ) == 0
+    assert "partial profile isolation" not in (
+        both / "slice-123.codex-wake.log"
+    ).read_text(encoding="utf-8")
+
+
+def test_a_missing_profile_is_launched_into_and_fails_closed(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The contract forbids pre-launch validation; Codex owns profile validity.
+
+    Reproduced against the real CLI: a nonexistent CODEX_HOME makes Codex exit
+    before any model call, without creating the directory and without falling
+    back. So the runner must launch into it and must not substitute a profile.
+    """
+    fake = _codex_emitting(tmp_path, "codex-fails", [], exit_code=7)
+    record = tmp_path / "invocation.json"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "sys.stdin.read()\n"
+        f"json.dump({{'codex_home': os.environ.get('CODEX_HOME')}}, open({str(record)!r}, 'w'))\n"
+        "sys.exit(7)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    missing = tmp_path / "does-not-exist"
+    state_dir = tmp_path / "state"
+
+    exit_code = _run_profile(
+        tmp_path, fake=fake, codex_home=str(missing), state_dir=state_dir
+    )
+
+    assert exit_code == 7, "the turn's own exit code must survive"
+    assert record.exists(), "Codex must be invoked, not pre-empted by a runner check"
+    assert json.loads(record.read_text(encoding="utf-8"))["codex_home"] == str(missing)
+    assert not (state_dir / "slice-123.codex-thread").exists()
+
+
+def test_a_thread_from_another_profile_starts_fresh_without_quarantine(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a rollout does not exist outside the CODEX_HOME that made it.
+
+    Reproduced against the real CLI: resuming such an id returns
+    `no rollout found for thread id ... (code -32600)`, after which the runner
+    quarantines it and the arc is lost. Detect the mismatch instead.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+    old_home = tmp_path / "old-codex-home"
+    new_home = tmp_path / "new-codex-home"
+    old_home.mkdir()
+    new_home.mkdir()
+    runner.record_thread_profile(
+        thread_path,
+        runner.resolve_profile(codex_home=str(old_home), agent_home=None),
+    )
+
+    exit_code = _run_profile(
+        tmp_path, fake=fake, codex_home=str(new_home), state_dir=state_dir
+    )
+
+    assert exit_code == 0
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv, f"must not attempt a cross-profile resume: {argv}"
+    assert not thread_path.with_name(
+        thread_path.name + ".stale"
+    ).exists(), "a live session in another profile must not be quarantined"
+    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_B
+    assert runner.stored_thread_profile(thread_path) == (str(new_home), None)
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "does not exist outside the profile that created it" in log_text
+
+
+def test_a_thread_with_no_recorded_profile_still_resumes(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Backward compatibility: every watcher predating the marker keeps its arc."""
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
+    assert not runner.profile_marker_path(state_dir / "slice-123.codex-thread").exists()
+
+    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv
+
+
+def test_an_unreadable_profile_marker_starts_fresh_rather_than_guessing(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The other side of the marker boundary.
+
+    A missing marker means "predates this feature" and must resume. A marker
+    that exists but cannot be read means the owner is unknown, which is not the
+    same thing: resuming could land a cross-profile resume that loses the arc
+    and spends a wake discovering it, so the cheaper failure is chosen and said
+    out loud.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+    runner.profile_marker_path(thread_path).write_bytes(b"\xff\xfe\xfa")
+
+    owner, problem = runner.stored_thread_profile(thread_path)
+    assert owner is None
+    assert problem is not None and "not valid UTF-8" in problem
+
+    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv
+    assert not thread_path.with_name(thread_path.name + ".stale").exists()
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "cannot tell which profile owns" in log_text
 
