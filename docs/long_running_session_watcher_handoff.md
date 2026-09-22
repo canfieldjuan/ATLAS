@@ -231,9 +231,15 @@ Codex process and the ordinary commands it starts do not outlive the wake lock.
 A descendant that calls `setsid` leaves that group and is not covered; issue
 #2526 tracks containment a descendant cannot opt out of.
 
-A merged PR leaves its `.codex-thread` file behind. Remove it during the
-post-merge teardown in AGENTS 3c.1 so the next PR on that watcher id does not
-resume a finished arc.
+A merged PR leaves its thread state behind: the `.codex-thread` file and the
+thread map beside it. Remove both during the post-merge teardown in AGENTS 3c.1
+so the next PR on that watcher id does not resume a finished arc. Removing only
+the `.codex-thread` file is not a reset, because the map is what a wake reads.
+
+The map is bounded by size, not by a count of profiles, and holds dozens of
+typical profile paths. If a very large set of long paths ever forces an older
+profile out, the wake log names the profiles whose arcs stopped being
+resumable.
 
 Wake-source rules:
 

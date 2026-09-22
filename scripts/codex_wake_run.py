@@ -737,11 +737,11 @@ def child_environment(profile: WakeProfile) -> dict[str, str] | None:
 
 # A thread map holds one id per profile. Small by construction: a watcher sees
 # a handful of profiles at most, and each entry is a path plus a UUID.
+# The only bound on the map is its size, because size is what the reader
+# enforces. At roughly a hundred bytes per entry this holds dozens of profiles.
+# A count cap was tried and removed: it evicted representable arcs well under
+# the byte limit, breaking "switching back resumes the original arc".
 MAX_THREAD_MAP_BYTES = 8192
-# A watcher sees a handful of profiles. The cap exists so the writer can never
-# produce a document the reader rejects as oversized, which would silently cost
-# every remembered arc.
-MAX_THREAD_MAP_ENTRIES = 8
 
 
 def thread_map_path(thread_path: Path) -> Path:
@@ -794,8 +794,7 @@ def bound_thread_map(mapping: dict[str, str], keep: str) -> dict[str, str]:
     """
     def too_big(candidate: dict[str, str]) -> bool:
         return (
-            len(candidate) > MAX_THREAD_MAP_ENTRIES
-            or len(_serialize_thread_map(candidate).encode("utf-8"))
+            len(_serialize_thread_map(candidate).encode("utf-8"))
             > MAX_THREAD_MAP_BYTES
         )
 
@@ -856,11 +855,23 @@ def remember_thread(
     mapping[profile.effective_codex_home] = thread_id
     bounded = bound_thread_map(mapping, profile.effective_codex_home)
     write_thread_map(thread_path, bounded)
-    if profile.effective_codex_home not in bounded and problem is None:
-        problem = (
+    # Eviction is only ever forced by the byte limit, and when it happens the
+    # operator is told which arcs stopped being resumable rather than finding
+    # out when switching back starts a fresh thread.
+    evicted = sorted(k for k in mapping if k not in bounded)
+    notes = [problem] if problem else []
+    if profile.effective_codex_home in evicted:
+        notes.append(
             f"the profile path {profile.effective_codex_home} is too long to "
             "record in the thread map, so this arc will not be resumable"
         )
+    others = [k for k in evicted if k != profile.effective_codex_home]
+    if others:
+        notes.append(
+            "the thread map reached its size limit, so these profiles' arcs are "
+            "no longer resumable: " + ", ".join(others)
+        )
+    problem = "; ".join(notes) or None
     # The single-id file stays as the documented, human-readable pointer to the
     # arc this profile is on. It is a mirror; the map is the source of truth.
     write_thread_id(thread_path, thread_id)

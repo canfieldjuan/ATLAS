@@ -2692,7 +2692,6 @@ def test_the_thread_map_writer_cannot_outgrow_the_reader(tmp_path: Path) -> None
     runner.write_thread_map(thread_path, bounded)
 
     assert current in bounded, "the profile being written must always survive"
-    assert len(bounded) <= runner.MAX_THREAD_MAP_ENTRIES
     raw = runner.thread_map_path(thread_path).read_bytes()
     assert len(raw) <= runner.MAX_THREAD_MAP_BYTES
     read_back, problem = runner.read_thread_map(thread_path)
@@ -2791,4 +2790,39 @@ def test_a_retained_profile_that_cannot_fit_is_dropped_not_written_oversized(
     read_back, problem = runner.read_thread_map(thread_path)
     assert problem is None, "whatever the writer produces must be readable"
     assert read_back == bounded
+
+
+def test_representable_profiles_are_never_evicted_by_count(tmp_path: Path) -> None:
+    """Regression: an eight-entry cap evicted arcs far below the byte limit.
+
+    Reproduced: nine short profiles serialize to 444 bytes against an 8,192
+    byte limit, yet the ninth write evicted the first, so switching back to it
+    started a fresh thread. Size is the only bound the reader enforces, so it
+    is the only bound the writer applies.
+    """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    profiles = [str(tmp_path / f"home-{i}") for i in range(20)]
+    for home in profiles:
+        runner.remember_thread(
+            thread_path, runner.resolve_profile(codex_home=home, agent_home=None), THREAD_A
+        )
+
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None
+    assert sorted(mapping) == sorted(profiles), "every representable arc survives"
+
+
+def test_size_forced_eviction_is_reported_not_silent(tmp_path: Path) -> None:
+    """When the byte limit does force eviction, the caller is told which arcs."""
+    thread_path = tmp_path / "slice-123.codex-thread"
+    big = [f"/profiles/{'p' * 1000}-{i}" for i in range(12)]
+    problems = []
+    for home in big:
+        problems.append(runner.remember_thread(
+            thread_path, runner.resolve_profile(codex_home=home, agent_home=None), THREAD_A
+        ))
+
+    assert any(p and "no longer resumable" in p for p in problems)
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None and big[-1] in mapping
 

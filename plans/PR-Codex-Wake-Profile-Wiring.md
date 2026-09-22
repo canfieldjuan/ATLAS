@@ -126,6 +126,13 @@ Max files: 5
   `::test_the_thread_map_writer_cannot_outgrow_the_reader`. Reproduced first:
   the old writer produced 10,353 bytes against a reader limit of 8,192, after
   which every remembered arc read back as a size error.
+- The map is bounded by size alone, never by a count of profiles, and a
+  size-forced eviction is reported -- settled by
+  `::test_representable_profiles_are_never_evicted_by_count` and
+  `::test_size_forced_eviction_is_reported_not_silent`. Reproduced first: an
+  eight-entry cap evicted the first of nine profiles that together serialized
+  to 444 bytes against an 8,192-byte limit, so switching back to it started a
+  fresh thread.
 - A dead session is forgotten in the map, not only the mirror -- settled by
   `::test_a_dead_session_is_forgotten_in_the_map_not_only_the_mirror`, which
   asserts the other profile keeps its arc. Negative-probed.
@@ -135,7 +142,7 @@ Max files: 5
 - `CODEX_HOME` is derived from an isolated `HOME` rather than reported unset --
   settled by `::test_codex_home_is_derived_from_an_isolated_home`.
   Negative-probed: removing the derivation makes it fail.
-- Nothing PR #2525 settled regressed -- settled by the eight-file wake suite, the command and its 388-pass count recorded in Verification.
+- Nothing PR #2525 settled regressed -- settled by the eight-file wake suite, the command and its 390-pass count recorded in Verification.
 
 **Reachability proof.** The configured chain was run against this head, not the
 runner directly and not an earlier installed build:
@@ -275,6 +282,9 @@ whose purpose is profile isolation.
   fresh thread on upgrade, which is the exact harm the invariant prevents. It
   is resumed only under the home that created it, and otherwise remembered
   against that home so enabling a profile cannot orphan it.
+- No count cap on the map. One was tried and removed on reproduction: it evicted
+  representable arcs far under the byte limit. Size is the only bound the reader
+  enforces, so it is the only bound the writer applies.
 - Reset names two files rather than inferring itself from one. Inferring it
   from the shared id file was tried and reverted: it made a quarantine of one
   profile invalidate every other profile's arc.
@@ -299,8 +309,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 170 passed - Environment: local
-- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 388 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 172 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 390 passed - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "another_profile or effective_profile"` with the cross-profile check disabled - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "effective_profile or partial_isolation"` with the receipt line removed - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof` - Result: pass - Environment: local
@@ -321,13 +331,13 @@ to fail with its fix removed and pass with it restored.
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +600 |
-| `scripts/codex_wake_run.py` | +433 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | +333 |
-| `docs/long_running_session_watcher_handoff.md` | +40 |
-| **Total** | **1414** |
+| `tests/test_codex_wake_run.py` | +634 |
+| `scripts/codex_wake_run.py` | +444 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | +343 |
+| `docs/long_running_session_watcher_handoff.md` | +49 |
+| **Total** | **1481** |
 
-Diff-budget override: 1414 lines against a 400-line soft cap. Runtime change is 433 lines; the other two thirds are the regression tests the contract names and
+Diff-budget override: 1481 lines against a 400-line soft cap. Runtime change is 444 lines; the other two thirds are the regression tests the contract names and
 the plan. Splitting tests from the behavior they pin would leave a window where
 a cross-profile resume silently discards an arc with nothing to catch it, which
 is the defect this slice exists to prevent.
