@@ -2769,3 +2769,26 @@ def test_enabling_a_profile_keeps_the_legacy_arc_for_its_own_home(
     )
     assert mapping.get(str(new_home)) == THREAD_B
 
+
+def test_a_retained_profile_that_cannot_fit_is_dropped_not_written_oversized(
+    tmp_path: Path,
+) -> None:
+    """Regression: eviction can run out while the kept entry still does not fit.
+
+    Backslash is a legal Linux filename character and JSON escapes it to two
+    bytes, so a path well inside PATH_MAX serializes past the read limit.
+    Reproduced at 4,091 characters serializing to 8,230 bytes, after which the
+    written map read back as a size error and every arc was lost.
+    """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    huge = "/" + "\\" * 4090
+    other = "/other-home"
+
+    bounded = runner.bound_thread_map({huge: THREAD_A, other: THREAD_B}, huge)
+    runner.write_thread_map(thread_path, bounded)
+
+    assert huge not in bounded, "an unrepresentable profile must be dropped"
+    read_back, problem = runner.read_thread_map(thread_path)
+    assert problem is None, "whatever the writer produces must be readable"
+    assert read_back == bounded
+

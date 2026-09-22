@@ -792,13 +792,26 @@ def bound_thread_map(mapping: dict[str, str], keep: str) -> dict[str, str]:
     silently loses every remembered arc. Eviction is deterministic and always
     keeps the profile being written, because that is the arc in use.
     """
+    def too_big(candidate: dict[str, str]) -> bool:
+        return (
+            len(candidate) > MAX_THREAD_MAP_ENTRIES
+            or len(_serialize_thread_map(candidate).encode("utf-8"))
+            > MAX_THREAD_MAP_BYTES
+        )
+
     bounded = dict(mapping)
     evictable = sorted(k for k in bounded if k != keep)
-    while evictable and (
-        len(bounded) > MAX_THREAD_MAP_ENTRIES
-        or len(_serialize_thread_map(bounded).encode("utf-8")) > MAX_THREAD_MAP_BYTES
-    ):
+    while evictable and too_big(bounded):
         del bounded[evictable.pop(0)]
+    if too_big(bounded):
+        # Eviction has run out and the retained entry alone still does not fit.
+        # A path near PATH_MAX made of characters JSON escapes reaches this:
+        # 4,091 characters serialize to 8,230 bytes. Writing it anyway produces
+        # a map the reader rejects, which forgets every arc including this one,
+        # so the profile is dropped instead and the caller reports it.
+        bounded.pop(keep, None)
+        if too_big(bounded):
+            return {}
     return bounded
 
 
@@ -841,9 +854,13 @@ def remember_thread(
             baseline = resolve_profile(codex_home=None, agent_home=None)
             mapping.setdefault(baseline.effective_codex_home, legacy)
     mapping[profile.effective_codex_home] = thread_id
-    write_thread_map(
-        thread_path, bound_thread_map(mapping, profile.effective_codex_home)
-    )
+    bounded = bound_thread_map(mapping, profile.effective_codex_home)
+    write_thread_map(thread_path, bounded)
+    if profile.effective_codex_home not in bounded and problem is None:
+        problem = (
+            f"the profile path {profile.effective_codex_home} is too long to "
+            "record in the thread map, so this arc will not be resumable"
+        )
     # The single-id file stays as the documented, human-readable pointer to the
     # arc this profile is on. It is a mirror; the map is the source of truth.
     write_thread_id(thread_path, thread_id)

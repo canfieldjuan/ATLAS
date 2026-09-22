@@ -113,9 +113,15 @@ Max files: 5
   `::test_enabling_a_profile_keeps_the_legacy_arc_for_its_own_home`, which
   asserts the new profile starts fresh and the legacy id is remembered against
   the baseline home rather than adopted.
-- An emptied map does not re-adopt a quarantined mirror -- settled by
-  `::test_an_emptied_map_does_not_re_adopt_the_quarantined_mirror`, which pins
-  the crash window between emptying the map and renaming the mirror.
+- No crash schedule can produce a partial map -- settled by the Execution model
+  below, whose invariant holds over every interleaving the surface admits
+  rather than over a list of sampled windows.
+  `::test_an_emptied_map_does_not_re_adopt_the_quarantined_mirror` remains as
+  one worked example of that invariant, not as the proof of it.
+- A profile too long to represent is dropped rather than written oversized --
+  settled by
+  `::test_a_retained_profile_that_cannot_fit_is_dropped_not_written_oversized`.
+  Reproduced at 4,091 characters serializing to 8,230 bytes.
 - The writer cannot produce a map the reader rejects -- settled by
   `::test_the_thread_map_writer_cannot_outgrow_the_reader`. Reproduced first:
   the old writer produced 10,353 bytes against a reader limit of 8,192, after
@@ -129,7 +135,7 @@ Max files: 5
 - `CODEX_HOME` is derived from an isolated `HOME` rather than reported unset --
   settled by `::test_codex_home_is_derived_from_an_isolated_home`.
   Negative-probed: removing the derivation makes it fail.
-- Nothing PR #2525 settled regressed -- settled by the full suite at 387 passed.
+- Nothing PR #2525 settled regressed -- settled by the eight-file wake suite, the command and its 388-pass count recorded in Verification.
 
 **Reachability proof.** The configured chain was run against this head, not the
 runner directly and not an earlier installed build:
@@ -197,6 +203,62 @@ changing. Verified against the real CLI, which created `<home>/.codex` and
 authenticated against it. So an isolated `HOME` isolates both roots, and that
 combination is not reported as partial.
 
+### Execution model
+
+Required because this slice adds durable state. The previous revisions of this
+plan listed crash schedules to handle, which is the enumeration the rule
+rejects: each review round found a schedule the list had omitted.
+
+**Surface.** Two files in one directory on one local POSIX filesystem, written
+and read by a single process that already holds the per-watcher `flock`. No
+network, no leases, no clocks, no partitions, no retry or redelivery. The modes
+this surface admits are therefore: process or host death at any instruction,
+and out-of-band mutation of either file by an operator or another tool.
+
+**Invariant, over every interleaving the surface admits.** The thread map is
+the only input to the resume decision, and it is only ever replaced whole,
+through write, fsync, `os.replace`, fsync of the directory. A reader therefore
+observes exactly one of two states: the complete previous map, or the complete
+new one. There is no third, partial state to reason about, so crash timing
+cannot produce one. Both observable states are correct: the previous map means
+the most recent attach is forgotten and that profile starts fresh, which costs
+a thread and never resumes a wrong one; the new map means it is remembered.
+
+The single-id file is derived output and never an input to that decision, with
+one stated exception: when no map file exists at all, it is read once to
+migrate a watcher created before this change, attributed to the home that would
+be in effect with no profile arguments. After the first attach a map always
+exists, so that exception cannot be reached again.
+
+Those two sentences are the whole model. Every question of the form "what if it
+dies between X and Y" resolves to "does a map file exist, and if so it is
+complete", which needs no schedule to be enumerated.
+
+**Assumptions, stated rather than omitted.**
+
+- `os.replace` is atomic and the two fsyncs order data before the rename and
+  the rename before it is durable. This holds on Linux within one filesystem,
+  which is why both files live in the one state directory. It is not assumed
+  across filesystems.
+- The per-watcher lock means no second writer. If an operator runs the runner
+  with the lock bypassed, last-writer-wins applies; the map is still never
+  partial, so the failure is a forgotten arc, not a corrupt one.
+- An operator who removes only the map returns that watcher to the migration
+  path, which re-adopts the id file under the baseline home. This is a
+  consequence of the model, not a defect, and the documented reset removes both
+  files.
+- Nothing here is safe against a filesystem that reorders a renamed entry past
+  its own data without honouring fsync. That is assumed not to happen.
+
+**Component rejected.** `sqlite3` is in the standard library and would supply
+atomic multi-key updates without a hand-rolled protocol. It is rejected because
+the wake state is deliberately operator-readable and operator-editable: the
+documented reset is removing files, the handoff doc tells an operator to read
+the thread id, and the drift-checking installer inspects plain files. SQLite
+would add journal and WAL files to the same state directory that none of that
+tooling knows about, and would put a second durability surface inside a slice
+whose purpose is profile isolation.
+
 ## Intentional
 
 - No pre-launch profile validation, because the contract forbids it and
@@ -237,7 +299,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 169 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 170 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 388 passed - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "another_profile or effective_profile"` with the cross-profile check disabled - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "effective_profile or partial_isolation"` with the receipt line removed - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof` - Result: pass - Environment: local
@@ -258,13 +321,13 @@ to fail with its fix removed and pass with it restored.
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +577 |
-| `scripts/codex_wake_run.py` | +416 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | +270 |
+| `tests/test_codex_wake_run.py` | +600 |
+| `scripts/codex_wake_run.py` | +433 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | +333 |
 | `docs/long_running_session_watcher_handoff.md` | +40 |
-| **Total** | **1311** |
+| **Total** | **1414** |
 
-Diff-budget override: 1311 lines against a 400-line soft cap. Runtime change is 416 lines; the other two thirds are the regression tests the contract names and
+Diff-budget override: 1414 lines against a 400-line soft cap. Runtime change is 433 lines; the other two thirds are the regression tests the contract names and
 the plan. Splitting tests from the behavior they pin would leave a window where
 a cross-profile resume silently discards an arc with nothing to catch it, which
 is the defect this slice exists to prevent.
