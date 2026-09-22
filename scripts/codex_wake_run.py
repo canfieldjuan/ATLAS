@@ -738,6 +738,10 @@ def child_environment(profile: WakeProfile) -> dict[str, str] | None:
 # A thread map holds one id per profile. Small by construction: a watcher sees
 # a handful of profiles at most, and each entry is a path plus a UUID.
 MAX_THREAD_MAP_BYTES = 8192
+# A watcher sees a handful of profiles. The cap exists so the writer can never
+# produce a document the reader rejects as oversized, which would silently cost
+# every remembered arc.
+MAX_THREAD_MAP_ENTRIES = 8
 
 
 def thread_map_path(thread_path: Path) -> Path:
@@ -776,12 +780,31 @@ def read_thread_map(thread_path: Path) -> tuple[dict[str, str], str | None]:
     return mapping, None
 
 
+def _serialize_thread_map(mapping: dict[str, str]) -> str:
+    return json.dumps(mapping, indent=2, sort_keys=True) + "\n"
+
+
+def bound_thread_map(mapping: dict[str, str], keep: str) -> dict[str, str]:
+    """Trim the map so the writer can never exceed the reader's limit.
+
+    An unbounded writer and a bounded reader disagree exactly once: the write
+    succeeds, every later read rejects the file as oversized, and the wake
+    silently loses every remembered arc. Eviction is deterministic and always
+    keeps the profile being written, because that is the arc in use.
+    """
+    bounded = dict(mapping)
+    evictable = sorted(k for k in bounded if k != keep)
+    while evictable and (
+        len(bounded) > MAX_THREAD_MAP_ENTRIES
+        or len(_serialize_thread_map(bounded).encode("utf-8")) > MAX_THREAD_MAP_BYTES
+    ):
+        del bounded[evictable.pop(0)]
+    return bounded
+
+
 def write_thread_map(thread_path: Path, mapping: dict[str, str]) -> None:
     """Persist the whole map in one atomic replacement."""
-    _atomic_write(
-        thread_map_path(thread_path),
-        json.dumps(mapping, indent=2, sort_keys=True) + "\n",
-    )
+    _atomic_write(thread_map_path(thread_path), _serialize_thread_map(mapping))
 
 
 def forget_thread(thread_path: Path, profile: "WakeProfile") -> bool:
@@ -799,19 +822,24 @@ def forget_thread(thread_path: Path, profile: "WakeProfile") -> bool:
     return True
 
 
-def remember_thread(thread_path: Path, profile: "WakeProfile", thread_id: str) -> None:
+def remember_thread(
+    thread_path: Path, profile: "WakeProfile", thread_id: str
+) -> str | None:
     """Record `thread_id` as this profile's arc, keeping every other profile's.
 
     Dropping the other entries is what would make "switch away and switch back"
     lose the original arc, so the map is read, amended and rewritten rather
     than replaced with a single pair.
     """
-    mapping, _problem = read_thread_map(thread_path)
+    mapping, problem = read_thread_map(thread_path)
     mapping[profile.effective_codex_home] = thread_id
-    write_thread_map(thread_path, mapping)
+    write_thread_map(
+        thread_path, bound_thread_map(mapping, profile.effective_codex_home)
+    )
     # The single-id file stays as the documented, human-readable pointer to the
     # arc this profile is on. It is a mirror; the map is the source of truth.
     write_thread_id(thread_path, thread_id)
+    return problem
 
 
 def write_thread_id(path: Path, thread_id: str) -> None:
@@ -838,6 +866,18 @@ def thread_path_problem(path: Path) -> str | None:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
         return f"cannot create the state directory {path.parent}: {exc}"
+    map_path = thread_map_path(path)
+    try:
+        map_info = os.lstat(map_path)
+    except FileNotFoundError:
+        map_info = None
+    except OSError as exc:
+        return f"cannot inspect {map_path}: {exc}"
+    if map_info is not None and not stat.S_ISREG(map_info.st_mode):
+        # Checked here for the same reason the thread path is: discovering it
+        # after the turn means Codex has already acted and there is no
+        # resumable id to show for it.
+        return f"{map_path} exists but is not a regular file"
     probe = path.with_name(f".{path.name}.probe.{os.getpid()}")
     try:
         probe.write_text("", encoding="utf-8")
@@ -998,26 +1038,43 @@ def thread_id_for_profile(
             "into a profile that does not hold the rollout"
         )
 
+    legacy, legacy_reason = read_thread_id(thread_path)
+    if legacy_reason:
+        return None, legacy_reason
+
+    if legacy is None:
+        if mapping:
+            # The single-id file is the operator's control surface: post-merge
+            # teardown and the failure diagnostic both say to remove it to
+            # force a fresh thread. Honouring only the map would make both
+            # instructions silently ineffective, and it is also the state a
+            # quarantine leaves behind, so its absence means fresh regardless
+            # of what the map still holds.
+            return None, (
+                "the stored thread id file is gone while the thread map still "
+                "holds entries, which is how a teardown, a reset or a "
+                "quarantine leaves this watcher; starting a fresh thread"
+            )
+        return None, None
+
     mine = mapping.get(profile.effective_codex_home)
     if mine is not None:
         return mine, None
 
-    legacy, legacy_reason = read_thread_id(thread_path)
-    if legacy_reason:
-        return None, legacy_reason
-    if legacy is None:
-        return None, None
-    if mapping:
-        # The map exists and names other profiles but not this one, so the
-        # single-id file belongs to one of them.
+    if thread_map_path(thread_path).exists():
+        # A map file exists but does not claim this profile. Never fall back to
+        # the mirror here: after a quarantine that emptied the map and died
+        # before renaming the mirror, that fallback would re-adopt the very id
+        # just confirmed dead.
+        named = ", ".join(sorted(mapping)) or "no profile"
         return None, (
-            f"the stored thread id belongs to another profile "
-            f"({', '.join(sorted(mapping))}) and not to "
-            f"{profile.effective_codex_home}; this wake starts a fresh thread "
-            "and the other arc stays resumable by switching back"
+            f"the stored thread id belongs to another profile ({named}) and "
+            f"not to {profile.effective_codex_home}; this wake starts a fresh "
+            "thread and any other arc stays resumable by switching back"
         )
-    # No map at all: this watcher predates it. The id is adopted by the profile
-    # running now, which is what keeps every existing watcher resuming, and it
+
+    # No map file at all: this watcher predates it. The id is adopted by the
+    # profile running now, which keeps every existing watcher resuming, and it
     # is written into the map on attach so the next profile change can tell.
     return legacy, None
 
@@ -1176,7 +1233,14 @@ def run_one_turn(
             # id that no map has ever claimed, and returning early here is what
             # would leave that ownership unrecorded until a profile change tried
             # a cross-profile resume and quarantined it.
-            remember_thread(thread_path, profile, new_id)
+            map_problem = remember_thread(thread_path, profile, new_id)
+            if map_problem:
+                _log(
+                    log_handle,
+                    f"the previous thread map was unusable ({map_problem}); it "
+                    "has been replaced and any arcs it held for other profiles "
+                    "are not resumable",
+                )
         except OSError as exc:
             # Raising here would abandon a turn that is already running and
             # already having effects. Record it and report a controlled

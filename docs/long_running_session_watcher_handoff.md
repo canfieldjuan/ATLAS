@@ -159,7 +159,13 @@ profile it used, including when none is configured.
 
 A stored thread id belongs to the `CODEX_HOME` that created it. Switching
 profiles starts a fresh thread and says so in the log rather than failing a
-resume; switching back resumes the original arc.
+resume; switching back resumes the original arc, because each profile's id is
+remembered beside the thread file.
+
+Removing the thread id file is still the way to force a fresh thread, at
+post-merge teardown or when a resume keeps failing. It overrides the remembered
+ids: with the file gone, the next wake starts fresh no matter what the map
+holds.
 
 Use absolute paths, and quote each one individually as shown. The bridge does
 not run this through a shell: it `shlex.split`s the value and hands the argv

@@ -2584,3 +2584,98 @@ def test_an_inherited_codex_home_with_an_isolated_home_is_partial(
     assert derived.codex_home_origin == "derived from HOME"
     assert derived.partial_reason is None
 
+
+def test_the_thread_map_destination_is_preflighted(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a turn whose id cannot be stored must not run.
+
+    The map is a second place the id has to land, so an unusable map path is
+    exactly as fatal as an unusable thread path: Codex would edit, push or
+    comment and leave nothing resumable behind.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    runner.thread_map_path(state_dir / "slice-123.codex-thread").mkdir()
+
+    exit_code = _run_profile(tmp_path, fake=fake, state_dir=state_dir)
+
+    assert exit_code == runner.EXIT_STATE_UNUSABLE
+    assert not record.exists(), "Codex must not be launched"
+
+
+def test_removing_the_thread_id_file_forces_a_fresh_thread(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the single-id file is the operator's reset switch.
+
+    Post-merge teardown and the runner's own failure diagnostic both tell an
+    operator to remove it to force a fresh thread. Honouring only the map would
+    make both instructions silently ineffective.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    home = tmp_path / "home"
+    home.mkdir()
+    runner.write_thread_map(thread_path, {str(home): THREAD_A})
+    assert not thread_path.exists()
+
+    assert _run_profile(
+        tmp_path, fake=fake, codex_home=str(home), state_dir=state_dir
+    ) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv, "a removed id file must force a fresh thread"
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "stored thread id file is gone" in log_text
+
+
+def test_an_emptied_map_does_not_re_adopt_the_quarantined_mirror(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the crash window between emptying the map and renaming.
+
+    A confirmed dead session empties the map and then renames the mirror. If
+    the host dies between the two, the mirror still holds the dead id; falling
+    back to it because the map is empty would resume exactly what was just
+    confirmed gone.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+    runner.write_thread_map(thread_path, {})
+
+    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv
+    assert THREAD_A not in " ".join(argv)
+
+
+def test_the_thread_map_writer_cannot_outgrow_the_reader(tmp_path: Path) -> None:
+    """Regression: an unbounded writer plus a bounded reader loses every arc.
+
+    The write succeeds, every later read rejects the file as oversized, and the
+    wake silently starts over having forgotten each remembered profile.
+    """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    current = "/profiles/" + "c" * 200
+    crowded = {f"/profiles/{'p' * 200}-{i}": THREAD_A for i in range(40)}
+    crowded[current] = THREAD_B
+
+    bounded = runner.bound_thread_map(crowded, current)
+    runner.write_thread_map(thread_path, bounded)
+
+    assert current in bounded, "the profile being written must always survive"
+    assert len(bounded) <= runner.MAX_THREAD_MAP_ENTRIES
+    raw = runner.thread_map_path(thread_path).read_bytes()
+    assert len(raw) <= runner.MAX_THREAD_MAP_BYTES
+    read_back, problem = runner.read_thread_map(thread_path)
+    assert problem is None, "anything the writer produced must be readable"
+    assert read_back[current] == THREAD_B
+

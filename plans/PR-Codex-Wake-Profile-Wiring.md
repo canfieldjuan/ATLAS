@@ -97,6 +97,19 @@ Max files: 5
   FIFO and requires the read to return inside a deadline.
 - An unusable map starts fresh rather than guessing -- settled by
   `::test_an_unusable_thread_map_starts_fresh_rather_than_guessing`.
+- The map destination is preflighted like the thread path -- settled by
+  `::test_the_thread_map_destination_is_preflighted`, which asserts Codex is
+  never launched when the map path is unusable.
+- Removing the thread id file forces a fresh thread even with a populated map
+  -- settled by `::test_removing_the_thread_id_file_forces_a_fresh_thread`, so
+  the documented teardown and the runner's own reset diagnostic both work.
+- An emptied map does not re-adopt a quarantined mirror -- settled by
+  `::test_an_emptied_map_does_not_re_adopt_the_quarantined_mirror`, which pins
+  the crash window between emptying the map and renaming the mirror.
+- The writer cannot produce a map the reader rejects -- settled by
+  `::test_the_thread_map_writer_cannot_outgrow_the_reader`. Reproduced first:
+  the old writer produced 10,353 bytes against a reader limit of 8,192, after
+  which every remembered arc read back as a size error.
 - A dead session is forgotten in the map, not only the mirror -- settled by
   `::test_a_dead_session_is_forgotten_in_the_map_not_only_the_mirror`, which
   asserts the other profile keeps its arc. Negative-probed.
@@ -106,7 +119,7 @@ Max files: 5
 - `CODEX_HOME` is derived from an isolated `HOME` rather than reported unset --
   settled by `::test_codex_home_is_derived_from_an_isolated_home`.
   Negative-probed: removing the derivation makes it fail.
-- Nothing PR #2525 settled regressed -- settled by the full suite at 381 passed.
+- Nothing PR #2525 settled regressed -- settled by the full suite at 385 passed.
 
 **Reachability proof.** The configured chain was run against this head, not the
 runner directly and not an earlier installed build:
@@ -198,26 +211,34 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 163 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 167 passed - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "another_profile or effective_profile"` with the cross-profile check disabled - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "effective_profile or partial_isolation"` with the receipt line removed - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof` - Result: pass - Environment: local
 - Command: `bash scripts/check_ascii_python.sh` - Result: pass - Environment: local
 
-The two `fail` results are negative probes: each new regression test was shown
+- Command: `pytest tests/test_codex_wake_run.py -q -k "map_destination_is_preflighted or removing_the_thread_id_file or emptied_map_does_not_re_adopt or writer_cannot_outgrow"` against the pre-fix runner - Result: fail - Environment: local
+
+Every regression test in this slice was run against the pre-fix code and shown
+to fail there before being accepted as proof. One of them initially failed only
+because the old code lacked a helper, which is not a reproduction, so the
+writer/reader size mismatch was reproduced directly instead: the old writer
+produced 10,353 bytes against a reader limit of 8,192.
+
+The `fail` results above are negative probes: each new regression test was shown
 to fail with its fix removed and pass with it restored.
 
 ## Estimated diff size
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +392 |
-| `scripts/codex_wake_run.py` | +344 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | +223 |
-| `docs/long_running_session_watcher_handoff.md` | +32 |
-| **Total** | **998** |
+| `tests/test_codex_wake_run.py` | +487 |
+| `scripts/codex_wake_run.py` | +408 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | +244 |
+| `docs/long_running_session_watcher_handoff.md` | +38 |
+| **Total** | **1184** |
 
-Diff-budget override: 998 lines against a 400-line soft cap. Runtime change is 344 lines; the other two thirds are the regression tests the contract names and
+Diff-budget override: 1184 lines against a 400-line soft cap. Runtime change is 408 lines; the other two thirds are the regression tests the contract names and
 the plan. Splitting tests from the behavior they pin would leave a window where
 a cross-profile resume silently discards an arc with nothing to catch it, which
 is the defect this slice exists to prevent.
