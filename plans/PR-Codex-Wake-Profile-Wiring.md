@@ -50,10 +50,11 @@ format, the descriptor-based reader, the atomic writer and the quarantine.
 and resume as must-not-change, and fact 2 was only established afterwards. The
 invariant that replaces that prohibition is narrower and checkable: the
 persistence mechanism is unchanged, and only the path it operates on is chosen
-by profile. The baseline profile, the one in effect with no profile arguments,
-which covers every deployment predating this change, keeps exactly
-`<watcher>.codex-thread`. For it, persistence and resume are byte-for-byte what
-they were.
+by that wake's effective Codex home, including a wake given no profile
+arguments, whose home is whatever it inherits. A watcher created before this
+change keeps its arc: its single `<watcher>.codex-thread` is adopted once into
+the inherited home's file, which is the home the pre-profile runner used, and
+renamed to `.migrated`.
 
 **One correction to the accepted contract.** Its reachability criterion says an
 isolated first wake must show `input_tokens` near the 27,495 row rather than the
@@ -79,16 +80,20 @@ Max files: 5
    and apply them to the child environment.
 2. Log the effective profile and the thread file on every launching turn
    (contract I5).
-3. Give each profile its own thread file; the baseline keeps the existing one
-   (contract I8).
-4. Give atomic-write staging files unpredictable names.
-5. Tests for each of the above, and the handoff doc.
+3. Give each effective Codex home its own thread file, including the inherited
+   one, and adopt a pre-profile thread file into the inherited home's file
+   once (contract I8).
+4. Add `--reset-threads`, which removes exactly one watcher's thread files
+   under its wake lock, and document it in place of a filename glob.
+5. Give atomic-write staging files unpredictable names.
+6. Tests for each of the above, and the handoff doc.
 
 ### Files touched
 
 - `docs/long_running_session_watcher_handoff.md`
 - `plans/PR-Codex-Wake-Profile-Wiring.md`
 - `scripts/codex_wake_run.py`
+- `tests/test_codex_wake_end_to_end.py`
 - `tests/test_codex_wake_run.py`
 
 ### Review Contract
@@ -118,13 +123,39 @@ Max files: 5
 - A misconfigured profile is launched into rather than pre-validated, and
   records no thread for any profile -- settled by
   `::test_a_missing_profile_is_launched_into_and_fails_closed`.
-- With no profile configured, persistence is exactly as before -- settled by
-  `::test_no_profile_keeps_the_legacy_thread_file_exactly` and by every #2525
-  test, which runs unchanged.
+- The persistence mechanism is unchanged -- settled by every #2525 test, which
+  runs with only its fixture path computed through `profile_thread_path`.
+- A watcher from before this change keeps its arc -- settled by
+  `::test_a_pre_profile_thread_id_is_adopted_once_and_the_old_file_kept`, which
+  asserts the pre-profile id resumes, lands in the inherited home's file, and
+  the old file is kept as `.migrated`.
+- An inherited home change never resumes the other home's arc -- settled by
+  `::test_an_inherited_home_change_does_not_resume_the_other_homes_arc`, which
+  fails behaviourally on the pre-fix runner with exit 76: the second home
+  resumed the first home's id. The migration is also one-shot and crash-safe --
+  settled by `::test_a_migrated_thread_is_not_adopted_again_under_another_home`
+  and `::test_migration_is_skipped_once_any_home_file_exists`, both of which
+  fail with exit 76 on the pre-fix runner.
+- A pre-profile file that exists but cannot be inspected is reported rather
+  than read as absent -- settled by
+  `::test_an_uninspectable_pre_profile_file_is_reported_not_read_as_absent`,
+  which fails on the version that swallowed the error.
+- `--dry-run` shows a pending migration without performing it -- settled by
+  `::test_dry_run_shows_a_pending_migration_without_performing_it`.
+- Reset touches exactly one watcher's thread files and waits for its lock --
+  settled by `::test_watcher_thread_files_match_exactly_one_watcher`,
+  `::test_reset_threads_removes_exactly_this_watchers_thread_files` and
+  `::test_reset_threads_waits_for_the_wake_lock`. These fail on the pre-fix
+  runner only because the function and flag did not exist; the behavioural
+  specimen is the reproduction in which `foo.codex-thread*` matched the files of
+  the distinct valid watcher `foo.codex-thread-review`.
 - Each profile keeps its own arc and switching back resumes it -- settled by
   `::test_each_profile_keeps_its_own_arc_and_switching_back_resumes`.
-- Enabling a profile leaves the legacy arc resumable -- settled by
-  `::test_enabling_a_profile_leaves_the_legacy_arc_resumable`.
+- Enabling a profile leaves the pre-profile arc with the inherited home --
+  settled by `::test_enabling_a_profile_leaves_the_legacy_arc_resumable`, which
+  asserts the new profile starts fresh and the pre-profile id sits in the
+  inherited home's file. It fails with exit 76 on the version that adopted the
+  pre-profile id into whichever profile ran first.
 - A dead session quarantines only its own profile's file -- settled by
   `::test_a_dead_session_quarantines_only_its_own_profile_file`.
 - Writers for different profiles cannot lose each other's arc -- settled by
@@ -156,20 +187,32 @@ Max files: 5
   `profile_directory_argument` is the single admission point. Everything else,
   including empty, whitespace, relative and `~` paths, is rejected with exit 2
   before any turn exists.
+- **A watcher's thread files: CLOSED.** Membership is derived from one exact
+  pattern in `_watcher_thread_pattern`: the pre-profile file, per-home files
+  with a 16-hex-digit digest, and their `.stale` or `.migrated` forms, for
+  exactly one watcher id. Any other name, including another watcher's whose id
+  merely starts with this one, is outside the set and never touched by a reset.
 - **Profile states: OPEN, by design.** Whether a directory is a usable profile
   is decided by Codex and changes with Codex. Outside-set behaviour is defined:
   the runner launches into any admitted path unchanged and the existing receipts
   record whatever Codex does. There is no fallback to select, and no
   state-specific branch may be added.
 
-**Reachability proof.** The configured chain was run twice against this head,
-not against the runner directly: `atlas-pr-watch-and-wake wake-profile-proof`,
-whose `CODEX_WAKE_COMMAND` carries both profile arguments. The watcher's wake
-log records, on both turns, `profile codex_home=/home/juan-canfield/.codex-wake
-(argument) home=/home/juan-canfield/.codex-wake-home (argument)
-thread_file=wake-profile-proof.codex-thread.7cbbb7246829a74e`. The first turn
-records thread `01a0cad7-b821-7080-ae09-3fda1018b339` and the second resumes
-it. The only thread state that watcher has afterwards is that one profile file.
+**Reachability proof.** The configured chain was exercised, not the runner
+directly: `atlas-pr-watch-and-wake`, whose `CODEX_WAKE_COMMAND` carries both
+profile arguments. Two real turns on the round-nine head, `b28cd309a`, logged
+`profile codex_home=/home/juan-canfield/.codex-wake (argument)
+home=/home/juan-canfield/.codex-wake-home (argument)
+thread_file=wake-profile-proof.codex-thread.7cbbb7246829a74e`; the first
+recorded thread `01a0cad7-b821-7080-ae09-3fda1018b339` and the second resumed
+it. This round changed the lock helper, migration and the dry-run path, so the
+chain was run again on this head with `--dry-run` added to the configured
+command, which spends no tokens: the real bridge ran it, and the runner
+selected the same per-home file and reported `argv=codex exec resume
+01a0cad7-b821-7080-ae09-3fda1018b339 ...`, the thread the real turns recorded.
+The resume itself on this head is covered by
+`tests/test_codex_wake_end_to_end.py`, which drives the real bridge against a
+fake Codex.
 
 **Risk areas.** A deployment with no profile behaving differently; an existing
 watcher losing its arc on upgrade; one profile's arc reaching another's turn.
@@ -188,12 +231,19 @@ the arguments plus the current environment into a `WakeProfile` carrying the
 the child's `HOME`. `child_environment` returns `None` when nothing is
 configured, so `Popen` is called exactly as before.
 
-`profile_thread_path` chooses the thread file. The baseline profile gets
-`<watcher>.codex-thread`, unchanged. Any other profile gets
-`<watcher>.codex-thread.<digest>`, where the digest is the first 16 hex
-characters of the SHA-256 of the effective `CODEX_HOME`. From there on,
+`profile_thread_path` chooses the thread file: `<watcher>.codex-thread.<digest>`,
+where the digest is the first 16 hex characters of the SHA-256 of the
+effective `CODEX_HOME`. Every wake is keyed this way, including one given no
+profile arguments, whose effective home is the one it inherits. From there on,
 `run_one_turn` is the #2525 code: the same reader, the same atomic writer, the
 same quarantine, applied to that one file.
+
+Under the wake lock, before the turn, `migrate_legacy_thread` adopts a
+pre-profile `<watcher>.codex-thread` into the inherited home's file, the home
+the pre-profile runner used, and renames the old file to `.migrated`. It does
+so only while the watcher has no per-home file at all, and it reports rather
+than skips a pre-profile file it cannot inspect. `--reset-threads` takes the
+same lock and removes exactly the files `watcher_thread_files` enumerates.
 
 `_atomic_write` stages through `tempfile.mkstemp` in the target directory,
 which opens with `O_CREAT|O_EXCL|O_NOFOLLOW` at mode 0600 and picks an
@@ -201,19 +251,26 @@ unpredictable name.
 
 ### Execution model
 
-**Surface.** One single-valued file per profile per watcher, in one directory
+**Surface.** One single-valued file per effective Codex home per watcher, in one directory
 on one local POSIX filesystem. Wakes of a watcher hold its `flock`, so no two
 wakes of one watcher run at once. An operator or another tool may create,
 replace or remove any of these files at any time. There is no network, lease,
 clock or retry.
 
 **Invariant, over every interleaving that surface admits.** A wake reads and
-writes only its own profile's file, and each file holds one id and is replaced
+writes only its own home's file, and each file holds one id and is replaced
 whole. Therefore no interleaving can make a wake resume another profile's arc,
 because it never reads another profile's file, and no interleaving can make a
 wake erase another profile's arc, because no write touches more than one file
 and no write is a read-modify-write. The only races left are on a single value,
 and they resolve to that value's last whole write.
+
+The one exception is migration, which reads the pre-profile file and writes the
+inherited home's file. It runs under the wake lock, at most once: it only runs
+while the watcher has no per-home file, and it renames the pre-profile file
+away afterwards. A crash between the write and the rename leaves a per-home file
+in place, so the next wake does not adopt the old file again under whatever
+home it runs in.
 
 **Assumptions, stated rather than omitted.**
 
@@ -225,9 +282,13 @@ and they resolve to that value's last whole write.
   assumed not to happen.
 - A symlinked alias of a home is a different string, so it reads as a
   different profile. That errs toward a fresh thread, never a wrong one.
-- Removing thread files while a wake is in flight loses to that wake, which
-  writes its own profile's file when it records its thread. The documented
-  teardown disables the watcher's timer first.
+- The pre-profile runner used whatever home it inherited, so adopting its id
+  into the inherited home is right unless that inherited environment changed
+  while the old runner was still in use. That risk existed before this change,
+  and migration takes it once.
+- Resets are serialized with wakes by `--reset-threads`, which takes the wake
+  lock. Removing files some other way while a wake is in flight loses to that
+  wake, which writes its own home's file when it records its thread.
 
 **Specimen and isolation.** The shared-map design this replaces was reproduced
 losing an update: with profile B recorded out of band between profile A's read
@@ -253,9 +314,20 @@ the handoff doc relies on.
   read-modify-write, and they are removed by construction rather than fixed
   one at a time. The reconciliation ledger keeps those entries as history; the
   behaviour each protected is now pinned against per-profile files.
-- **The baseline keeps the legacy file.** Every existing watcher resumes
-  exactly as before, and the legacy id, created under the baseline home, stays
-  with the baseline profile.
+- **Every wake is keyed by its effective home, including the inherited one.**
+  An earlier revision kept the pre-profile file for any wake without profile
+  arguments. That keyed the file by "whatever the environment says now", so a
+  watcher whose inherited HOME or CODEX_HOME changed between wakes resumed one
+  home's arc inside another and quarantined it. The pre-profile file is now a
+  one-time migration source instead.
+- **Migration goes to the inherited home, not to whichever profile runs first.**
+  The pre-profile runner took no profile arguments, so its id belongs to the
+  home a wake inherits. Adopting it into a newly enabled `--codex-home` would
+  resume an id that home does not hold.
+- **A reset command rather than a filename glob.** Watcher ids may contain dots
+  and hyphens, so `<id>.codex-thread*` matches other valid watchers' files. The
+  command enumerates an exact pattern and takes the wake lock, which also closes
+  the teardown race a manual deletion has.
 - **A digest rather than the path in the filename.** A `CODEX_HOME` can be a
   long absolute path that is not safe to embed in a filename. The receipt line
   names the file in use, so the operator can always see which one a wake used.
@@ -289,24 +361,29 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 173 passed - Environment: local
-- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 391 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 181 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 399 passed - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "outside_the_admitted_domain"` against the pre-fix runner - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "stale_staging_file_does_not_fail_the_thread_write"` against the runner on `main` - Result: fail - Environment: local
-- Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof`, run twice - Result: pass - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py -q -k "inherited_home_change or migrated_thread_is_not_adopted or migration_is_skipped"` against the pre-fix runner - Result: fail - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py -q -k "enabling_a_profile_leaves"` against the version that adopted into the current profile - Result: fail - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py -q -k "uninspectable"` against the version that swallowed the lstat error - Result: fail - Environment: local
+- Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof`, run twice on `b28cd309a` - Result: pass - Environment: local
+- Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof-dry`, the same configured command with `--dry-run`, on this head - Result: pass - Environment: local
 - Command: `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - Result: pass - Environment: local
 - Command: `bash scripts/check_ascii_python.sh` - Result: pass - Environment: local
 - Command: `python scripts/sync_pr_plan.py plans/PR-Codex-Wake-Profile-Wiring.md origin/main --check` - Result: pass - Environment: local
 
-The two `fail` results are the regression tests shown failing on the code
-before their fix.
+The `fail` results are the regression tests shown failing on the code before
+their fix.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| `docs/long_running_session_watcher_handoff.md` | 53 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | 312 |
-| `scripts/codex_wake_run.py` | 251 |
-| `tests/test_codex_wake_run.py` | 446 |
-| **Total** | **1062** |
+| `docs/long_running_session_watcher_handoff.md` | 67 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | 389 |
+| `scripts/codex_wake_run.py` | 520 |
+| `tests/test_codex_wake_end_to_end.py` | 11 |
+| `tests/test_codex_wake_run.py` | 727 |
+| **Total** | **1714** |

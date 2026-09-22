@@ -162,16 +162,31 @@ and could reject a profile Codex accepts. Every launching turn logs which
 profile it used, including when none is configured.
 
 A stored thread id belongs to the `CODEX_HOME` that created it, so each
-profile keeps its own thread file. A wake with no profile arguments uses
-`<session-id>.codex-thread`, exactly as before. Any other profile uses a sibling
-named `<session-id>.codex-thread.<digest>`, where the digest is taken from the
-effective `CODEX_HOME`, and the wake log's `profile ...` line names the file in
-use. Switching profiles starts a fresh thread in the new profile's file;
-switching back finds the original file untouched and resumes it.
+effective Codex home keeps its own thread file, named
+`<session-id>.codex-thread.<digest>` from a digest of that home. That includes
+a wake given no profile arguments: its home is whatever `CODEX_HOME` or
+`$HOME/.codex` it inherits, so if a watcher's environment changes, the new home
+starts a fresh thread instead of resuming one that home does not hold. The wake
+log's `profile ...` line names the file in use.
 
-To force a fresh thread for one profile, remove that profile's file. To reset a
-watcher entirely, at post-merge teardown or when resumes keep failing, remove
-every `<session-id>.codex-thread*` file.
+A watcher created before this change has a single `<session-id>.codex-thread`
+file. Its next wake adopts that id into the file for the home it runs under and
+renames the old file to `<session-id>.codex-thread.migrated`, so the arc
+continues and no other home can adopt it later. `--dry-run` reports a pending
+migration without performing it.
+
+To reset a watcher, at post-merge teardown or when resumes keep failing, run
+the runner's reset command rather than deleting files by pattern:
+
+```bash
+~/.local/bin/atlas-codex-wake-run --watcher-id '<session-id>' --reset-threads
+```
+
+It removes exactly that watcher's thread files, including quarantined and
+migrated ones, and it takes the watcher's wake lock first, so it cannot
+interleave with a wake in flight. A filename glob is not safe here: watcher ids
+may contain dots and hyphens, so `<session-id>.codex-thread*` also matches a
+different watcher named `<session-id>.codex-thread-<anything>`.
 
 Use absolute paths, and quote each one individually as shown. The bridge does
 not run this through a shell: it `shlex.split`s the value and hands the argv
@@ -235,12 +250,11 @@ Codex process and the ordinary commands it starts do not outlive the wake lock.
 A descendant that calls `setsid` leaves that group and is not covered; issue
 #2526 tracks containment a descendant cannot opt out of.
 
-A merged PR leaves its thread state behind: one `.codex-thread` file per
-profile the watcher ever ran under. Remove every `<session-id>.codex-thread*`
-file during the post-merge teardown in AGENTS 3c.1, after the watcher's timer is
-disabled, so the next PR on that watcher id does not resume a finished arc. A
-wake already in flight when the files are removed writes its own profile's file
-back when it records its thread, which is why the timer goes first.
+A merged PR leaves its thread state behind: one thread file per Codex home the
+watcher ran under. Run `atlas-codex-wake-run --watcher-id '<session-id>'
+--reset-threads` during the post-merge teardown in AGENTS 3c.1 so the next PR
+on that watcher id does not resume a finished arc. The reset takes the wake
+lock, so it waits for any wake in flight rather than racing it.
 
 Wake-source rules:
 

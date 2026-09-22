@@ -14,6 +14,7 @@ Only the external Codex binary is faked.
 from __future__ import annotations
 
 import json
+import re
 import os
 from pathlib import Path
 import stat
@@ -170,9 +171,13 @@ def test_bridge_wakes_the_installed_runner_and_records_the_thread(
     assert "#4242" in invocation["stdin"]
 
     # The runner recorded resumable state and an auditable wake record.
-    assert (state_dir / "e2e-wake.codex-thread").read_text(
-        encoding="utf-8"
-    ).strip() == THREAD_ID
+    # One thread file per effective Codex home; this watcher ran under one.
+    thread_files = [
+        p for p in state_dir.iterdir()
+        if re.fullmatch(r"e2e-wake\.codex-thread\.[0-9a-f]{16}", p.name)
+    ]
+    assert len(thread_files) == 1, [p.name for p in state_dir.iterdir()]
+    assert thread_files[0].read_text(encoding="utf-8").strip() == THREAD_ID
     assert (state_dir / "e2e-wake.codex-wake.last.md").read_text(
         encoding="utf-8"
     ).strip() == "addressed the review"

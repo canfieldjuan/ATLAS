@@ -713,29 +713,122 @@ def child_environment(profile: WakeProfile) -> dict[str, str] | None:
     return env
 
 
+THREAD_DIGEST_LEN = 16
+
+
 def profile_thread_path(state_dir: Path, watcher_id: str, profile: WakeProfile) -> Path:
     """The file holding this profile's thread id for this watcher.
 
     A rollout lives only inside the CODEX_HOME that created it, so a thread id
-    is meaningful only under that profile. Each profile therefore gets its own
-    thread file rather than a share of one document: a single-valued file per
-    profile needs no read-modify-write, so no interleaving of writers can lose
-    another profile's arc, and switching back to a profile finds its file where
-    it left it.
+    is meaningful only under that home. Every profile, including the one a wake
+    inherits when it is given no profile arguments, is therefore keyed by its
+    effective CODEX_HOME. Keying the argument-free case by "whatever the
+    environment says right now" instead let two different homes share one file
+    whenever a watcher's inherited HOME or CODEX_HOME changed between wakes,
+    and the second home then resumed the first's id and quarantined it.
 
-    The baseline profile -- the one in effect with no profile arguments, which
-    is every deployment that predates this change -- keeps exactly the file,
-    reader, writer and quarantine it had before. Other profiles get a sibling
-    keyed by a digest of the effective CODEX_HOME, because that value can be a
-    long absolute path that is not safe to embed in a filename.
+    One single-valued file per home needs no read-modify-write, so no
+    interleaving of writers can lose another home's arc. The digest is used
+    because a CODEX_HOME can be a long absolute path unsafe in a filename; the
+    receipt line names the file in use.
     """
-    legacy = state_dir / f"{watcher_id}.codex-thread"
-    baseline = resolve_profile(codex_home=None, agent_home=None)
-    if profile.effective_codex_home == baseline.effective_codex_home:
-        return legacy
-    digest = hashlib.sha256(profile.effective_codex_home.encode("utf-8")).hexdigest()[:16]
-    return state_dir / f"{watcher_id}.codex-thread.{digest}"
+    digest = hashlib.sha256(profile.effective_codex_home.encode("utf-8")).hexdigest()
+    return state_dir / f"{watcher_id}.codex-thread.{digest[:THREAD_DIGEST_LEN]}"
 
+
+def legacy_thread_path(state_dir: Path, watcher_id: str) -> Path:
+    """The single thread file every watcher used before profiles existed."""
+    return state_dir / f"{watcher_id}.codex-thread"
+
+
+def _watcher_thread_pattern(watcher_id: str) -> re.Pattern[str]:
+    # Exact: this watcher's legacy file, its per-home files, and their
+    # quarantined or migrated forms. Watcher ids may contain dots and hyphens,
+    # so a prefix glob such as "<id>.codex-thread*" also matches another valid
+    # watcher named "<id>.codex-thread-<anything>".
+    return re.compile(
+        rf"{re.escape(watcher_id)}\.codex-thread"
+        rf"(?:\.[0-9a-f]{{{THREAD_DIGEST_LEN}}})?"
+        r"(?:\.(?:stale|migrated))?"
+    )
+
+
+def watcher_thread_files(state_dir: Path, watcher_id: str) -> list[Path]:
+    """Every thread-state file belonging to exactly this watcher."""
+    # Callers create the state directory before listing it, so a failure here
+    # is a real fault and is raised rather than read as "no files".
+    pattern = _watcher_thread_pattern(watcher_id)
+    return sorted(state_dir / n for n in os.listdir(state_dir) if pattern.fullmatch(n))
+
+
+def _live_home_files(state_dir: Path, watcher_id: str) -> list[Path]:
+    live = re.compile(
+        rf"{re.escape(watcher_id)}\.codex-thread\.[0-9a-f]{{{THREAD_DIGEST_LEN}}}"
+    )
+    return [p for p in watcher_thread_files(state_dir, watcher_id) if live.fullmatch(p.name)]
+
+
+def legacy_migration_source(
+    state_dir: Path, watcher_id: str, thread_path: Path
+) -> tuple[Path | None, str | None]:
+    """The legacy file this wake should adopt, or None.
+
+    Adoption happens at most once per watcher, and only while the watcher has
+    no per-home file at all. After adopting, the legacy file is renamed away,
+    so no later wake under a different home can adopt it. The no-per-home-file
+    condition covers a crash between writing the adopted id and renaming the
+    legacy file: the adopted file already exists, so the legacy file is left
+    alone rather than adopted a second time under whatever home runs next.
+    """
+    legacy = legacy_thread_path(state_dir, watcher_id)
+    try:
+        os.lstat(legacy)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        # Present but not inspectable is not the same as absent: reading it as
+        # absent would silently drop a pre-profile arc. Say so instead.
+        return None, f"could not inspect the pre-profile thread file {legacy.name}: {exc}"
+    if _live_home_files(state_dir, watcher_id):
+        return None, None
+    return legacy, None
+
+
+def migrate_legacy_thread(
+    state_dir: Path, watcher_id: str, thread_path: Path
+) -> str | None:
+    """Adopt a pre-profile thread id into the inherited home's file. Returns a log note.
+
+    The caller must hold the wake lock. The pre-profile runner took no profile
+    arguments, so the id belongs to the home a wake inherits when given none,
+    and it is adopted into that home's file whichever profile this wake runs
+    under. Adopting it into the current wake's file instead would, under a
+    newly enabled --codex-home, resume an id that home does not hold and then
+    quarantine the only pointer to the original arc. If the inherited
+    environment itself changed while the old runner was in use, that was
+    already a risk then; it is taken once here and never again.
+    """
+    thread_path = profile_thread_path(
+        state_dir, watcher_id, resolve_profile(codex_home=None, agent_home=None)
+    )
+    legacy, problem = legacy_migration_source(state_dir, watcher_id, thread_path)
+    if problem:
+        return f"did not migrate: {problem}"
+    if legacy is None:
+        return None
+    legacy_id, reason = read_thread_id(legacy)
+    if legacy_id is None:
+        return (
+            f"left the pre-profile thread file {legacy.name} in place: "
+            f"{reason or 'it holds no thread id'}"
+        )
+    write_thread_id(thread_path, legacy_id)
+    migrated = legacy.with_name(legacy.name + ".migrated")
+    os.replace(legacy, migrated)
+    return (
+        f"adopted pre-profile thread id {legacy_id} into {thread_path.name}; "
+        f"the old file is kept as {migrated.name}"
+    )
 
 
 def profile_receipt(profile: WakeProfile, thread_path: Path) -> str:
@@ -1258,6 +1351,53 @@ def run_one_turn(
     return finish(exit_code, last_message + "\n")
 
 
+def _acquire_wake_lock(
+    lock_handle: Any, log_handle: Any, lock_path: Path, watcher_id: str
+) -> int | None:
+    """Wait for the per-watcher wake lock. Returns None once held, else an exit code."""
+    # Wait for the lock instead of handing this prompt to whoever holds it. A
+    # file-based handoff cannot be made strand-free: every version of it left a
+    # window between the holder's last queue check and its release in which a
+    # contender could enqueue and return success with nobody left to consume.
+    # Waiting removes the queue, so the only shared state is the lock itself
+    # and every wake that acquires it runs its own turn with its own prompt.
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno == errno.EINTR:
+                # A signal arrived mid-call; that is not contention.
+                continue
+            if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                # EIO, EBADF, ENOLCK and friends are not another holder.
+                # Retrying them for the full wait window would stall every wake
+                # for ten minutes and then report a lock timeout that hides the
+                # real fault.
+                _log(
+                    log_handle,
+                    f"cannot lock {lock_path}: {exc}. This is not "
+                    "contention, so the wake is failing immediately "
+                    "rather than waiting out the timeout.",
+                )
+                print(f"cannot lock {lock_path}: {exc}", file=sys.stderr)
+                return EXIT_STATE_UNUSABLE
+            if time.monotonic() >= deadline:
+                _log(
+                    log_handle,
+                    f"gave up after {LOCK_WAIT_SECONDS}s waiting for the "
+                    f"{watcher_id} wake lock; this wake did not run",
+                )
+                print(
+                    f"timed out waiting for the {watcher_id} wake lock",
+                    file=sys.stderr,
+                )
+                return EXIT_LOCK_TIMEOUT
+            time.sleep(1.0)
+            continue
+        return None
+
+
 def run_wake(
     *,
     watcher_id: str,
@@ -1284,7 +1424,20 @@ def run_wake(
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
 
     if dry_run:
-        thread_id, ignored_reason = read_thread_id(thread_path)
+        inherited_path = profile_thread_path(
+            state_dir, watcher_id, resolve_profile(codex_home=None, agent_home=None)
+        )
+        pending, migration_problem = legacy_migration_source(
+            state_dir, watcher_id, inherited_path
+        )
+        # A pending migration only changes what this wake resumes when this
+        # wake runs under the inherited home that will receive it.
+        adopting = pending is not None and inherited_path == thread_path
+        thread_id, ignored_reason = read_thread_id(pending if adopting else thread_path)
+        if migration_problem:
+            print(f"legacy_migration=blocked: {migration_problem}")
+        if pending is not None:
+            print(f"legacy_migration=pending from {pending.name} to {inherited_path.name}")
         argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
         print(f"mode={'resume' if thread_id else 'fresh'}")
         print(f"cwd={repo_dir}")
@@ -1311,53 +1464,15 @@ def run_wake(
             return 2
 
         with lock_handle:
-            # Wait for the lock instead of handing this prompt to whoever holds
-            # it. A file-based handoff cannot be made strand-free: every version
-            # of it left a window between the holder's last queue check and its
-            # release in which a contender could enqueue and return success with
-            # nobody left to consume. Waiting removes the queue, so the only
-            # shared state is the lock itself and every wake that acquires it
-            # runs its own turn with its own prompt.
-            deadline = time.monotonic() + LOCK_WAIT_SECONDS
-            acquired = False
-            while True:
-                try:
-                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError as exc:
-                    if exc.errno == errno.EINTR:
-                        # A signal arrived mid-call; that is not contention.
-                        continue
-                    if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                        # EIO, EBADF, ENOLCK and friends are not another
-                        # holder. Retrying them for the full wait window would
-                        # stall every wake for ten minutes and then report a
-                        # lock timeout that hides the real fault.
-                        _log(
-                            log_handle,
-                            f"cannot lock {lock_path}: {exc}. This is not "
-                            "contention, so the wake is failing immediately "
-                            "rather than waiting out the timeout.",
-                        )
-                        print(f"cannot lock {lock_path}: {exc}", file=sys.stderr)
-                        return EXIT_STATE_UNUSABLE
-                    if time.monotonic() >= deadline:
-                        break
-                    time.sleep(1.0)
-                    continue
-                acquired = True
-                break
+            refusal = _acquire_wake_lock(
+                lock_handle, log_handle, lock_path, watcher_id
+            )
+            if refusal is not None:
+                return refusal
 
-            if not acquired:
-                _log(
-                    log_handle,
-                    f"gave up after {LOCK_WAIT_SECONDS}s waiting for the "
-                    f"{watcher_id} wake lock; this wake did not run",
-                )
-                print(
-                    f"timed out waiting for the {watcher_id} wake lock",
-                    file=sys.stderr,
-                )
-                return EXIT_LOCK_TIMEOUT
+            note = migrate_legacy_thread(state_dir, watcher_id, thread_path)
+            if note:
+                _log(log_handle, note)
 
             result = run_one_turn(
                 watcher_id=watcher_id,
@@ -1375,6 +1490,47 @@ def run_wake(
             return result.exit_code
 
 
+def reset_watcher_threads(*, watcher_id: str, state_dir: Path) -> int:
+    """Remove every thread-state file of exactly this watcher, under its lock.
+
+    Taking the wake lock means a reset cannot interleave with a wake in flight,
+    which would otherwise write its own thread file back after the reset. The
+    file set comes from an exact pattern rather than a prefix glob, because a
+    glob such as "<id>.codex-thread*" also matches a different valid watcher
+    named "<id>.codex-thread-<anything>".
+    """
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        log_handle = (state_dir / f"{watcher_id}.codex-wake.log").open("a", encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot use the state directory {state_dir}: {exc}", file=sys.stderr)
+        return EXIT_STATE_UNUSABLE
+    lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
+    with log_handle:
+        try:
+            lock_handle = lock_path.open("w", encoding="utf-8")
+        except OSError as exc:
+            print(f"cannot open wake lock {lock_path}: {exc}", file=sys.stderr)
+            return 2
+        with lock_handle:
+            refusal = _acquire_wake_lock(lock_handle, log_handle, lock_path, watcher_id)
+            if refusal is not None:
+                return refusal
+            failed = 0
+            for path in watcher_thread_files(state_dir, watcher_id):
+                try:
+                    # Already gone is the outcome a reset wants, not a failure.
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    failed += 1
+                    print(f"could not remove {path}: {exc}", file=sys.stderr)
+                    _log(log_handle, f"reset could not remove {path.name}: {exc}")
+                    continue
+                print(f"removed {path.name}")
+                _log(log_handle, f"reset removed {path.name}")
+            return EXIT_STATE_UNUSABLE if failed else 0
+
+
 def profile_directory_argument(value: str) -> str:
     """Admit only a non-empty absolute path, lexically normalized.
 
@@ -1384,7 +1540,7 @@ def profile_directory_argument(value: str) -> str:
     `codex doctor --json`, so accepting "" would key two different Codex homes
     as one. A relative path is resolved by Codex against its working directory,
     which is the repository, not what an operator reading the watcher config
-    would assume, and `~` is not expanded because the bridge runs no shell.
+    would expect, and `~` is not expanded because the bridge runs no shell.
     Normalization is lexical only (trailing slashes, `.` and `..`); it touches
     no filesystem, so it cannot race, and a symlinked alias still reads as a
     different profile, which errs toward a fresh thread rather than a wrong one.
@@ -1402,7 +1558,7 @@ def profile_directory_argument(value: str) -> str:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watcher-id", required=True)
-    parser.add_argument("--repo-dir", required=True, type=Path)
+    parser.add_argument("--repo-dir", type=Path)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument(
         "--sandbox",
@@ -1437,6 +1593,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
     parser.add_argument(
+        "--reset-threads",
+        action="store_true",
+        help=(
+            "Remove every thread file of exactly this watcher, under its wake "
+            "lock, so its next wake starts fresh under every profile. Use this "
+            "rather than a filename glob."
+        ),
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the argv this wake would run and exit without calling Codex.",
@@ -1467,6 +1632,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"invalid watcher id: {args.watcher_id!r}", file=sys.stderr)
         return 2
 
+    if args.reset_threads:
+        return reset_watcher_threads(
+            watcher_id=args.watcher_id, state_dir=args.state_dir.expanduser()
+        )
+
+    if args.repo_dir is None:
+        print("--repo-dir is required", file=sys.stderr)
+        return 2
     repo_dir = args.repo_dir.expanduser()
     if not repo_dir.is_dir():
         print(f"repo dir is not a directory: {repo_dir}", file=sys.stderr)
