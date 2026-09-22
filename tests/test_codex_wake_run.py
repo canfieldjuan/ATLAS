@@ -2357,82 +2357,128 @@ def test_a_missing_profile_is_launched_into_and_fails_closed(
     assert not (state_dir / "slice-123.codex-thread").exists()
 
 
-def test_a_thread_from_another_profile_starts_fresh_without_quarantine(
+def _profile(codex_home: str | None = None, agent_home: str | None = None):
+    return runner.resolve_profile(codex_home=codex_home, agent_home=agent_home)
+
+
+def test_switching_profiles_and_back_resumes_the_original_arc(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """Regression: a rollout does not exist outside the CODEX_HOME that made it.
+    """Regression: the headline guarantee of the profile-scoped thread id.
 
-    Reproduced against the real CLI: resuming such an id returns
-    `no rollout found for thread id ... (code -32600)`, after which the runner
-    quarantines it and the arc is lost. Detect the mismatch instead.
+    A rollout lives only inside the CODEX_HOME that created it, so each profile
+    needs its own remembered arc. Keeping one id meant switching away and back
+    started a third thread and silently abandoned the first.
     """
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
     state_dir = tmp_path / "state"
-    state_dir.mkdir()
+    home_a = tmp_path / "home-a"
+    home_b = tmp_path / "home-b"
+    for d in (home_a, home_b):
+        d.mkdir()
+
+    fake_a, _ra = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, codex_home=str(home_a), state_dir=state_dir) == 0
+
+    other = tmp_path / "other"
+    other.mkdir()
+    fake_b, record_b = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, codex_home=str(home_b), state_dir=state_dir) == 0
+    argv_b = json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv_b, "must not resume profile A's arc under profile B"
+
+    back = tmp_path / "back"
+    back.mkdir()
+    fake_back, record_back = _fake_codex(back, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_back, codex_home=str(home_a), state_dir=state_dir) == 0
+
+    argv_back = json.loads(record_back.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv_back and THREAD_A in argv_back, (
+        f"switching back must resume the original arc, got {argv_back}"
+    )
     thread_path = state_dir / "slice-123.codex-thread"
-    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
-    old_home = tmp_path / "old-codex-home"
-    new_home = tmp_path / "new-codex-home"
-    old_home.mkdir()
-    new_home.mkdir()
-    runner.record_thread_profile(
-        thread_path,
-        runner.resolve_profile(codex_home=str(old_home), agent_home=None),
-    )
-
-    exit_code = _run_profile(
-        tmp_path, fake=fake, codex_home=str(new_home), state_dir=state_dir
-    )
-
-    assert exit_code == 0
-    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" not in argv, f"must not attempt a cross-profile resume: {argv}"
-    assert not thread_path.with_name(
-        thread_path.name + ".stale"
-    ).exists(), "a live session in another profile must not be quarantined"
-    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_B
-    assert runner.stored_thread_profile(thread_path) == (str(new_home), None)
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "does not exist outside the profile that created it" in log_text
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None
+    assert mapping == {str(home_a): THREAD_A, str(home_b): THREAD_B}
 
 
-def test_a_thread_with_no_recorded_profile_still_resumes(
+def test_a_legacy_thread_id_is_adopted_and_recorded_on_attach(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """Backward compatibility: every watcher predating the marker keeps its arc."""
+    """Regression: ownership must be backfilled, not left unknown.
+
+    A watcher predating the map resumes its id, but if that attach records no
+    ownership the next profile change still attempts a cross-profile resume and
+    quarantines the arc.
+    """
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
-    assert not runner.profile_marker_path(state_dir / "slice-123.codex-thread").exists()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+    home = tmp_path / "home"
+    home.mkdir()
+    assert not runner.thread_map_path(thread_path).exists()
 
-    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
+    assert _run_profile(tmp_path, fake=fake, codex_home=str(home), state_dir=state_dir) == 0
 
     argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" in argv and THREAD_A in argv
+    assert "resume" in argv and THREAD_A in argv, "a legacy id must still resume"
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None
+    assert mapping == {str(home): THREAD_A}, "the attach must record who owns it"
 
 
-def test_an_unreadable_profile_marker_starts_fresh_rather_than_guessing(
+def test_the_thread_id_and_its_owner_are_one_record(tmp_path: Path) -> None:
+    """Regression: two durable writes can disagree after a crash between them.
+
+    Pairing the id with its profile inside a single atomically replaced
+    document makes a mismatched pair unrepresentable rather than merely
+    unlikely.
+    """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    profile = _profile(codex_home=str(tmp_path / "home"))
+
+    runner.remember_thread(thread_path, profile, THREAD_A)
+
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None
+    assert mapping == {profile.effective_codex_home: THREAD_A}
+    # The pairing lives in one file, so there is no second file to fall behind.
+    assert runner.thread_map_path(thread_path).exists()
+    assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
+
+
+def test_the_thread_map_is_read_through_the_bounded_safe_path(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """The other side of the marker boundary.
+    """Regression: the same FIFO hazard the thread file was hardened against.
 
-    A missing marker means "predates this feature" and must resume. A marker
-    that exists but cannot be read means the owner is unknown, which is not the
-    same thing: resuming could land a cross-profile resume that loses the arc
-    and spends a wake discovering it, so the cheaper failure is chosen and said
-    out loud.
+    A by-name read of a planted FIFO blocks forever while the wake holds the
+    lock, so every later wake times out behind it.
     """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    os.mkfifo(runner.thread_map_path(thread_path))
+
+    finished, result = _call_with_deadline(
+        lambda: runner.read_thread_map(thread_path), 10.0
+    )
+
+    assert finished, "reading the thread map blocked while holding the wake lock"
+    mapping, problem = result
+    assert mapping == {}
+    assert problem is not None and "not a regular file" in problem
+
+
+def test_an_unusable_thread_map_starts_fresh_rather_than_guessing(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The other side of the map boundary: unknown ownership is not no ownership."""
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     thread_path = state_dir / "slice-123.codex-thread"
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
-    runner.profile_marker_path(thread_path).write_bytes(b"\xff\xfe\xfa")
-
-    owner, problem = runner.stored_thread_profile(thread_path)
-    assert owner is None
-    assert problem is not None and "not valid UTF-8" in problem
+    runner.thread_map_path(thread_path).write_text("{not json", encoding="utf-8")
 
     assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
 
@@ -2441,4 +2487,29 @@ def test_an_unreadable_profile_marker_starts_fresh_rather_than_guessing(
     assert not thread_path.with_name(thread_path.name + ".stale").exists()
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
     assert "cannot tell which profile owns" in log_text
+
+
+def test_codex_home_is_derived_from_an_isolated_home(tmp_path: Path) -> None:
+    """Regression: Codex has no unset CODEX_HOME; it defaults to $HOME/.codex.
+
+    Verified against the real CLI: running with HOME set and CODEX_HOME absent
+    created <home>/.codex and authenticated against it. Reporting "unset" would
+    put a false profile in the receipt and make two threads from different
+    derived homes compare equal.
+    """
+    agent_home = tmp_path / "wake-home"
+    profile = runner.resolve_profile(
+        codex_home=None, agent_home=str(agent_home), environ={}
+    )
+
+    assert profile.effective_codex_home == str(agent_home / ".codex")
+    assert profile.codex_home_origin == "derived from HOME"
+    # Both roots moved together, so this is not partial isolation.
+    assert profile.partial_reason is None
+
+    only_codex = runner.resolve_profile(
+        codex_home=str(tmp_path / "ch"), agent_home=None, environ={"HOME": "/real"}
+    )
+    assert only_codex.partial_reason is not None
+    assert "HOME is not isolated" in only_codex.partial_reason
 

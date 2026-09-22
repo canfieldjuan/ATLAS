@@ -83,13 +83,24 @@ Max files: 5
   by `::test_a_missing_profile_is_launched_into_and_fails_closed`, which
   asserts Codex was invoked, received the nonexistent path unchanged, and that
   its exit code survived.
-- A thread id from another profile starts fresh and is not quarantined --
-  settled by `::test_a_thread_from_another_profile_starts_fresh_without_quarantine`.
-  Negative-probed: disabling the check makes it fail with exit 76.
-- A thread id with no recorded owner still resumes -- settled by
-  `::test_a_thread_with_no_recorded_profile_still_resumes`, so no existing
-  watcher loses its arc on upgrade.
-- Nothing PR #2525 settled regressed -- settled by the full suite at 157 passed.
+- Switching profiles and back resumes the original arc -- settled by
+  `::test_switching_profiles_and_back_resumes_the_original_arc`, which runs
+  three wakes across two profiles and asserts the map holds both arcs.
+  Negative-probed: keeping only the newest entry makes it fail.
+- A legacy id resumes and its ownership is backfilled on attach -- settled by
+  `::test_a_legacy_thread_id_is_adopted_and_recorded_on_attach`, so a later
+  profile change cannot quarantine it.
+- The id and its owner are one record -- settled by
+  `::test_the_thread_id_and_its_owner_are_one_record`.
+- The map is read through the bounded safe path -- settled by
+  `::test_the_thread_map_is_read_through_the_bounded_safe_path`, which plants a
+  FIFO and requires the read to return inside a deadline.
+- An unusable map starts fresh rather than guessing -- settled by
+  `::test_an_unusable_thread_map_starts_fresh_rather_than_guessing`.
+- `CODEX_HOME` is derived from an isolated `HOME` rather than reported unset --
+  settled by `::test_codex_home_is_derived_from_an_isolated_home`.
+  Negative-probed: removing the derivation makes it fail.
+- Nothing PR #2525 settled regressed -- settled by the full suite at 379 passed.
 
 **Reachability proof.** The configured chain was run, not the runner directly:
 `atlas-pr-watch-and-wake wake-profile-proof`, whose watcher config carries both
@@ -114,22 +125,48 @@ values the child will see, each tagged `argument`, `inherited` or `unset`.
 `child_environment` returns `None` when nothing is configured, so `Popen` is
 called with no `env=` at all and an unconfigured deployment is untouched.
 
-The thread id gains a sibling marker file holding the `CODEX_HOME` that owns it.
-Before a resume, `foreign_thread_reason` compares the marker to the effective
-profile; a mismatch logs why and drops the id, so no resume is attempted and the
-missing-session quarantine cannot fire. An absent marker counts as a match,
-which keeps every watcher that predates this change resuming as before.
+Thread ids are kept in one atomically replaced JSON map, `{codex_home:
+thread_id}`, beside the existing single-id file. Each profile therefore keeps
+its own arc: switching away and back resumes the original thread rather than
+starting a third. Pairing the id with its owner inside one document also makes
+a mismatched pair unrepresentable, where an id file plus a separate owner file
+could disagree if the process died between the two writes.
+
+`thread_id_for_profile` resolves what this profile may resume. A map entry for
+the effective `CODEX_HOME` is resumed. No map at all means the watcher predates
+this change, so its single stored id is adopted by the profile running now and
+written into the map on attach, which is the backfill that stops a later
+profile change from attempting a cross-profile resume. A map that names other
+profiles but not this one starts fresh, and the other arcs stay resumable. An
+unreadable or malformed map starts fresh and says so, because unknown ownership
+is not the same as no ownership.
+
+The map is read through the same descriptor-based path as the thread id, with
+`O_NONBLOCK`, `O_NOFOLLOW`, a regular-file check and a bounded read, so a
+planted FIFO cannot hang a wake that holds the lock.
+
+`resolve_profile` also accounts for Codex having no unset `CODEX_HOME`: it
+defaults to `$HOME/.codex`, and `HOME` is a value this runner may itself be
+changing. Verified against the real CLI, which created `<home>/.codex` and
+authenticated against it. So an isolated `HOME` isolates both roots, and that
+combination is not reported as partial.
 
 ## Intentional
 
 - No pre-launch profile validation, because the contract forbids it and
   reproduction showed Codex already fails closed and free.
-- The marker is a sibling file rather than a second line in the thread file,
-  because the thread file's strict one-id format is what keeps a malformed
-  value out of argv.
-- An absent marker is treated as a match rather than a mismatch. The opposite
-  would make every existing watcher start a fresh thread on upgrade, which is
-  the exact harm this invariant exists to prevent.
+- One map rather than an id file plus an owner file. Two independent durable
+  writes can disagree after a crash between them, leaving a valid new id paired
+  with the previous owner, after which the next wake treats its own thread as
+  foreign. A single document makes that state unrepresentable.
+- The single-id file is kept as a mirror, because it is the documented,
+  human-readable pointer to the arc a watcher is on and its strict one-id
+  format is what keeps a malformed value out of argv.
+- An absent map is treated as "this watcher predates the map" and its id is
+  adopted, not discarded. The opposite would make every existing watcher start
+  a fresh thread on upgrade, which is the exact harm the invariant prevents.
+- An isolated `HOME` alone is not reported as partial isolation, because Codex
+  derives its home from `HOME` and both roots move together.
 - `child_environment` returns `None` rather than a copy of `os.environ`.
   Copying would be equivalent in practice but would change the call shape, and
   the contract's I2 is about being byte-identical.
@@ -149,7 +186,7 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 158 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 161 passed - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "another_profile or effective_profile"` with the cross-profile check disabled - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "effective_profile or partial_isolation"` with the receipt line removed - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof` - Result: pass - Environment: local
@@ -162,13 +199,13 @@ to fail with its fix removed and pass with it restored.
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +250 |
-| `scripts/codex_wake_run.py` | +234 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | +175 |
+| `tests/test_codex_wake_run.py` | +321 |
+| `scripts/codex_wake_run.py` | +316 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | +211 |
 | `docs/long_running_session_watcher_handoff.md` | +32 |
-| **Total** | **691** |
+| **Total** | **887** |
 
-Diff-budget override: 691 lines against a 400-line soft cap. Runtime change is 234 lines; the other two thirds are the regression tests the contract names and
+Diff-budget override: 887 lines against a 400-line soft cap. Runtime change is 316 lines; the other two thirds are the regression tests the contract names and
 the plan. Splitting tests from the behavior they pin would leave a window where
 a cross-profile resume silently discards an arc with nothing to catch it, which
 is the defect this slice exists to prevent.
