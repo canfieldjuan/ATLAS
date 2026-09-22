@@ -652,6 +652,13 @@ class WakeProfile(NamedTuple):
         return None
 
 
+def _canonical_directory(cwd: Path, value: str) -> str:
+    # PurePosixPath joining drops ".", repeated slashes and a trailing slash
+    # and never collapses "..", which is exactly the safe set; see
+    # resolve_profile.
+    return str(Path(cwd) / value)
+
+
 def resolve_profile(
     *,
     codex_home: str | None,
@@ -667,21 +674,28 @@ def resolve_profile(
     exactly that case.
 
     The effective values are canonical: made absolute against `cwd`, the
-    child's working directory, then lexically normalized. That is how Codex
-    itself resolves them -- verified with `codex doctor --json`, where
-    CODEX_HOME=rel reported <cwd>/rel from two different directories -- so two
-    spellings of one home key one thread file, and one relative spelling under
-    two repositories keys two. Only the key and the receipt use these; the
-    child environment is never rewritten from them.
+    child's working directory, which is how Codex resolves a relative value --
+    verified with `codex doctor --json`, where CODEX_HOME=rel reported
+    <cwd>/rel from two different directories. Only the key and the receipt use
+    these; the child environment is never rewritten from them.
+
+    Canonicalization removes only what never changes which directory a path
+    names: `.` components, repeated slashes and a trailing slash. It keeps
+    `..`. The kernel resolves `..` after following a symlink, so collapsing it
+    lexically can merge two different homes -- verified: Codex given
+    CODEX_HOME=<root>/link/../profile, with link pointing elsewhere, used the
+    other tree's profile, while normpath keyed it as <root>/profile. Keeping
+    `..` can only split one home into two spellings, which starts a fresh
+    thread rather than resuming a wrong one.
     """
     source = os.environ if environ is None else environ
 
     def effective(argument: str | None, key: str) -> tuple[str, str]:
         if argument is not None:
-            return os.path.normpath(os.path.join(cwd, argument)), "argument"
+            return _canonical_directory(cwd, argument), "argument"
         inherited = source.get(key)
         if inherited:
-            return os.path.normpath(os.path.join(cwd, inherited)), "inherited"
+            return _canonical_directory(cwd, inherited), "inherited"
         return PROFILE_UNSET, "unset"
 
     home_value, home_origin = effective(agent_home, "HOME")
@@ -1438,7 +1452,15 @@ def reset_watcher_threads(*, watcher_id: str, state_dir: Path) -> int:
             if refusal is not None:
                 return refusal
             failed = 0
-            for path in watcher_thread_files(state_dir, watcher_id):
+            found = watcher_thread_files(state_dir, watcher_id)
+            if not found:
+                # Success, since there is nothing to reset, but name the
+                # directory: a reset pointed at a different state directory
+                # than the watcher's wakes use finds nothing here and would
+                # otherwise look exactly like a completed teardown.
+                print(f"no thread files for {watcher_id} in {state_dir}")
+                _log(log_handle, f"reset found no thread files in {state_dir}")
+            for path in found:
                 try:
                     # Already gone is the outcome a reset wants, not a failure.
                     path.unlink(missing_ok=True)
@@ -1476,10 +1498,10 @@ def profile_directory_argument(value: str) -> str:
     as one. A relative path is resolved by Codex against its working directory,
     which is the repository, not what an operator reading the watcher config
     would expect, and `~` is not expanded because the bridge runs no shell.
-    Normalization is lexical only (trailing slashes, `.` and `..`); it touches
-    no filesystem, so it cannot race, and a symlinked alias still reads as a
-    different profile, which errs toward a fresh thread rather than a wrong one.
-    Everything outside the domain is rejected here, before any turn exists.
+    The value is returned unchanged, so the child sees exactly what the
+    operator wrote; the thread key canonicalizes it separately in
+    `resolve_profile`. Everything outside the domain is rejected here, before
+    any turn exists.
     """
     if not value or not value.strip():
         raise argparse.ArgumentTypeError("profile directory must not be empty")
@@ -1487,7 +1509,7 @@ def profile_directory_argument(value: str) -> str:
         raise argparse.ArgumentTypeError(
             f"profile directory must be an absolute path, got {value!r}"
         )
-    return os.path.normpath(value)
+    return value
 
 
 def _build_parser() -> argparse.ArgumentParser:

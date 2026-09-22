@@ -168,7 +168,10 @@ a wake given no profile arguments: its home is whatever `CODEX_HOME` or
 `$HOME/.codex` it inherits, so if a watcher's environment changes, the new home
 starts a fresh thread instead of resuming one that home does not hold. The home
 is compared the way Codex resolves it: a relative value is taken against the
-wake's `--repo-dir`, and spellings such as a trailing slash count as one home.
+wake's `--repo-dir`, and spellings that differ only by `.`, a repeated slash or
+a trailing slash count as one home. `..` is kept as written, because after a
+symlink it does not mean what it appears to; two spellings that differ by `..`
+start separate threads rather than risk sharing one.
 The wake log's `profile ...` line names the file in use.
 
 A watcher created before this change has a single `<session-id>.codex-thread`
@@ -177,10 +180,13 @@ thread under its home. Run the reset below once per existing watcher after
 upgrading to remove the old file.
 
 To reset a watcher, at post-merge teardown or when resumes keep failing, run
-the runner's reset command rather than deleting files by pattern:
+the runner's reset command rather than deleting files by pattern. Pass the same
+`--state-dir` as the watcher's `CODEX_WAKE_COMMAND`, or omit it only if that
+command omits it too; a reset of a different directory finds nothing and
+prints `no thread files for <session-id> in <dir>`:
 
 ```bash
-~/.local/bin/atlas-codex-wake-run --watcher-id '<session-id>' --reset-threads
+~/.local/bin/atlas-codex-wake-run --watcher-id '<session-id>' --state-dir '<same state dir as the wake command>' --reset-threads
 ```
 
 It removes exactly that watcher's thread files, including quarantined ones and
@@ -252,8 +258,8 @@ A descendant that calls `setsid` leaves that group and is not covered; issue
 #2526 tracks containment a descendant cannot opt out of.
 
 A merged PR leaves its thread state behind: one thread file per Codex home the
-watcher ran under. Run `atlas-codex-wake-run --watcher-id '<session-id>'
---reset-threads` during the post-merge teardown in AGENTS 3c.1 so the next PR
+watcher ran under. Run the reset command above, with the watcher's own
+`--state-dir`, during the post-merge teardown in AGENTS 3c.1 so the next PR
 on that watcher id does not resume a finished arc. The reset takes the wake
 lock, so it waits for any wake in flight rather than racing it.
 

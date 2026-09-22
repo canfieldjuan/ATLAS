@@ -114,6 +114,13 @@ Max files: 5
   `::test_one_home_spelled_two_ways_resumes_one_arc`, which fails behaviourally
   on 029e00624: an inherited `CODEX_HOME=<home>/` and a later `--codex-home
   <home>/` selected different files, so the second wake started fresh.
+- `..` is never collapsed into another home, and the child sees the argument
+  as written -- settled by
+  `::test_dotdot_after_a_symlink_is_not_collapsed_into_another_home`, which
+  fails behaviourally on 639de1256, where the argument reached the child
+  rewritten and `<root>/link/../profile` was keyed as `<root>/profile`. The
+  real CLI was checked first: with `link` pointing into another tree, `codex
+  doctor --json` reported that tree's `profile`.
 - A relative inherited home is keyed where Codex resolves it -- settled by
   `::test_a_relative_inherited_home_is_keyed_per_repository`, which fails
   behaviourally on 029e00624: the wake in the second repository ran `exec resume`
@@ -183,8 +190,8 @@ Max files: 5
   profile argument changes the parser, and the parametrized combination test
   must grow with it.
 - **Profile argument values: CLOSED.** Membership is derived from what Codex
-  does with the value: a non-empty absolute path, normalized lexically.
-  `profile_directory_argument` is the single admission point. Everything else,
+  does with the value: a non-empty absolute path, passed to the child exactly
+  as written. `profile_directory_argument` is the single admission point. Everything else,
   including empty, whitespace, relative and `~` paths, is rejected with exit 2
   before any turn exists.
 - **A watcher's thread files: CLOSED.** Membership is derived from one exact
@@ -210,8 +217,8 @@ chain is run again on each head with `--dry-run` added to the configured
 command, which spends no tokens: the real bridge runs it, and the runner must
 select the same per-home file and report `argv=codex exec resume
 01a0cad7-b821-7080-ae09-3fda1018b339 ...`, the thread the real turns recorded.
-The configured `--codex-home` is already absolute and normalized, so canonical
-keying leaves its digest unchanged.
+The configured `--codex-home` has no `.`, repeated slash, trailing slash or
+`..`, so canonical keying leaves its digest unchanged.
 The resume itself on this head is covered by
 `tests/test_codex_wake_end_to_end.py`, which drives the real bridge against a
 fake Codex.
@@ -225,12 +232,14 @@ watcher losing its arc on upgrade; one profile's arc reaching another's turn.
 ## Mechanism
 
 `profile_directory_argument` admits a profile argument only if it is a
-non-empty absolute path, and normalizes it lexically. `resolve_profile` turns
+non-empty absolute path, and passes it through unchanged. `resolve_profile` turns
 the arguments plus the current environment into a `WakeProfile` carrying the
 **effective** values the child will see, each tagged `argument`, `inherited`,
 `derived from HOME` or `unset`. Each effective value is canonical: joined to the
-child's working directory, `--repo-dir`, when relative, then lexically
-normalized, which is how Codex resolves it. The canonical values feed only the
+child's working directory, `--repo-dir`, when relative, which is how Codex
+resolves it, with `.` components, repeated slashes and a trailing slash
+dropped. `..` is kept, because the kernel resolves it after following a
+symlink, so collapsing it could merge two different homes. The canonical values feed only the
 thread key and the receipt; the child's environment is never rewritten from
 them. Codex has no unset `CODEX_HOME`: it defaults to `$HOME/.codex`, verified
 against the real CLI, so an unset one is derived from the child's `HOME`. `child_environment` returns `None` when nothing is
@@ -336,9 +345,12 @@ the handoff doc relies on.
   Rejecting an empty or relative argument is not profile validation; it refuses
   a value that would name a different directory than the operator meant. What
   happens inside an admitted directory stays Codex's decision.
-- **Lexical normalization only.** `realpath` would touch the filesystem and
-  could race; lexical normalization cannot, and its only miss, a symlinked
-  alias, errs toward a fresh thread.
+- **Canonicalization that cannot merge homes.** Only `.`, repeated slashes and
+  a trailing slash are dropped, because none of them can change which
+  directory a path names. `..` is kept, and `realpath` is not used: it would
+  touch the filesystem and could race. Both misses, a symlinked alias and a
+  `..` spelling, split one home into two, which starts a fresh thread rather
+  than resuming a wrong one.
 - **`child_environment` returns `None`** rather than a copy of `os.environ`,
   so an unconfigured deployment launches exactly as before.
 - **Unpredictable staging names.** #2525's pid-derived staging name stopped a
@@ -357,17 +369,22 @@ rollout, not correctness of the mechanism.
 - Amending PR #2532's reachability criterion on main. This plan records the
   correction; editing the merged contract is a docs-only follow-up.
 - A per-thread turn or token ceiling, carried forward from #2525 and #2532.
+- A shared length bound on watcher ids across the runner, the bridge and
+  `pr_watcher` (#2534). The per-home suffix moves the point at which an id is
+  too long to store from about 225 to about 208 characters; either way the wake
+  fails closed before launch, and real ids here are at most 36 characters.
 
 Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 181 passed - Environment: local
-- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 399 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 220 passed, 8 skipped - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 438 passed, 8 skipped - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "outside_the_admitted_domain"` against the pre-fix runner - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "stale_staging_file_does_not_fail_the_thread_write"` against the runner on `main` - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "inherited_home_change"` against the runner before per-home keying - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "state_table or spelled_two_ways or keyed_per_repository or flushes_the_state_directory"` against the runner at 029e00624 - Result: fail - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py -q -k "dotdot_after_a_symlink or finds_nothing_names or trailing_slash_spellings"` against the runner at 639de1256 - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof`, run twice on `b28cd309a` - Result: pass - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof-dry`, the same configured command with `--dry-run`, on this head - Result: pass - Environment: local
 - Command: `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - Result: pass - Environment: local
@@ -381,9 +398,9 @@ their fix.
 
 | File | LOC |
 |---|---:|
-| `docs/long_running_session_watcher_handoff.md` | 68 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | 389 |
-| `scripts/codex_wake_run.py` | 456 |
+| `docs/long_running_session_watcher_handoff.md` | 74 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | 406 |
+| `scripts/codex_wake_run.py` | 478 |
 | `tests/test_codex_wake_end_to_end.py` | 11 |
-| `tests/test_codex_wake_run.py` | 807 |
-| **Total** | **1731** |
+| `tests/test_codex_wake_run.py` | 857 |
+| **Total** | **1826** |

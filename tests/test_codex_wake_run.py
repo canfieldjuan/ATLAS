@@ -2470,13 +2470,14 @@ def test_each_profile_keeps_its_own_arc_and_switching_back_resumes(
 
 
 def test_trailing_slash_spellings_of_one_home_share_one_thread_file(tmp_path: Path) -> None:
-    """Normalization is lexical, so spellings of one path are one profile."""
-    assert runner.profile_directory_argument("/srv/codex-wake/") == "/srv/codex-wake"
-    assert runner.profile_directory_argument("/srv/./codex-wake") == "/srv/codex-wake"
+    """Spellings that cannot name different directories share one file; `..`
+    is kept, because after a symlink it can."""
     state_dir = tmp_path / "state"
-    assert _profile_thread(state_dir, runner.profile_directory_argument("/srv/codex-wake/")) == (
-        _profile_thread(state_dir, "/srv/codex-wake")
-    )
+    plain = _profile_thread(state_dir, "/srv/codex-wake")
+    for spelling in ("/srv/codex-wake/", "/srv/./codex-wake", "/srv//codex-wake"):
+        assert runner.profile_directory_argument(spelling) == spelling, "passed through unchanged"
+        assert _profile_thread(state_dir, spelling) == plain, spelling
+    assert _profile_thread(state_dir, "/srv/x/../codex-wake") != plain
 
 
 def test_a_stale_staging_file_does_not_fail_the_thread_write(tmp_path: Path) -> None:
@@ -2909,3 +2910,52 @@ def test_reset_threads_flushes_the_state_directory(
     assert _reset(state_dir, "foo") == 0
 
     assert str(state_dir) in synced
+
+
+def test_dotdot_after_a_symlink_is_not_collapsed_into_another_home(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: lexical normalization merged two different Codex homes.
+
+    Reproduced on 639de1256 with the real CLI: given
+    CODEX_HOME=<root>/link/../profile where link points into another tree,
+    `codex doctor --json` reported <other>/profile, while the runner keyed it
+    as <root>/profile. A later wake genuinely using <root>/profile then
+    resumed the first home's id. The argument also reached the child rewritten.
+    """
+    root = tmp_path / "root"
+    (tmp_path / "other" / "sub").mkdir(parents=True)
+    root.mkdir()
+    (root / "link").symlink_to(tmp_path / "other" / "sub")
+    through_link = f"{root}/link/../profile"
+    state_dir = tmp_path / "state"
+
+    fake_a, record_a = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, codex_home=through_link, state_dir=state_dir) == 0
+    assert json.loads(record_a.read_text(encoding="utf-8"))["codex_home"] == through_link
+
+    other = tmp_path / "second"
+    other.mkdir()
+    fake_b, record_b = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(
+        tmp_path, fake=fake_b, codex_home=str(root / "profile"), state_dir=state_dir
+    ) == 0
+    argv = json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv, f"a different home must not resume the first arc: {argv}"
+
+
+def test_a_reset_that_finds_nothing_names_the_directory_it_searched(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: a reset aimed at the wrong state directory looked complete.
+
+    Reproduced on 639de1256: with the watcher's thread file in a custom state
+    directory, the documented reset without --state-dir searched the default
+    one, printed nothing and exited 0, leaving the arc to be resumed by the
+    next PR on that watcher.
+    """
+    empty = tmp_path / "default-state"
+
+    assert _reset(empty, "foo") == 0
+
+    assert f"no thread files for foo in {empty}" in capsys.readouterr().out
