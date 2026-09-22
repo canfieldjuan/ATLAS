@@ -97,18 +97,30 @@ Max files: 5
   FIFO and requires the read to return inside a deadline.
 - An unusable map starts fresh rather than guessing -- settled by
   `::test_an_unusable_thread_map_starts_fresh_rather_than_guessing`.
+- A dead session is forgotten in the map, not only the mirror -- settled by
+  `::test_a_dead_session_is_forgotten_in_the_map_not_only_the_mirror`, which
+  asserts the other profile keeps its arc. Negative-probed.
+- An inherited `CODEX_HOME` with an isolated `HOME` is reported partial --
+  settled by `::test_an_inherited_codex_home_with_an_isolated_home_is_partial`.
+  Negative-probed.
 - `CODEX_HOME` is derived from an isolated `HOME` rather than reported unset --
   settled by `::test_codex_home_is_derived_from_an_isolated_home`.
   Negative-probed: removing the derivation makes it fail.
-- Nothing PR #2525 settled regressed -- settled by the full suite at 379 passed.
+- Nothing PR #2525 settled regressed -- settled by the full suite at 381 passed.
 
-**Reachability proof.** The configured chain was run, not the runner directly:
-`atlas-pr-watch-and-wake wake-profile-proof`, whose watcher config carries both
-profile arguments inside `CODEX_WAKE_COMMAND`. The wake log at
+**Reachability proof.** The configured chain was run against this head, not the
+runner directly and not an earlier installed build:
+`atlas-pr-watch-and-wake wake-profile-proof`, twice, with a watcher config
+carrying both profile arguments inside `CODEX_WAKE_COMMAND`. The wake log at
 `~/.local/state/atlas-pr-watchers/wake-profile-proof.codex-wake.log` records
 `profile codex_home=/home/juan-canfield/.codex-wake (argument)
-home=/home/juan-canfield/.codex-wake-home (argument)`, a recorded thread id, a
-sibling `.codex-thread.profile` naming the owning profile, and a `usage=` line.
+home=/home/juan-canfield/.codex-wake-home (argument)` on both turns, a fresh
+turn recording thread `01a0c7c0-6e23-7e60-8398-dbdcec6b6581` and a second turn
+resuming that same id. The artifact produced beside the thread id is this head's thread map, a JSON
+document named for the watcher, holding
+`{"/home/juan-canfield/.codex-wake": "01a0c7c0-..."}`. No profile-marker file
+exists, because nothing in this implementation produces one, which is how the
+run is known to have exercised this head rather than the earlier runner.
 
 **Risk areas.** A deployment with no profile configured behaving differently;
 an existing watcher losing its arc on upgrade; the profile marker disagreeing
@@ -186,7 +198,7 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 161 passed - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 163 passed - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "another_profile or effective_profile"` with the cross-profile check disabled - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "effective_profile or partial_isolation"` with the receipt line removed - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof` - Result: pass - Environment: local
@@ -199,13 +211,13 @@ to fail with its fix removed and pass with it restored.
 
 | File | +/- |
 |---|---:|
-| `tests/test_codex_wake_run.py` | +321 |
-| `scripts/codex_wake_run.py` | +316 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | +211 |
+| `tests/test_codex_wake_run.py` | +392 |
+| `scripts/codex_wake_run.py` | +344 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | +223 |
 | `docs/long_running_session_watcher_handoff.md` | +32 |
-| **Total** | **887** |
+| **Total** | **998** |
 
-Diff-budget override: 887 lines against a 400-line soft cap. Runtime change is 316 lines; the other two thirds are the regression tests the contract names and
+Diff-budget override: 998 lines against a 400-line soft cap. Runtime change is 344 lines; the other two thirds are the regression tests the contract names and
 the plan. Splitting tests from the behavior they pin would leave a window where
 a cross-profile resume silently discards an arc with nothing to catch it, which
 is the defect this slice exists to prevent.

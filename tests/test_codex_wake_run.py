@@ -2513,3 +2513,74 @@ def test_codex_home_is_derived_from_an_isolated_home(tmp_path: Path) -> None:
     assert only_codex.partial_reason is not None
     assert "HOME is not isolated" in only_codex.partial_reason
 
+
+def test_a_dead_session_is_forgotten_in_the_map_not_only_the_mirror(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the map is what the next wake reads.
+
+    Quarantining only the single-id mirror left the dead id in the map, so
+    every later wake for that profile resumed it again while the log claimed
+    the next wake would start fresh.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    home = tmp_path / "home"
+    other = tmp_path / "other-home"
+    for d in (home, other):
+        d.mkdir()
+    runner.write_thread_map(
+        thread_path, {str(home): THREAD_A, str(other): THREAD_B}
+    )
+    runner.write_thread_id(thread_path, THREAD_A)
+
+    fake = tmp_path / "codex-missing-session"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.read()\n"
+        f"sys.stderr.write('Error: thread/resume: thread/resume failed: no rollout "
+        f"found for thread id {THREAD_A} (code -32600)\\n')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+    assert _run_profile(
+        tmp_path, fake=fake, codex_home=str(home), state_dir=state_dir
+    ) == 1
+
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None
+    assert str(home) not in mapping, "the dead id must not survive in the map"
+    assert mapping == {str(other): THREAD_B}, "other profiles keep their arcs"
+    assert thread_path.with_name(thread_path.name + ".stale").exists()
+
+
+def test_an_inherited_codex_home_with_an_isolated_home_is_partial(
+    tmp_path: Path,
+) -> None:
+    """Regression: derivation happens only when nothing named a Codex home.
+
+    With CODEX_HOME inherited from the environment and only --agent-home given,
+    the child keeps the inherited profile and just moves HOME, which is partial
+    however it reads at the call site.
+    """
+    inherited = runner.resolve_profile(
+        codex_home=None,
+        agent_home=str(tmp_path / "wake-home"),
+        environ={"CODEX_HOME": "/real/.codex", "HOME": "/real"},
+    )
+
+    assert inherited.effective_codex_home == "/real/.codex"
+    assert inherited.codex_home_origin == "inherited"
+    assert inherited.partial_reason is not None
+    assert "inherited rather than derived" in inherited.partial_reason
+
+    derived = runner.resolve_profile(
+        codex_home=None, agent_home=str(tmp_path / "wake-home"), environ={}
+    )
+    assert derived.codex_home_origin == "derived from HOME"
+    assert derived.partial_reason is None
+

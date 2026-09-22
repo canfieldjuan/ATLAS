@@ -654,9 +654,18 @@ class WakeProfile(NamedTuple):
         if not self.isolates_anything:
             return None
         if self.codex_home is None:
-            # Not partial: with HOME isolated, Codex derives its home from it,
-            # so both roots move together.
-            return None
+            if self.codex_home_origin == "derived from HOME":
+                # Not partial: nothing named a Codex home, so Codex derives it
+                # from the isolated HOME and both roots move together.
+                return None
+            # An inherited CODEX_HOME is not derived. The child keeps that
+            # profile and only HOME moves, which is partial isolation however
+            # it reads at the call site.
+            return (
+                "CODEX_HOME is inherited rather than derived from the isolated "
+                "HOME, so this wake still uses that profile's config, memories "
+                "and built-in skills"
+            )
         if self.agent_home is None:
             return (
                 "HOME is not isolated, so this wake still loads the shared "
@@ -773,6 +782,21 @@ def write_thread_map(thread_path: Path, mapping: dict[str, str]) -> None:
         thread_map_path(thread_path),
         json.dumps(mapping, indent=2, sort_keys=True) + "\n",
     )
+
+
+def forget_thread(thread_path: Path, profile: "WakeProfile") -> bool:
+    """Drop this profile's arc from the map, keeping every other profile's.
+
+    The map is the source of truth, so quarantining only the single-id mirror
+    leaves the dead id in the map and every later wake for this profile
+    resumes it again.
+    """
+    mapping, problem = read_thread_map(thread_path)
+    if problem or profile.effective_codex_home not in mapping:
+        return False
+    del mapping[profile.effective_codex_home]
+    write_thread_map(thread_path, mapping)
+    return True
 
 
 def remember_thread(thread_path: Path, profile: "WakeProfile", thread_id: str) -> None:
@@ -1247,6 +1271,10 @@ def run_one_turn(
             # rather than delete, so the id stays inspectable.
             stale_path = thread_path.with_name(thread_path.name + ".stale")
             try:
+                # The map first: it is what the next wake reads. Quarantining
+                # only the mirror would leave this profile resuming the same
+                # dead id forever while the log claimed it would start fresh.
+                forget_thread(thread_path, profile)
                 os.replace(thread_path, stale_path)
             except OSError as exc:
                 _log(log_handle, f"could not quarantine missing-session id: {exc}")
