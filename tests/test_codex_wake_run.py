@@ -2415,17 +2415,20 @@ def test_a_legacy_thread_id_is_adopted_and_recorded_on_attach(
     state_dir.mkdir()
     thread_path = state_dir / "slice-123.codex-thread"
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
-    home = tmp_path / "home"
-    home.mkdir()
     assert not runner.thread_map_path(thread_path).exists()
 
-    assert _run_profile(tmp_path, fake=fake, codex_home=str(home), state_dir=state_dir) == 0
+    # No profile argument: the wake runs under the same home that created the
+    # id, which is the only case where adopting it is correct.
+    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
 
     argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
     assert "resume" in argv and THREAD_A in argv, "a legacy id must still resume"
+    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
     mapping, problem = runner.read_thread_map(thread_path)
     assert problem is None
-    assert mapping == {str(home): THREAD_A}, "the attach must record who owns it"
+    assert mapping == {baseline.effective_codex_home: THREAD_A}, (
+        "the attach must record the home that owns it"
+    )
 
 
 def test_the_thread_id_and_its_owner_are_one_record(tmp_path: Path) -> None:
@@ -2605,32 +2608,49 @@ def test_the_thread_map_destination_is_preflighted(
     assert not record.exists(), "Codex must not be launched"
 
 
-def test_removing_the_thread_id_file_forces_a_fresh_thread(
+def test_resetting_a_watcher_clears_both_the_id_file_and_the_map(
     tmp_path: Path, repo_dir: Path
 ) -> None:
-    """Regression: the single-id file is the operator's reset switch.
+    """The reset contract, corrected.
 
-    Post-merge teardown and the runner's own failure diagnostic both tell an
-    operator to remove it to force a fresh thread. Honouring only the map would
-    make both instructions silently ineffective.
+    An earlier revision treated the single-id file's absence as a global reset.
+    That could not work: the file is shared by every profile, so a quarantine
+    of one profile invalidated the rest. Reset now names both files, and the
+    runner's own diagnostic and the handoff doc say so.
     """
-    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    # The resume leg must be answered with the id it resumes, or the runner
+    # correctly fails the turn as a wrong-conversation turn.
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     thread_path = state_dir / "slice-123.codex-thread"
     home = tmp_path / "home"
     home.mkdir()
     runner.write_thread_map(thread_path, {str(home): THREAD_A})
-    assert not thread_path.exists()
+    runner.write_thread_id(thread_path, THREAD_A)
 
+    # Removing only the id file must NOT discard the arc: that is the state a
+    # quarantine of another profile leaves behind.
+    thread_path.unlink()
     assert _run_profile(
         tmp_path, fake=fake, codex_home=str(home), state_dir=state_dir
     ) == 0
-
     argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
-    assert "resume" not in argv, "a removed id file must force a fresh thread"
-    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
-    assert "stored thread id file is gone" in log_text
+    assert "resume" in argv and THREAD_A in argv, (
+        "a missing id file must not invalidate a mapped arc"
+    )
+
+    # Removing both is the documented reset and does force a fresh thread.
+    fresh = tmp_path / "fresh"
+    fresh.mkdir()
+    fake2, record2 = _fake_codex(fresh, thread_id=THREAD_B)
+    thread_path.unlink()
+    runner.thread_map_path(thread_path).unlink()
+    assert _run_profile(
+        tmp_path, fake=fake2, codex_home=str(home), state_dir=state_dir
+    ) == 0
+    argv2 = json.loads(record2.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv2
 
 
 def test_an_emptied_map_does_not_re_adopt_the_quarantined_mirror(
@@ -2678,4 +2698,74 @@ def test_the_thread_map_writer_cannot_outgrow_the_reader(tmp_path: Path) -> None
     read_back, problem = runner.read_thread_map(thread_path)
     assert problem is None, "anything the writer produced must be readable"
     assert read_back[current] == THREAD_B
+
+
+def test_quarantining_one_profile_leaves_another_profiles_arc_resumable(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a shared mirror cannot express per-profile state.
+
+    Quarantine renames the one mirror, so treating its absence as "start fresh"
+    invalidated every profile at once, including arcs that are still perfectly
+    resumable.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    home_a = tmp_path / "home-a"
+    home_b = tmp_path / "home-b"
+    for d in (home_a, home_b):
+        d.mkdir()
+    # The state a confirmed-dead session under A leaves behind: B kept, mirror
+    # renamed away.
+    runner.write_thread_map(thread_path, {str(home_b): THREAD_B})
+    thread_path.with_name(thread_path.name + ".stale").write_text(
+        THREAD_A + "\n", encoding="utf-8"
+    )
+    assert not thread_path.exists()
+
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    assert _run_profile(
+        tmp_path, fake=fake, codex_home=str(home_b), state_dir=state_dir
+    ) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_B in argv, (
+        f"profile B's arc must survive a quarantine of profile A, got {argv}"
+    )
+
+
+def test_enabling_a_profile_keeps_the_legacy_arc_for_its_own_home(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a legacy id belongs to the home that created it.
+
+    The id predates any profile argument, so it was created under the inherited
+    home. Adopting it for a newly enabled --codex-home resumes a rollout that
+    home does not hold; Codex reports it missing and the quarantine renames the
+    only mirror, after which the original arc is unreachable.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
+    new_home = tmp_path / "new-home"
+    new_home.mkdir()
+
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    assert _run_profile(
+        tmp_path, fake=fake, codex_home=str(new_home), state_dir=state_dir
+    ) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv, (
+        f"a legacy id must not be resumed under a newly enabled profile: {argv}"
+    )
+    baseline = runner.resolve_profile(codex_home=None, agent_home=None)
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None
+    assert mapping.get(baseline.effective_codex_home) == THREAD_A, (
+        "the legacy arc must be remembered against the home that created it"
+    )
+    assert mapping.get(str(new_home)) == THREAD_B
 

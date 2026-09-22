@@ -832,6 +832,14 @@ def remember_thread(
     than replaced with a single pair.
     """
     mapping, problem = read_thread_map(thread_path)
+    if not thread_map_path(thread_path).exists():
+        # First write for a watcher that predates the map. Record the legacy
+        # arc against the home that created it before adding this one, so
+        # enabling a profile cannot orphan it.
+        legacy, _legacy_reason = read_thread_id(thread_path)
+        if legacy:
+            baseline = resolve_profile(codex_home=None, agent_home=None)
+            mapping.setdefault(baseline.effective_codex_home, legacy)
     mapping[profile.effective_codex_home] = thread_id
     write_thread_map(
         thread_path, bound_thread_map(mapping, profile.effective_codex_home)
@@ -1038,45 +1046,43 @@ def thread_id_for_profile(
             "into a profile that does not hold the rollout"
         )
 
-    legacy, legacy_reason = read_thread_id(thread_path)
-    if legacy_reason:
-        return None, legacy_reason
-
-    if legacy is None:
-        if mapping:
-            # The single-id file is the operator's control surface: post-merge
-            # teardown and the failure diagnostic both say to remove it to
-            # force a fresh thread. Honouring only the map would make both
-            # instructions silently ineffective, and it is also the state a
-            # quarantine leaves behind, so its absence means fresh regardless
-            # of what the map still holds.
-            return None, (
-                "the stored thread id file is gone while the thread map still "
-                "holds entries, which is how a teardown, a reset or a "
-                "quarantine leaves this watcher; starting a fresh thread"
-            )
-        return None, None
-
     mine = mapping.get(profile.effective_codex_home)
     if mine is not None:
         return mine, None
 
     if thread_map_path(thread_path).exists():
-        # A map file exists but does not claim this profile. Never fall back to
-        # the mirror here: after a quarantine that emptied the map and died
-        # before renaming the mirror, that fallback would re-adopt the very id
-        # just confirmed dead.
+        # The map is the only authority for which arc a profile resumes. The
+        # single-id file is shared by every profile, so it cannot express
+        # per-profile state and must never invalidate one: a quarantine renames
+        # it, and treating that absence as "start fresh" discarded arcs that
+        # were still resumable under other profiles.
         named = ", ".join(sorted(mapping)) or "no profile"
         return None, (
-            f"the stored thread id belongs to another profile ({named}) and "
-            f"not to {profile.effective_codex_home}; this wake starts a fresh "
-            "thread and any other arc stays resumable by switching back"
+            f"the thread map holds arcs for {named} but not for "
+            f"{profile.effective_codex_home}; this wake starts a fresh thread "
+            "and those arcs stay resumable by switching back"
         )
 
-    # No map file at all: this watcher predates it. The id is adopted by the
-    # profile running now, which keeps every existing watcher resuming, and it
-    # is written into the map on attach so the next profile change can tell.
-    return legacy, None
+    legacy, legacy_reason = read_thread_id(thread_path)
+    if legacy_reason:
+        return None, legacy_reason
+    if legacy is None:
+        return None, None
+
+    # No map file: this watcher predates it, and its id was created before any
+    # profile argument existed, so it belongs to the home that would be in
+    # effect with no arguments at all. Adopting it for a newly enabled profile
+    # resumes a rollout that home does not hold; the missing-session path then
+    # renames the only mirror and strands the original arc.
+    baseline = resolve_profile(codex_home=None, agent_home=None)
+    if baseline.effective_codex_home == profile.effective_codex_home:
+        return legacy, None
+    return None, (
+        f"the stored thread id predates the profile arguments and belongs to "
+        f"{baseline.effective_codex_home}, not {profile.effective_codex_home}; "
+        "this wake starts a fresh thread and the original arc stays resumable "
+        "under the home that created it"
+    )
 
 
 class TurnResult(NamedTuple):
@@ -1359,7 +1365,8 @@ def run_one_turn(
                 f"resume of {thread_id} failed before attaching (exit {exit_code}) "
                 "and codex did not report a missing session; keeping the id. If "
                 "wakes keep failing this way, remove "
-                f"{thread_path} to force a fresh thread.",
+                f"{thread_path} and {thread_map_path(thread_path)} to force a "
+                "fresh thread.",
             )
 
     if usage is not None:
