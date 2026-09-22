@@ -2162,24 +2162,52 @@ def test_a_failing_turn_keeps_its_own_exit_code_when_usage_is_missing(
     assert "usage=unavailable" in log_text
 
 
-def test_the_staged_thread_write_refuses_a_planted_name(tmp_path: Path) -> None:
-    """Same rule as the read: never write through a name someone else prepared.
+def test_a_name_planted_at_the_old_staging_path_is_neither_followed_nor_fatal(
+    tmp_path: Path,
+) -> None:
+    """Both sides of the staging boundary.
 
-    The staging name is predictable -- it is derived from the thread file and
-    this process's pid -- so a symlink planted there would redirect the write
-    out of the state directory.
+    Security: a symlink planted where the staging file used to be named must
+    not redirect the write. Availability: a leftover at that name must not make
+    the write fail. The pid-derived name satisfied the first by failing the
+    second, which surfaced as a finished turn with no resumable id.
     """
     target = tmp_path / "slice-123.codex-thread"
-    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    old_staging_name = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.write_text("untouched", encoding="utf-8")
-    staged.symlink_to(elsewhere)
+    old_staging_name.symlink_to(elsewhere)
 
-    with pytest.raises(OSError):
-        runner.write_thread_id(target, THREAD_A)
+    runner.write_thread_id(target, THREAD_A)
 
     assert elsewhere.read_text(encoding="utf-8") == "untouched"
-    assert not target.exists()
+    assert runner.read_thread_id(target) == (THREAD_A, None)
+
+
+def test_a_stale_staging_file_does_not_fail_the_post_turn_write(
+    tmp_path: Path,
+) -> None:
+    """Regression: a killed wake's leftover plus a reused pid broke the write.
+
+    Reproduced: with `.<map>.<pid>.tmp` left behind, preflight reported no
+    problem, and the post-turn map write then raised FileExistsError after
+    Codex had already acted.
+    """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    map_path = runner.thread_map_path(thread_path)
+    for leftover in (map_path, thread_path):
+        leftover.with_name(f".{leftover.name}.{os.getpid()}.tmp").write_text(
+            "left by a killed wake\n", encoding="utf-8"
+        )
+    profile = runner.resolve_profile(codex_home=str(tmp_path / "home"), agent_home=None)
+
+    assert runner.thread_path_problem(thread_path) is None
+    runner.remember_thread(thread_path, profile, THREAD_A)
+
+    mapping, problem = runner.read_thread_map(thread_path)
+    assert problem is None
+    assert mapping == {profile.effective_codex_home: THREAD_A}
+    assert runner.read_thread_id(thread_path) == (THREAD_A, None)
 
 
 def test_the_thread_id_still_round_trips_through_the_staged_write(
@@ -2787,9 +2815,12 @@ def test_a_retained_profile_that_cannot_fit_is_dropped_not_written_oversized(
     runner.write_thread_map(thread_path, bounded)
 
     assert huge not in bounded, "an unrepresentable profile must be dropped"
+    # The earlier version of this test asserted only readability, which an
+    # empty map satisfies, so it passed while every other arc was deleted.
+    assert bounded == {other: THREAD_B}, "profiles that fit must survive"
     read_back, problem = runner.read_thread_map(thread_path)
     assert problem is None, "whatever the writer produces must be readable"
-    assert read_back == bounded
+    assert read_back == {other: THREAD_B}
 
 
 def test_representable_profiles_are_never_evicted_by_count(tmp_path: Path) -> None:

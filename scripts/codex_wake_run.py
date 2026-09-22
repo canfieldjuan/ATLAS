@@ -591,18 +591,22 @@ def _atomic_write(path: Path, text: str) -> None:
     is worth two fsyncs on a file written once per wake.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # Never write through a name something else may have prepared, and never
+    # let a name something else left behind block the write. mkstemp gives
+    # both: it opens with O_CREAT|O_EXCL|O_NOFOLLOW at mode 0600, so a planted
+    # file or symlink is never reused or followed, and it picks an unpredictable
+    # name and retries on collision, so nothing can be planted in advance.
+    #
+    # The previous staging name was derived from the pid. That made a file left
+    # by a killed wake fatal once the pid was reused: preflight passed, Codex
+    # edited, pushed or commented, and only then did the thread-id write raise
+    # FileExistsError, leaving a finished turn with no resumable id. A preflight
+    # cannot close that, because the collision happens at write time.
+    fd, staged_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    staged = Path(staged_name)
     try:
-        # Same rule as reading the id: never write through a name something
-        # else may have prepared. O_EXCL refuses to reuse anything already at
-        # the staging name, which also makes a stale file from a recycled pid
-        # an error rather than a silent overwrite, and O_NOFOLLOW refuses a
-        # symlink planted there to redirect the write.
-        fd = os.open(
-            staged,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o600,
-        )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
             handle.flush()
@@ -799,18 +803,17 @@ def bound_thread_map(mapping: dict[str, str], keep: str) -> dict[str, str]:
         )
 
     bounded = dict(mapping)
+    if keep in bounded and too_big({keep: bounded[keep]}):
+        # Decide whether the retained entry can be represented at all BEFORE
+        # evicting anything for it. A path near PATH_MAX made of characters
+        # JSON escapes reaches this: 4,091 characters serialize to 8,230 bytes.
+        # Checking only after eviction meant every other profile was deleted to
+        # make room for an entry that was then dropped anyway, leaving an empty
+        # map and losing arcs that fitted perfectly well without it.
+        del bounded[keep]
     evictable = sorted(k for k in bounded if k != keep)
     while evictable and too_big(bounded):
         del bounded[evictable.pop(0)]
-    if too_big(bounded):
-        # Eviction has run out and the retained entry alone still does not fit.
-        # A path near PATH_MAX made of characters JSON escapes reaches this:
-        # 4,091 characters serialize to 8,230 bytes. Writing it anyway produces
-        # a map the reader rejects, which forgets every arc including this one,
-        # so the profile is dropped instead and the caller reports it.
-        bounded.pop(keep, None)
-        if too_big(bounded):
-            return {}
     return bounded
 
 
