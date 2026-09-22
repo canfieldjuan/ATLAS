@@ -181,11 +181,18 @@ atlas-codex-wake-run --watcher-id <id> --repo-dir <dir> \
     [--codex-home <dir>] [--agent-home <dir>]
 ```
 
-Argv rather than environment is deliberate. The runner already logs its argv as
-the receipt for what a wake did, and a profile chosen from ambient environment
-would not appear there, so an operator reading the log could not tell which
-profile an unattended turn ran under. `CODEX_WAKE_COMMAND` is argv already, so
-the two compose with what exists.
+Argv rather than environment is deliberate, but not for the reason the first
+draft gave. That draft claimed the runner already logs its own argv as a
+receipt, and it does not: `scripts/codex_wake_run.py:804` logs the argv of the
+**child** `codex` command returned by `build_argv`, so new runner arguments
+would never appear in that line. The auditability requirement is carried by I5
+instead, which is a new log line naming the effective profile.
+
+What argv does buy is that the configuration lives in `CODEX_WAKE_COMMAND`, in
+the watcher config, where an operator can read which profile a watcher uses
+without inspecting a systemd unit or a shell. Ambient environment is invisible
+at the call site. Both are supported, because I5 records whichever is in
+effect.
 
 **Invariants.**
 
@@ -280,6 +287,24 @@ pointed at one profile share that state. Sharing is permitted and untested at
 concurrency; a watcher that wants isolation from another watcher's Codex state
 should be given its own profile directory. This is a documentation obligation,
 recorded in Deferred, not a runner behavior.
+
+**Closure declaration.** Two inventories in this contract drive decisions, and
+they close differently.
+
+- The **argument combinations are CLOSED**. Membership comes from the CLI
+  surface: `--codex-home` given or not, crossed with `--agent-home` given or
+  not, which is four states and admits no fifth. I1, I2 and I3 cover all four,
+  and the settling tests must exercise all four.
+- The **profile states are OPEN**, deliberately. Membership is not the runner's
+  to enumerate, because what counts as a usable profile is decided by Codex and
+  changes with Codex. F1, F2 and F4 are the states reproduced so far, not a
+  complete set. Behavior outside the set is defined rather than unspecified:
+  any profile state not listed is launched into unchanged, whatever Codex does
+  is the outcome, and the existing receipts record it. This is fail-closed by
+  construction rather than by enumeration, because I7 leaves the runner no
+  fallback to select. An implementation must not add a state-specific branch;
+  adding one would convert an open set into a partial enumeration that silently
+  omits the states nobody reproduced.
 
 **Settling test evidence the implementation must produce.**
 
@@ -386,8 +411,8 @@ wake.
 
 | File | +/- |
 |---|---:|
-| `plans/PR-Codex-Wake-Profile-Isolation.md` | +393 |
-| **Total** | **393** |
+| `plans/PR-Codex-Wake-Profile-Isolation.md` | +418 |
+| **Total** | **418** |
 
 Contract only. The implementation that follows is budgeted at roughly 150 lines
 of runtime and test change, over the 400-line soft cap, justified in Why this slice exists.
