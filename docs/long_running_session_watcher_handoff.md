@@ -166,14 +166,15 @@ effective Codex home keeps its own thread file, named
 `<session-id>.codex-thread.<digest>` from a digest of that home. That includes
 a wake given no profile arguments: its home is whatever `CODEX_HOME` or
 `$HOME/.codex` it inherits, so if a watcher's environment changes, the new home
-starts a fresh thread instead of resuming one that home does not hold. The wake
-log's `profile ...` line names the file in use.
+starts a fresh thread instead of resuming one that home does not hold. The home
+is compared the way Codex resolves it: a relative value is taken against the
+wake's `--repo-dir`, and spellings such as a trailing slash count as one home.
+The wake log's `profile ...` line names the file in use.
 
 A watcher created before this change has a single `<session-id>.codex-thread`
-file. Its next wake adopts that id into the file for the home it runs under and
-renames the old file to `<session-id>.codex-thread.migrated`, so the arc
-continues and no other home can adopt it later. `--dry-run` reports a pending
-migration without performing it.
+file. The runner never reads it, so that watcher's next wake starts one fresh
+thread under its home. Run the reset below once per existing watcher after
+upgrading to remove the old file.
 
 To reset a watcher, at post-merge teardown or when resumes keep failing, run
 the runner's reset command rather than deleting files by pattern:
@@ -182,8 +183,8 @@ the runner's reset command rather than deleting files by pattern:
 ~/.local/bin/atlas-codex-wake-run --watcher-id '<session-id>' --reset-threads
 ```
 
-It removes exactly that watcher's thread files, including quarantined and
-migrated ones, and it takes the watcher's wake lock first, so it cannot
+It removes exactly that watcher's thread files, including quarantined ones and
+the pre-profile file, and it takes the watcher's wake lock first, so it cannot
 interleave with a wake in flight. A filename glob is not safe here: watcher ids
 may contain dots and hyphens, so `<session-id>.codex-thread*` also matches a
 different watcher named `<session-id>.codex-thread-<anything>`.
