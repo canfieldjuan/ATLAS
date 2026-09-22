@@ -38,6 +38,15 @@ A wake uses none of it. There is no plugin to install unattended, no memory
 folder to browse, and of the 26 skills in the catalogue at most three
 (`pr-contract`, `reviewer-session`, `coder-session`) relate to working a PR.
 
+Diff-budget override: the contract and its implementation land on one branch,
+so the combined PR is the plan plus roughly 150 lines of runtime and test
+change, over the 400-line soft cap. The plan is the larger half and is long
+because every behavioral claim in it carries the command that reproduced it
+against the real CLI, including three cases that overturned the first draft.
+Splitting the contract into its own PR would mean reviewing an implementation
+against a plan that lives in a different pull request, which is the opposite of
+what contract-first is for. The runtime change itself stays small.
+
 ### Problem-derived contract
 
 Derived from the problem before looking at what a fix would touch.
@@ -75,6 +84,7 @@ agent-message and usage receipts; and every exit code. The operator's real
 
 Ownership lane: dev-workflow/codex-wake-resume
 Slice phase: Workflow/process
+Max files: 5
 
 This PR is the contract half of that phase: it adds the plan and no code.
 
@@ -118,20 +128,32 @@ before it was written down; a reviewer can re-run each one.
 - The contract states that a profile directory is written to by Codex and must
   therefore be writable -- settled by invariant I6 and its reproduction, where
   an empty profile gained `installation_id` and several sqlite databases.
-- The contract names the tooling reachability requirement, so a wake under an
-  isolated `HOME` cannot silently lose git identity or `gh` auth -- settled by
-  failure case F3 and the Deferred documentation item.
+- The contract **explicitly defers** the guarantee that an isolated `HOME`
+  preserves git identity and `gh` auth, rather than claiming to settle it. It
+  is an operator configuration property, not a runner behavior, and no
+  implementation-side test can establish it for an arbitrary directory. What is
+  settled is that a correctly built wake `HOME` preserves them: reproduced with
+  `.gitconfig`, `.ssh` and `.config/gh` symlinked from the real home, where a
+  resumed wake returned the operator's git email and `github.com` from
+  `gh auth status`. That symlink set is the documentation obligation in
+  Deferred. A reviewer should mark this criterion met only if the contract
+  still defers rather than claims.
 - The contract does not change any behavior PR #2525 settled -- settled by the
   "what must not change" list above, which the implementation must leave green
   in `tests/test_codex_wake_run.py` (365 tests at the time of writing).
 
 **Reachability proof.** The surface is the existing entrypoint chain
 `atlas-pr-webhook-receiver -> atlas-pr-watch-event -> codex_wake_bridge.py
--> CODEX_WAKE_COMMAND -> atlas-codex-wake-run`. The observable output that will
-prove the wiring is the `usage=` line already written to
-`~/.local/state/atlas-pr-watchers/<id>.codex-wake.log`: under an isolated
-profile its `input_tokens` must land near the 27,495 row, not the 75,685 row,
-for an equivalent first wake.
+-> CODEX_WAKE_COMMAND -> atlas-codex-wake-run`. The proof must exercise **that
+chain**, not the runner directly. A runner-direct invocation can produce a
+small `usage=` line while every configured watcher still wakes on the
+interactive profile, because nothing would have forced `CODEX_WAKE_COMMAND` to
+carry the new arguments; that is a proxy, not a reachability proof. The
+required evidence is a run of `atlas-pr-watch-and-wake <watcher-id>` against a
+watcher config whose `CODEX_WAKE_COMMAND` includes the profile arguments,
+producing in `~/.local/state/atlas-pr-watchers/<id>.codex-wake.log` both the
+effective-profile line required by I5 and a `usage=` line whose `input_tokens`
+lands near the 27,495 row rather than the 75,685 row.
 
 **Affected surfaces (at implementation time).** `scripts/codex_wake_run.py`,
 `tests/test_codex_wake_run.py`, `docs/long_running_session_watcher_handoff.md`,
@@ -189,10 +211,25 @@ the two compose with what exists.
   `CODEX_HOME` and `HOME` both set in the environment and neither passed as an
   argument, the runner's output is byte-identical to a run with no profile at
   all, so nothing in the receipt distinguishes them.
-- **I6.** The runner writes nothing outside its own state directory. Codex
-  writes inside the profile, so a profile directory must be writable by the
-  wake: reproduced by pointing `CODEX_HOME` at an empty directory, after which
-  Codex created `installation_id` and several sqlite databases there.
+- **I6.** This slice narrows nothing about where a wake may write. The runner
+  writes its own state directory and short-lived scratch files it creates and
+  removes under the system temp directory. Codex writes inside the profile, and
+  inside the repository checkout, which is the entire point of a coding wake;
+  an invariant forbidding that would make the contract unsatisfiable. The one
+  new obligation is that a profile directory must be **writable**: reproduced by
+  pointing `CODEX_HOME` at an empty directory, after which Codex created
+  `installation_id` and several sqlite databases there.
+- **I8.** A stored thread id is scoped to the `CODEX_HOME` that created it, so
+  the runner records the effective `CODEX_HOME` alongside the id and treats a
+  mismatch as "start a fresh thread", without attempting the resume and without
+  quarantining the id. Reproduced: a thread created under `~/.codex` and
+  resumed under `~/.codex-wake` returns
+  `thread/resume failed: no rollout found for thread id ... (code -32600)`,
+  after which the runner quarantines the id to `.stale` and the next wake starts
+  over. That costs one failed wake and silently discards the arc, which
+  contradicts this contract's own "what must not change" list. Quarantine must
+  stay reserved for a session that is genuinely dead in its own profile.
+  Switching back to the original profile must still resume the original arc.
 - **I7.** The runner never selects or substitutes a profile. It passes what it
   was given, or nothing. There is no fallback path to select, which is the
   fail-closed rule enforced by construction rather than by a check.
@@ -210,6 +247,13 @@ through the installed runner before being written down.
   directory with its own scaffolding, then fails `401 Unauthorized` after
   retrying the websocket three times over about twelve seconds. Exit 1, no
   tokens billed.
+- **F4. `CODEX_HOME` exists and is readable but not writable.** Codex fails at
+  initialization with `failed to initialize in-process app-server client:
+  Permission denied (os error 13)`, before any model call. Exit 1, no tokens
+  billed. This was raised in review as a case needing pre-launch rejection
+  because it would "consume a turn"; reproducing it shows it consumes none, so
+  it is documented here and handled the same way as F1 and F2 rather than by a
+  runner check.
 - **F3. An isolated `HOME` missing git identity or `gh` credentials** is an
   operator configuration error, not a runner error. The runner does not probe
   for them, because probing would either spend a turn or hard-code assumptions
@@ -241,8 +285,14 @@ recorded in Deferred, not a runner behavior.
 
 - A test asserting the child environment carries both variables when both are
   given, one when one is given, and neither when neither is given.
-- A test asserting a missing profile directory refuses before launch, with the
-  fake Codex binary proving it was never invoked.
+- A test asserting that a missing profile is **launched into and fails closed**:
+  Codex is invoked, exits non-zero, no thread id is recorded, and the runner
+  does not substitute another profile. The first draft of this bullet required
+  proving Codex was never invoked, which directly contradicted the
+  no-validation decision; no implementation could satisfy both.
+- A test asserting that a stored thread id created under a different
+  `CODEX_HOME` starts a fresh thread instead of attempting a resume, and is not
+  quarantined.
 - A test asserting the wake log names the effective profile.
 - The existing suite green, with no change to argv shape, resume behavior,
   receipts or exit codes.
@@ -336,8 +386,8 @@ wake.
 
 | File | +/- |
 |---|---:|
-| `plans/PR-Codex-Wake-Profile-Isolation.md` | +343 |
-| **Total** | **343** |
+| `plans/PR-Codex-Wake-Profile-Isolation.md` | +393 |
+| **Total** | **393** |
 
 Contract only. The implementation that follows is budgeted at roughly 150 lines
-of runtime and test change, well inside the 400-line soft cap.
+of runtime and test change, over the 400-line soft cap, justified in Why this slice exists.
