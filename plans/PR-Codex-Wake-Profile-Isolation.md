@@ -2,7 +2,8 @@
 
 Contract only. This plan is committed and reviewed before any implementation
 lands, per the operator's contract-first rule. No runtime file changes in this
-commit.
+commit, and none in this PR: the implementation is a separate slice that
+references this document as its accepted contract.
 
 ## Why this slice exists
 
@@ -38,14 +39,13 @@ A wake uses none of it. There is no plugin to install unattended, no memory
 folder to browse, and of the 26 skills in the catalogue at most three
 (`pr-contract`, `reviewer-session`, `coder-session`) relate to working a PR.
 
-Diff-budget override: the contract and its implementation land on one branch,
-so the combined PR is the plan plus roughly 150 lines of runtime and test
-change, over the 400-line soft cap. The plan is the larger half and is long
-because every behavioral claim in it carries the command that reproduced it
-against the real CLI, including three cases that overturned the first draft.
-Splitting the contract into its own PR would mean reviewing an implementation
-against a plan that lives in a different pull request, which is the opposite of
-what contract-first is for. The runtime change itself stays small.
+Diff-budget override: this PR is the contract alone and the plan is 419 lines,
+over the 400-line soft cap by itself. It is long because every behavioral claim
+in it carries the command that reproduced it against the real CLI, including
+four cases that overturned a draft and one reviewer request that reproduction
+showed rested on a false premise. Cutting it to budget would mean deleting the
+evidence, which is the part that makes the contract reviewable. The
+implementation it specifies is roughly 150 lines and lands as its own slice.
 
 ### Problem-derived contract
 
@@ -91,8 +91,8 @@ This PR is the contract half of that phase: it adds the plan and no code.
 1. Add `plans/PR-Codex-Wake-Profile-Isolation.md`, the contract below, and
    nothing else.
 2. No runtime, test, doc or workflow file changes. Implementation begins only
-   after the operator accepts this contract, in a separate commit on this
-   branch.
+   after the operator accepts this contract, as its own slice with its own
+   plan, which references this one as the accepted contract.
 
 ### Files touched
 
@@ -411,8 +411,9 @@ wake.
 
 | File | +/- |
 |---|---:|
-| `plans/PR-Codex-Wake-Profile-Isolation.md` | +418 |
-| **Total** | **418** |
+| `plans/PR-Codex-Wake-Profile-Isolation.md` | +419 |
+| **Total** | **419** |
 
-Contract only. The implementation that follows is budgeted at roughly 150 lines
-of runtime and test change, over the 400-line soft cap, justified in Why this slice exists.
+Contract only, and over the 400-line soft cap on its own, justified in Why this
+slice exists. The implementation it specifies is budgeted at roughly 150 lines
+of runtime and test change and lands as a separate slice.
