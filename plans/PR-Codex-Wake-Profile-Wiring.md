@@ -114,6 +114,11 @@ Max files: 5
   `::test_one_home_spelled_two_ways_resumes_one_arc`, which fails behaviourally
   on 029e00624: an inherited `CODEX_HOME=<home>/` and a later `--codex-home
   <home>/` selected different files, so the second wake started fresh.
+- A retargeted profile link never shares an arc, and switching it back
+  resumes the first -- settled by
+  `::test_a_retargeted_profile_link_does_not_share_an_arc`, which fails with
+  exit 76 on 3eaeace38: the wake through the link retargeted to B resumed A's
+  id.
 - `..` is never collapsed into another home, and the child sees the argument
   as written -- settled by
   `::test_dotdot_after_a_symlink_is_not_collapsed_into_another_home`, which
@@ -202,15 +207,18 @@ Max files: 5
   as written. `profile_directory_argument` is the single admission point. Everything else,
   including empty, whitespace, relative and `~` paths, is rejected with exit 2
   before any turn exists.
-- **Path spellings of one profile directory: CLOSED.** Membership is derived
-  from how the kernel resolves a path, and `_canonical_directory` is the single
-  place each member is settled: relative to the child's working directory
-  (made absolute against this process's too), `.` components, repeated slashes
-  and a trailing slash, exactly two leading slashes, all folded because none
-  can change the directory; `..` and symlinks, kept distinct because the kernel
-  resolves `..` after following a link; and encoding, settled by hashing the
-  filesystem bytes rather than UTF-8 text. The parametrized spelling test has a
-  row for each member, and a new member needs a new row.
+- **Path spellings of one profile directory: CLOSED by construction.** The
+  key is not built from the spelling. `_canonical_directory` joins a relative
+  value to the child's working directory (made absolute against this
+  process's) and then asks the kernel, through `os.path.realpath`, which
+  directory it names now. That is the same resolution Codex reports: `codex
+  doctor --json` given `CODEX_HOME=<link>` reports the link's target. So every
+  spelling difference is settled by the one source that defines it: `.`,
+  repeated or doubled leading slashes, a trailing slash, `..` after a link,
+  aliases, and a link retargeted between wakes. Encoding is settled separately
+  by hashing filesystem bytes. The parametrized spelling test builds a real
+  tree with real links and has a row per kind of difference; it is evidence,
+  not the membership list.
 - **A watcher's thread files: CLOSED.** Membership is derived from one exact
   pattern in `_watcher_thread_pattern`: the pre-profile file, per-home files
   with a 16-hex-digit digest, and the `.stale` form of each, for
@@ -234,8 +242,9 @@ chain is run again on each head with `--dry-run` added to the configured
 command, which spends no tokens: the real bridge runs it, and the runner must
 select the same per-home file and report `argv=codex exec resume
 01a0cad7-b821-7080-ae09-3fda1018b339 ...`, the thread the real turns recorded.
-The configured `--codex-home` has no `.`, repeated slash, trailing slash or
-`..`, so canonical keying leaves its digest unchanged.
+The configured `--codex-home` and `--agent-home` contain no symlinks and no
+spelling differences, so resolving them leaves the digest unchanged, which the
+dry run on each head confirms.
 The resume itself on this head is covered by
 `tests/test_codex_wake_end_to_end.py`, which drives the real bridge against a
 fake Codex.
@@ -252,12 +261,12 @@ watcher losing its arc on upgrade; one profile's arc reaching another's turn.
 non-empty absolute path, and passes it through unchanged. `resolve_profile` turns
 the arguments plus the current environment into a `WakeProfile` carrying the
 **effective** values the child will see, each tagged `argument`, `inherited`,
-`derived from HOME` or `unset`. Each effective value is canonical: joined to the
-child's working directory, `--repo-dir`, when relative, which is how Codex
-resolves it, with `.` components, repeated slashes, a doubled leading slash
-and a trailing slash dropped; the digest is taken over the filesystem bytes,
-and the receipt shows non-UTF-8 bytes as backslash escapes. `..` is kept, because the kernel resolves it after following a
-symlink, so collapsing it could merge two different homes. The canonical values feed only the
+`derived from HOME` or `unset`. Each effective value is the directory Codex
+will use: joined to the child's working directory, `--repo-dir`, when
+relative, then resolved with `os.path.realpath`, as Codex resolves it; a
+derived `<home>/.codex` is resolved again, since it may be a link. The digest
+is taken over the filesystem bytes, and the receipt shows non-UTF-8 bytes as
+backslash escapes. The resolved values feed only the
 thread key and the receipt; the child's environment is never rewritten from
 them. Codex has no unset `CODEX_HOME`: it defaults to `$HOME/.codex`, verified
 against the real CLI, so an unset one is derived from the child's `HOME`. `child_environment` returns `None` when nothing is
@@ -309,8 +318,11 @@ and its directory flush makes the removals as durable as the write they undo.
 - The digest is 64 bits. Two effective homes colliding in it would share a
   file; at the handful of profiles a watcher sees, that is negligible, and it is
   assumed not to happen.
-- A symlinked alias of a home is a different string, so it reads as a
-  different profile. That errs toward a fresh thread, never a wrong one.
+- A profile's path is resolved under the wake lock, immediately before the
+  turn. Retargeting a profile link between that resolution and Codex opening
+  the profile is outside the model, like hand-editing the state directory
+  during a wake; retargeting between wakes is inside it and keys the new
+  target's own file.
 
 **Specimen and isolation.** The shared-map design this replaces was reproduced
 losing an update: with profile B recorded out of band between profile A's read
@@ -363,12 +375,14 @@ the handoff doc relies on.
   Rejecting an empty or relative argument is not profile validation; it refuses
   a value that would name a different directory than the operator meant. What
   happens inside an admitted directory stays Codex's decision.
-- **Canonicalization that cannot merge homes.** Only `.`, repeated slashes and
-  a trailing slash are dropped, because none of them can change which
-  directory a path names. `..` is kept, and `realpath` is not used: it would
-  touch the filesystem and could race. Both misses, a symlinked alias and a
-  `..` spelling, split one home into two, which starts a fresh thread rather
-  than resuming a wrong one.
+- **Key by the kernel's resolution, not by text rules.** Rounds eleven to
+  thirteen each added a lexical rule for one more way a spelling can differ
+  from the directory, and round fourteen found one no text rule can see: a
+  link retargeted between wakes. Codex itself keys its profile by the resolved
+  path, so the key now asks the kernel the same question. The earlier
+  objection to `realpath`, that it touches the filesystem and could race, is
+  narrower than the defect it removes: the only race left is retargeting a
+  link during that watcher's own wake, which the execution model excludes.
 - **`child_environment` returns `None`** rather than a copy of `os.environ`,
   so an unconfigured deployment launches exactly as before.
 - **Unpredictable staging names.** #2525's pid-derived staging name stopped a
@@ -396,14 +410,15 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 229 passed, 8 skipped - Environment: local
-- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 447 passed, 8 skipped - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 231 passed, 8 skipped - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 449 passed, 8 skipped - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "outside_the_admitted_domain"` against the pre-fix runner - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "stale_staging_file_does_not_fail_the_thread_write"` against the runner on `main` - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "inherited_home_change"` against the runner before per-home keying - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "state_table or spelled_two_ways or keyed_per_repository or flushes_the_state_directory"` against the runner at 029e00624 - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "dotdot_after_a_symlink or finds_nothing_names or trailing_slash_spellings"` against the runner at 639de1256 - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "spellings_key_the_directory or relative_repo_dir or non_utf8_profile"` against the runner at 8cbb93e12 - Result: fail - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py -q -k "retargeted_profile_link or spellings_key_the_directory"` against the runner at 3eaeace38 - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof`, run twice on `b28cd309a` - Result: pass - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof-dry`, the same configured command with `--dry-run`, on this head - Result: pass - Environment: local
 - Command: `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - Result: pass - Environment: local
@@ -418,8 +433,8 @@ their fix.
 | File | LOC |
 |---|---:|
 | `docs/long_running_session_watcher_handoff.md` | 76 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | 425 |
-| `scripts/codex_wake_run.py` | 511 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | 440 |
+| `scripts/codex_wake_run.py` | 497 |
 | `tests/test_codex_wake_end_to_end.py` | 11 |
-| `tests/test_codex_wake_run.py` | 941 |
-| **Total** | **1964** |
+| `tests/test_codex_wake_run.py` | 988 |
+| **Total** | **2012** |

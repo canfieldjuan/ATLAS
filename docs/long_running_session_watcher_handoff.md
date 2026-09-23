@@ -167,14 +167,14 @@ effective Codex home keeps its own thread file, named
 a wake given no profile arguments: its home is whatever `CODEX_HOME` or
 `$HOME/.codex` it inherits, so if a watcher's environment changes, the new home
 starts a fresh thread instead of resuming one that home does not hold. The home
-is compared the way Codex resolves it: a relative value is taken against the
-wake's `--repo-dir` (itself taken against the directory the runner starts in,
-if relative), and spellings that differ only by `.`, repeated or doubled
-leading slashes, or a trailing slash count as one home. A path that is not
-valid UTF-8 works, and is shown with backslash escapes in the log. `..` is kept as written, because after a
-symlink it does not mean what it appears to; two spellings that differ by `..`
-start separate threads rather than risk sharing one.
-The wake log's `profile ...` line names the file in use.
+is the directory Codex actually uses, resolved at wake time the way `codex
+doctor` reports it: a relative value is taken against the wake's `--repo-dir`,
+and symlinks are followed. Two spellings or aliases of one directory therefore
+share one arc, and a profile link retargeted to another directory starts that
+directory's own arc; pointing it back resumes the first. Do not retarget a
+profile link while one of its wakes is running. A path that is not valid UTF-8
+works, and is shown with backslash escapes in the log. The wake log's
+`profile ...` line names the resolved home and the file in use.
 
 A watcher created before this change has a single `<session-id>.codex-thread`
 file. The runner never reads it, so that watcher's next wake starts one fresh

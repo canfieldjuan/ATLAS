@@ -2470,14 +2470,13 @@ def test_each_profile_keeps_its_own_arc_and_switching_back_resumes(
 
 
 def test_trailing_slash_spellings_of_one_home_share_one_thread_file(tmp_path: Path) -> None:
-    """Spellings that cannot name different directories share one file; `..`
-    is kept, because after a symlink it can."""
+    """Spellings of one directory share one file, and the argument itself
+    reaches the child exactly as written."""
     state_dir = tmp_path / "state"
     plain = _profile_thread(state_dir, "/srv/codex-wake")
     for spelling in ("/srv/codex-wake/", "/srv/./codex-wake", "/srv//codex-wake"):
         assert runner.profile_directory_argument(spelling) == spelling, "passed through unchanged"
         assert _profile_thread(state_dir, spelling) == plain, spelling
-    assert _profile_thread(state_dir, "/srv/x/../codex-wake") != plain
 
 
 def test_a_stale_staging_file_does_not_fail_the_thread_write(tmp_path: Path) -> None:
@@ -2969,23 +2968,71 @@ def test_a_reset_that_finds_nothing_names_the_directory_it_searched(
 # filesystem bytes so no valid POSIX path can fail to key.
 
 SPELLINGS = [
-    # (first, second, same home?)
-    ("/srv/codex", "/srv/codex/", True),
-    ("/srv/codex", "/srv/./codex", True),
-    ("/srv/codex", "/srv//codex", True),
-    ("/srv/codex", "//srv/codex", True),
-    ("/srv/codex", "///srv/codex", True),
-    ("/srv/codex", "/srv/x/../codex", False),
-    ("/srv/codex", "/srv/Codex", False),
+    # (second spelling, relative to a real tree root R, same home as R/codex?)
+    ("{R}/codex/", True),
+    ("{R}/./codex", True),
+    ("{R}//codex", True),
+    ("/{R}/codex", True),  # exactly two leading slashes
+    ("{R}/x/../codex", True),  # x is a real directory
+    ("{R}/alias", True),  # alias -> R/codex
+    ("{R}/link/../codex", False),  # link -> R/elsewhere/sub, so this is R/elsewhere/codex
+    ("{R}/Codex", False),
 ]
 
 
-@pytest.mark.parametrize("first, second, same", SPELLINGS)
+@pytest.mark.parametrize("second, same", SPELLINGS)
 def test_path_spellings_key_the_directory_codex_opens(
-    tmp_path: Path, first: str, second: str, same: bool
+    tmp_path: Path, second: str, same: bool
 ) -> None:
+    root = tmp_path / "tree"
+    for directory in ("codex", "Codex", "x", "elsewhere/sub", "elsewhere/codex"):
+        (root / directory).mkdir(parents=True)
+    (root / "alias").symlink_to(root / "codex")
+    (root / "link").symlink_to(root / "elsewhere" / "sub")
     state_dir = tmp_path / "state"
-    assert (_profile_thread(state_dir, first) == _profile_thread(state_dir, second)) is same
+
+    keyed = _profile_thread(state_dir, second.format(R=root))
+    assert (keyed == _profile_thread(state_dir, str(root / "codex"))) is same
+
+
+def test_a_retargeted_profile_link_does_not_share_an_arc(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a key built from the spelling followed the link's name,
+    not its target.
+
+    Reproduced on 3eaeace38: with /profiles/current pointing at A and then
+    retargeted to B, both wakes selected one thread file, so the B wake tried
+    A's id under B, and the missing-session path would quarantine A's only
+    pointer. `codex doctor --json` reports the link's target as CODEX_HOME,
+    so Codex itself treats them as two homes.
+    """
+    profiles = tmp_path / "profiles"
+    (profiles / "a").mkdir(parents=True)
+    (profiles / "b").mkdir()
+    current = profiles / "current"
+    current.symlink_to(profiles / "a")
+    state_dir = tmp_path / "state"
+
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, codex_home=str(current), state_dir=state_dir) == 0
+
+    current.unlink()
+    current.symlink_to(profiles / "b")
+    on_b = tmp_path / "on-b"
+    on_b.mkdir()
+    fake_b, record_b = _fake_codex(on_b, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, codex_home=str(current), state_dir=state_dir) == 0
+    assert "resume" not in json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+
+    current.unlink()
+    current.symlink_to(profiles / "a")
+    back = tmp_path / "back"
+    back.mkdir()
+    fake_back, record_back = _fake_codex(back, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_back, codex_home=str(current), state_dir=state_dir) == 0
+    argv = json.loads(record_back.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv, "switching the link back resumes A's arc"
 
 
 def test_a_relative_repo_dir_is_keyed_against_the_process_directory(

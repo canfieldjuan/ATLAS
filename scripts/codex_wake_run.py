@@ -653,29 +653,25 @@ class WakeProfile(NamedTuple):
 
 
 def _canonical_directory(cwd: Path, value: str) -> str:
-    """The directory Codex will open for `value`, as far as text can tell.
+    """The directory Codex will actually use for `value`, resolved now.
 
-    Every way a spelling can differ from what the kernel opens is settled
-    here, and nowhere else:
+    Codex keys its own profile by the resolved path: `codex doctor --json`
+    given CODEX_HOME=<link> reports the link's target, not the link. So does
+    this key. Asking the kernel settles every way a spelling can differ from
+    the directory in one step: `.`, repeated or doubled leading slashes, a
+    trailing slash, `..` after a symlink (which the kernel resolves after
+    following the link), two aliases of one directory, and a link retargeted
+    between wakes, which a key built from the spelling alone would have shared
+    between two homes. A relative value is first joined to the child's working
+    directory, itself made absolute against this process's, because that is
+    where Codex resolves it.
 
-    - relative to the child's working directory, which may itself be relative
-      to this process's: made absolute against both, without normalizing;
-    - `.` components, repeated slashes and a trailing slash: dropped, since
-      none can change the directory named (pathlib joining does this);
-    - exactly two leading slashes, which pathlib keeps because POSIX leaves
-      them implementation-defined: folded to one, as Linux resolves them;
-    - `..` and symlinks: kept as written, because the kernel resolves `..`
-      after following a symlink, and folding them could merge two homes;
-    - encoding: not a spelling question at all; the key hashes the
-      filesystem bytes, see `profile_thread_path`.
-
-    Keeping `..` and symlinks distinct can only split one home into two
-    spellings, which starts a fresh thread rather than resuming a wrong one.
+    Resolution happens under the wake lock, immediately before the turn. A
+    link retargeted in the moment between this call and Codex opening the
+    profile is outside the model, like hand-editing the state directory
+    during a wake.
     """
-    text = str(Path(cwd).absolute() / value)
-    if text.startswith("//") and not text.startswith("///"):
-        text = text[1:]
-    return text
+    return os.path.realpath(Path(cwd).absolute() / value)
 
 
 def display_path(value: str) -> str:
@@ -702,20 +698,9 @@ def resolve_profile(
     argument names it; a receipt built from arguments alone would be blind in
     exactly that case.
 
-    The effective values are canonical: made absolute against `cwd`, the
-    child's working directory, which is how Codex resolves a relative value --
-    verified with `codex doctor --json`, where CODEX_HOME=rel reported
-    <cwd>/rel from two different directories. Only the key and the receipt use
-    these; the child environment is never rewritten from them.
-
-    Canonicalization removes only what never changes which directory a path
-    names: `.` components, repeated slashes and a trailing slash. It keeps
-    `..`. The kernel resolves `..` after following a symlink, so collapsing it
-    lexically can merge two different homes -- verified: Codex given
-    CODEX_HOME=<root>/link/../profile, with link pointing elsewhere, used the
-    other tree's profile, while normpath keyed it as <root>/profile. Keeping
-    `..` can only split one home into two spellings, which starts a fresh
-    thread rather than resuming a wrong one.
+    The effective values are the directories Codex will actually use,
+    resolved by `_canonical_directory`. Only the key and the receipt use them;
+    the child environment is never rewritten from them.
     """
     source = os.environ if environ is None else environ
 
@@ -736,7 +721,8 @@ def resolve_profile(
         # <home>/.codex and authenticated against it. Reporting "unset" here
         # would put a false profile in the receipt and, worse, make two threads
         # from different derived homes compare equal.
-        codex_value = str(Path(home_value) / ".codex")
+        # Resolved again, since <home>/.codex may itself be a link.
+        codex_value = _canonical_directory(Path(home_value), ".codex")
         codex_origin = "derived from HOME"
     return WakeProfile(
         codex_home=codex_home,
