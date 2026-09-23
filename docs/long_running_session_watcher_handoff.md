@@ -168,8 +168,10 @@ a wake given no profile arguments: its home is whatever `CODEX_HOME` or
 `$HOME/.codex` it inherits, so if a watcher's environment changes, the new home
 starts a fresh thread instead of resuming one that home does not hold. The home
 is compared the way Codex resolves it: a relative value is taken against the
-wake's `--repo-dir`, and spellings that differ only by `.`, a repeated slash or
-a trailing slash count as one home. `..` is kept as written, because after a
+wake's `--repo-dir` (itself taken against the directory the runner starts in,
+if relative), and spellings that differ only by `.`, repeated or doubled
+leading slashes, or a trailing slash count as one home. A path that is not
+valid UTF-8 works, and is shown with backslash escapes in the log. `..` is kept as written, because after a
 symlink it does not mean what it appears to; two spellings that differ by `..`
 start separate threads rather than risk sharing one.
 The wake log's `profile ...` line names the file in use.

@@ -2959,3 +2959,87 @@ def test_a_reset_that_finds_nothing_names_the_directory_it_searched(
     assert _reset(empty, "foo") == 0
 
     assert f"no thread files for foo in {empty}" in capsys.readouterr().out
+
+
+# --- Path spelling to thread key ---------------------------------------------
+#
+# The thread key must name the directory Codex opens. Every way a spelling can
+# differ from that directory is one row: folded when it cannot change the
+# directory, kept distinct when it can (`..` after a symlink), and hashed as
+# filesystem bytes so no valid POSIX path can fail to key.
+
+SPELLINGS = [
+    # (first, second, same home?)
+    ("/srv/codex", "/srv/codex/", True),
+    ("/srv/codex", "/srv/./codex", True),
+    ("/srv/codex", "/srv//codex", True),
+    ("/srv/codex", "//srv/codex", True),
+    ("/srv/codex", "///srv/codex", True),
+    ("/srv/codex", "/srv/x/../codex", False),
+    ("/srv/codex", "/srv/Codex", False),
+]
+
+
+@pytest.mark.parametrize("first, second, same", SPELLINGS)
+def test_path_spellings_key_the_directory_codex_opens(
+    tmp_path: Path, first: str, second: str, same: bool
+) -> None:
+    state_dir = tmp_path / "state"
+    assert (_profile_thread(state_dir, first) == _profile_thread(state_dir, second)) is same
+
+
+def test_a_relative_repo_dir_is_keyed_against_the_process_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a relative --repo-dir was keyed as text.
+
+    Reproduced on 8cbb93e12: with --repo-dir repo and inherited
+    CODEX_HOME=rel, wakes started from /a and /b both keyed repo/rel, although
+    Codex runs under /a/repo/rel and /b/repo/rel, so the second resumed the
+    first home's id.
+    """
+    state_dir = tmp_path / "state"
+    for name in ("a", "b"):
+        (tmp_path / name / "repo").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", "rel")
+
+    monkeypatch.chdir(tmp_path / "a")
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, state_dir=state_dir, repo=Path("repo")) == 0
+
+    monkeypatch.chdir(tmp_path / "b")
+    other = tmp_path / "other"
+    other.mkdir()
+    fake_b, record = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, state_dir=state_dir, repo=Path("repo")) == 0
+
+    assert "resume" not in json.loads(record.read_text(encoding="utf-8"))["argv"]
+
+
+def test_a_non_utf8_profile_path_keys_logs_and_resumes(
+    tmp_path: Path, repo_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: a valid POSIX path with a non-UTF-8 byte crashed the wake.
+
+    Reproduced on 8cbb93e12: an absolute --codex-home holding byte 0xff passed
+    admission, then keying it raised UnicodeEncodeError, even on --dry-run.
+    """
+    home = os.fsdecode(bytes(tmp_path) + b"/co\xffdex")
+    state_dir = tmp_path / "state"
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+
+    assert runner.main([
+        "--watcher-id", "slice-123", "--repo-dir", str(repo_dir),
+        "--state-dir", str(state_dir), "--codex-bin", str(fake),
+        "--codex-home", home, "--dry-run",
+    ]) == 0
+    assert "co\\xffdex" in capsys.readouterr().out
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=home, state_dir=state_dir) == 0
+    again = tmp_path / "again"
+    again.mkdir()
+    fake_again, record_again = _fake_codex(again, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_again, codex_home=home, state_dir=state_dir) == 0
+    argv = json.loads(record_again.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv
+    assert "co\\xffdex" in (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")

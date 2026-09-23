@@ -653,10 +653,39 @@ class WakeProfile(NamedTuple):
 
 
 def _canonical_directory(cwd: Path, value: str) -> str:
-    # PurePosixPath joining drops ".", repeated slashes and a trailing slash
-    # and never collapses "..", which is exactly the safe set; see
-    # resolve_profile.
-    return str(Path(cwd) / value)
+    """The directory Codex will open for `value`, as far as text can tell.
+
+    Every way a spelling can differ from what the kernel opens is settled
+    here, and nowhere else:
+
+    - relative to the child's working directory, which may itself be relative
+      to this process's: made absolute against both, without normalizing;
+    - `.` components, repeated slashes and a trailing slash: dropped, since
+      none can change the directory named (pathlib joining does this);
+    - exactly two leading slashes, which pathlib keeps because POSIX leaves
+      them implementation-defined: folded to one, as Linux resolves them;
+    - `..` and symlinks: kept as written, because the kernel resolves `..`
+      after following a symlink, and folding them could merge two homes;
+    - encoding: not a spelling question at all; the key hashes the
+      filesystem bytes, see `profile_thread_path`.
+
+    Keeping `..` and symlinks distinct can only split one home into two
+    spellings, which starts a fresh thread rather than resuming a wrong one.
+    """
+    text = str(Path(cwd).absolute() / value)
+    if text.startswith("//") and not text.startswith("///"):
+        text = text[1:]
+    return text
+
+
+def display_path(value: str) -> str:
+    """A path as it can always be written to the UTF-8 log and stdout.
+
+    A POSIX path may hold bytes that are not UTF-8; Python carries them as
+    surrogate escapes, which a strict UTF-8 writer refuses. Showing them as
+    backslash escapes keeps the receipt honest without failing the wake.
+    """
+    return os.fsencode(value).decode("utf-8", "backslashreplace")
 
 
 def resolve_profile(
@@ -755,7 +784,9 @@ def profile_thread_path(state_dir: Path, watcher_id: str, profile: WakeProfile) 
     because a CODEX_HOME can be a long absolute path unsafe in a filename; the
     receipt line names the file in use.
     """
-    digest = hashlib.sha256(profile.effective_codex_home.encode("utf-8")).hexdigest()
+    # The filesystem bytes, not UTF-8 text: a valid POSIX path need not be
+    # UTF-8, and encoding its surrogate escapes as UTF-8 raises.
+    digest = hashlib.sha256(os.fsencode(profile.effective_codex_home)).hexdigest()
     return state_dir / f"{watcher_id}.codex-thread.{digest[:THREAD_DIGEST_LEN]}"
 
 
@@ -784,8 +815,8 @@ def profile_receipt(profile: WakeProfile, thread_path: Path) -> str:
     """One log line naming the effective profile and the thread file in use."""
     return (
         "profile "
-        f"codex_home={profile.effective_codex_home} ({profile.codex_home_origin}) "
-        f"home={profile.effective_home} ({profile.home_origin}) "
+        f"codex_home={display_path(profile.effective_codex_home)} ({profile.codex_home_origin}) "
+        f"home={display_path(profile.effective_home)} ({profile.home_origin}) "
         f"thread_file={thread_path.name}"
     )
 
@@ -1376,7 +1407,7 @@ def run_wake(
         thread_id, ignored_reason = read_thread_id(thread_path)
         argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
         print(f"mode={'resume' if thread_id else 'fresh'}")
-        print(f"cwd={repo_dir}")
+        print(f"cwd={display_path(str(repo_dir))}")
         if ignored_reason:
             print(f"ignored_stored_thread_id={ignored_reason}")
         print(profile_receipt(profile, thread_path))
