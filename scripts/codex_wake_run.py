@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Codex wake turns against a persistent per-watcher thread.
+"""Run Codex wake turns against a persistent thread per watcher and Codex home.
 
 The PR watcher and `codex_wake_bridge.py` decide whether a wake should happen
 and what the prompt says. This runner is the last stage: it takes that prompt
@@ -22,6 +22,7 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import shutil
@@ -713,6 +714,17 @@ def resolve_profile(
         return PROFILE_UNSET, "unset"
 
     home_value, home_origin = effective(agent_home, "HOME")
+    if home_origin == "unset":
+        # Codex finds its home the way the OS does: $HOME, then the account's
+        # home from the password database. Keying "<unset>" instead would give
+        # every such wake one shared file, whatever account it runs as, and a
+        # different file from the same profile reached through HOME.
+        try:
+            account_home = pwd.getpwuid(os.getuid()).pw_dir
+        except KeyError:
+            account_home = ""
+        if account_home:
+            home_value, home_origin = _canonical_directory(cwd, account_home), "account home"
     codex_value, codex_origin = effective(codex_home, "CODEX_HOME")
     if codex_origin == "unset" and home_value != PROFILE_UNSET:
         # Codex has no unset CODEX_HOME: it defaults to $HOME/.codex, and HOME

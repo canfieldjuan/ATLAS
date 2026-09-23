@@ -3164,3 +3164,37 @@ def test_dry_run_and_reset_threads_cannot_be_combined(tmp_path: Path) -> None:
 
     assert exited.value.code == 2
     assert keep.read_text(encoding="utf-8") == THREAD_A + "\n"
+
+
+def test_an_unset_home_resolves_through_the_account_home(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: with HOME and CODEX_HOME both unset the key was "<unset>".
+
+    Reproduced on 74f6baeff: a dry run with both removed keyed and logged
+    codex_home=<unset>, one shared file for every such wake whatever account
+    it ran as, and a different file from the same profile reached through
+    HOME. Codex, like the OS, falls back to the account's home from the
+    password database, so the runner does the same.
+    """
+    import pwd
+
+    account = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+    env = {k: v for k, v in os.environ.items() if k not in ("HOME", "CODEX_HOME")}
+    completed = subprocess.run(
+        [
+            sys.executable, str(SCRIPT), "--watcher-id", "slice-123",
+            "--repo-dir", str(repo_dir), "--state-dir", str(tmp_path / "state"),
+            "--dry-run",
+        ],
+        env=env, capture_output=True, text=True, timeout=30, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"codex_home={account}/.codex (derived from HOME)" in completed.stdout
+    assert f"home={account} (account home)" in completed.stdout
+    via_home = runner.resolve_profile(
+        codex_home=None, agent_home=None, cwd=repo_dir, environ={"HOME": account}
+    )
+    keyed = runner.profile_thread_path(tmp_path / "state", "slice-123", via_home).name
+    assert f"thread_file={keyed}" in completed.stdout, "same profile, same file as via HOME"

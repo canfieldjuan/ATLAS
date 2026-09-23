@@ -217,8 +217,9 @@ all trusted; watcher-sourced text is treated as untrusted prompt input.
 exists because a bare `codex exec` per wake starts a **fresh thread**: the
 woken agent has no memory of the arc it is continuing, and the operator pays
 full cold-start context on every wake. The runner keeps one Codex thread per
-watcher id, recorded at
-`~/.local/state/atlas-pr-watchers/<session-id>.codex-thread`, and resumes it.
+watcher id and Codex home, recorded at
+`~/.local/state/atlas-pr-watchers/<session-id>.codex-thread.<digest>` (see the
+profile section above), and resumes it.
 
 It also pins the argv to what the installed Codex actually accepts. The
 hand-written local script this replaces passed `--ask-for-approval`, which

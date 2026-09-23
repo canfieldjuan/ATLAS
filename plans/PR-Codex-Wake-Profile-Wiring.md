@@ -157,7 +157,11 @@ Max files: 5
   `::test_partial_isolation_is_recorded_as_partial` and
   `::test_an_inherited_codex_home_with_an_isolated_home_is_partial`.
 - `CODEX_HOME` is derived from an isolated `HOME` rather than reported unset --
-  settled by `::test_codex_home_is_derived_from_an_isolated_home`.
+  settled by `::test_codex_home_is_derived_from_an_isolated_home`. With `HOME`
+  unset too, it is derived from the account's home in the password database,
+  as the OS and Codex do -- settled by
+  `::test_an_unset_home_resolves_through_the_account_home`, which fails on
+  74f6baeff, where the key and the receipt were `<unset>`.
 - A misconfigured profile is launched into rather than pre-validated, and
   records no thread for any profile -- settled by
   `::test_a_missing_profile_is_launched_into_and_fails_closed`.
@@ -420,8 +424,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 233 passed, 8 skipped - Environment: local
-- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 451 passed, 8 skipped - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 234 passed, 8 skipped - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 452 passed, 8 skipped - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "outside_the_admitted_domain"` against the pre-fix runner - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "stale_staging_file_does_not_fail_the_thread_write"` against the runner on `main` - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "inherited_home_change"` against the runner before per-home keying - Result: fail - Environment: local
@@ -430,6 +434,7 @@ Parked hardening: none.
 - Command: `pytest tests/test_codex_wake_run.py -q -k "spellings_key_the_directory or relative_repo_dir or non_utf8_profile"` against the runner at 8cbb93e12 - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "retargeted_profile_link or spellings_key_the_directory"` against the runner at 3eaeace38 - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "queued_wake_resolves or cannot_be_combined"` against the runner at f630a21ee - Result: fail - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py -q -k "unset_home_resolves"` against the runner at 74f6baeff - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof`, run twice on `b28cd309a` - Result: pass - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof-dry`, the same configured command with `--dry-run`, on this head - Result: pass - Environment: local
 - Command: `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - Result: pass - Environment: local
@@ -443,9 +448,9 @@ their fix.
 
 | File | LOC |
 |---|---:|
-| `docs/long_running_session_watcher_handoff.md` | 76 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | 451 |
-| `scripts/codex_wake_run.py` | 508 |
+| `docs/long_running_session_watcher_handoff.md` | 81 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | 456 |
+| `scripts/codex_wake_run.py` | 522 |
 | `tests/test_codex_wake_end_to_end.py` | 11 |
-| `tests/test_codex_wake_run.py` | 1062 |
-| **Total** | **2108** |
+| `tests/test_codex_wake_run.py` | 1096 |
+| **Total** | **2166** |
