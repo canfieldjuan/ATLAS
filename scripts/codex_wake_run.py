@@ -1373,10 +1373,17 @@ def run_wake(
     sandbox: str,
     codex_bin: str,
     dry_run: bool,
-    profile: WakeProfile | None = None,
+    codex_home: str | None = None,
+    agent_home: str | None = None,
 ) -> int:
-    if profile is None:
-        profile = resolve_profile(codex_home=None, agent_home=None, cwd=repo_dir)
+    """Run one wake, or print what it would run.
+
+    The profile is resolved here, from the raw arguments, and for a real wake
+    only once the wake lock is held. Resolving follows symlinks, so resolving
+    before waiting for the lock would let a link retargeted while this wake
+    queued key one home's thread file and launch Codex into another. Taking
+    arguments rather than a resolved profile keeps that ordering structural.
+    """
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1385,11 +1392,13 @@ def run_wake(
         # the very first filesystem touch is not one.
         print(f"cannot use the state directory {state_dir}: {exc}", file=sys.stderr)
         return EXIT_STATE_UNUSABLE
-    thread_path = profile_thread_path(state_dir, watcher_id, profile)
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
 
     if dry_run:
+        # Read-only, so no lock: it reports what a wake would do right now.
+        profile = resolve_profile(codex_home=codex_home, agent_home=agent_home, cwd=repo_dir)
+        thread_path = profile_thread_path(state_dir, watcher_id, profile)
         thread_id, ignored_reason = read_thread_id(thread_path)
         argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
         print(f"mode={'resume' if thread_id else 'fresh'}")
@@ -1423,6 +1432,10 @@ def run_wake(
             if refusal is not None:
                 return refusal
 
+            profile = resolve_profile(
+                codex_home=codex_home, agent_home=agent_home, cwd=repo_dir
+            )
+            thread_path = profile_thread_path(state_dir, watcher_id, profile)
             result = run_one_turn(
                 watcher_id=watcher_id,
                 repo_dir=repo_dir,
@@ -1566,7 +1579,8 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--reset-threads",
         action="store_true",
         help=(
@@ -1575,7 +1589,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "rather than a filename glob."
         ),
     )
-    parser.add_argument(
+    mode.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the argv this wake would run and exit without calling Codex.",
@@ -1624,12 +1638,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("refusing to start a Codex turn with an empty prompt", file=sys.stderr)
         return 2
 
-    profile = resolve_profile(
-        codex_home=args.codex_home,
-        agent_home=args.agent_home,
-        cwd=repo_dir,
-    )
-
     return run_wake(
         watcher_id=args.watcher_id,
         repo_dir=repo_dir,
@@ -1638,7 +1646,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sandbox=args.sandbox,
         codex_bin=args.codex_bin,
         dry_run=args.dry_run,
-        profile=profile,
+        codex_home=args.codex_home,
+        agent_home=args.agent_home,
     )
 
 

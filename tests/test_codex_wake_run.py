@@ -3090,3 +3090,77 @@ def test_a_non_utf8_profile_path_keys_logs_and_resumes(
     argv = json.loads(record_again.read_text(encoding="utf-8"))["argv"]
     assert "resume" in argv and THREAD_A in argv
     assert "co\\xffdex" in (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+
+
+def test_a_queued_wake_resolves_its_profile_after_taking_the_lock(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the profile was resolved before waiting for the lock.
+
+    Reproduced on f630a21ee: a wake queued behind a held lock resolved
+    current -> A, the link was retargeted to B while it waited, and on getting
+    the lock it launched Codex into B while keying A's thread file, so it
+    resumed A's id under B.
+    """
+    profiles = tmp_path / "profiles"
+    (profiles / "a").mkdir(parents=True)
+    (profiles / "b").mkdir()
+    current = profiles / "current"
+    current.symlink_to(profiles / "a")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    a_file = _profile_thread(state_dir, str(profiles / "a"))
+    a_file.write_text(THREAD_A + "\n", encoding="utf-8")
+    b_file = _profile_thread(state_dir, str(profiles / "b"))
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    log_path = state_dir / "slice-123.codex-wake.log"
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("wake prompt", encoding="utf-8")
+    stderr_file = tmp_path / "queued.stderr"
+
+    with (state_dir / "slice-123.codex-wake.lock").open("w", encoding="utf-8") as held, \
+            prompt_file.open("rb") as stdin, stderr_file.open("wb") as stderr:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        queued = subprocess.Popen(
+            [
+                sys.executable, str(SCRIPT), "--watcher-id", "slice-123",
+                "--repo-dir", str(repo_dir), "--state-dir", str(state_dir),
+                "--codex-bin", str(fake), "--codex-home", str(current),
+            ],
+            stdin=stdin, stdout=subprocess.DEVNULL, stderr=stderr,
+        )
+        deadline = time.monotonic() + 10
+        # The log is opened just before the lock wait, after argument parsing.
+        while not log_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        assert queued.poll() is None, "the wake must be waiting for the lock"
+        current.unlink()
+        current.symlink_to(profiles / "b")
+    queued.wait(timeout=30)
+
+    assert queued.returncode == 0, stderr_file.read_text(encoding="utf-8", errors="replace")
+    assert "resume" not in json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert runner.read_thread_id(b_file) == (THREAD_B, None)
+    assert runner.read_thread_id(a_file) == (THREAD_A, None), "A's arc is untouched"
+
+
+def test_dry_run_and_reset_threads_cannot_be_combined(tmp_path: Path) -> None:
+    """Regression: --reset-threads --dry-run performed the reset.
+
+    Reproduced on f630a21ee: the combination removed the watcher's thread
+    file and exited 0, although a dry run promises to change nothing.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    keep = state_dir / "foo.codex-thread.0123456789abcdef"
+    keep.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exited:
+        runner.main([
+            "--watcher-id", "foo", "--state-dir", str(state_dir),
+            "--reset-threads", "--dry-run",
+        ])
+
+    assert exited.value.code == 2
+    assert keep.read_text(encoding="utf-8") == THREAD_A + "\n"

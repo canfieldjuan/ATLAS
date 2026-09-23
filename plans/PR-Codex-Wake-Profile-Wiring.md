@@ -119,6 +119,16 @@ Max files: 5
   `::test_a_retargeted_profile_link_does_not_share_an_arc`, which fails with
   exit 76 on 3eaeace38: the wake through the link retargeted to B resumed A's
   id.
+- A queued wake resolves its profile only after taking the lock -- settled by
+  `::test_a_queued_wake_resolves_its_profile_after_taking_the_lock`, which runs
+  a real second process blocked on the real lock and retargets the link while
+  it waits. On f630a21ee it exits 76: the profile had been resolved before the
+  wait, so it keyed A's file and resumed A's id under B. `run_wake` now takes
+  the raw arguments rather than a resolved profile, so no caller can resolve
+  outside the lock.
+- `--dry-run` and `--reset-threads` cannot be combined -- settled by
+  `::test_dry_run_and_reset_threads_cannot_be_combined`; on f630a21ee the pair
+  removed the thread file and exited 0.
 - `..` is never collapsed into another home, and the child sees the argument
   as written -- settled by
   `::test_dotdot_after_a_symlink_is_not_collapsed_into_another_home`, which
@@ -410,8 +420,8 @@ Parked hardening: none.
 
 ## Verification
 
-- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 231 passed, 8 skipped - Environment: local
-- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 449 passed, 8 skipped - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py -q` - Result: 233 passed, 8 skipped - Environment: local
+- Command: `pytest tests/test_codex_wake_bridge.py tests/test_codex_wake_run.py tests/test_codex_wake_end_to_end.py tests/test_codex_issue_queue.py tests/test_install_codex_wake_bridge.py tests/test_pr_watcher.py tests/test_report_pr_watcher_state.py tests/test_audit_pr_watcher_safety.py -q` - Result: 451 passed, 8 skipped - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "outside_the_admitted_domain"` against the pre-fix runner - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "stale_staging_file_does_not_fail_the_thread_write"` against the runner on `main` - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "inherited_home_change"` against the runner before per-home keying - Result: fail - Environment: local
@@ -419,6 +429,7 @@ Parked hardening: none.
 - Command: `pytest tests/test_codex_wake_run.py -q -k "dotdot_after_a_symlink or finds_nothing_names or trailing_slash_spellings"` against the runner at 639de1256 - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "spellings_key_the_directory or relative_repo_dir or non_utf8_profile"` against the runner at 8cbb93e12 - Result: fail - Environment: local
 - Command: `pytest tests/test_codex_wake_run.py -q -k "retargeted_profile_link or spellings_key_the_directory"` against the runner at 3eaeace38 - Result: fail - Environment: local
+- Command: `pytest tests/test_codex_wake_run.py -q -k "queued_wake_resolves or cannot_be_combined"` against the runner at f630a21ee - Result: fail - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof`, run twice on `b28cd309a` - Result: pass - Environment: local
 - Command: `~/.local/bin/atlas-pr-watch-and-wake wake-profile-proof-dry`, the same configured command with `--dry-run`, on this head - Result: pass - Environment: local
 - Command: `python scripts/maturity_sweep.py scripts --tests-root tests --baseline tests/maturity_sweep/baseline_scripts.json --min-score 8 --sensitive-glob 'scripts/**'` - Result: pass - Environment: local
@@ -433,8 +444,8 @@ their fix.
 | File | LOC |
 |---|---:|
 | `docs/long_running_session_watcher_handoff.md` | 76 |
-| `plans/PR-Codex-Wake-Profile-Wiring.md` | 440 |
-| `scripts/codex_wake_run.py` | 497 |
+| `plans/PR-Codex-Wake-Profile-Wiring.md` | 451 |
+| `scripts/codex_wake_run.py` | 508 |
 | `tests/test_codex_wake_end_to_end.py` | 11 |
-| `tests/test_codex_wake_run.py` | 988 |
-| **Total** | **2012** |
+| `tests/test_codex_wake_run.py` | 1062 |
+| **Total** | **2108** |
