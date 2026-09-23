@@ -30,6 +30,26 @@ THREAD_A = "01a0bfda-9ffb-7873-a20f-b085a7ae0a92"
 THREAD_B = "01a0bfd5-3b96-7701-b18f-0278ff55548d"
 
 
+def _thread_file(state_dir: Path, codex_home: str | None = None) -> Path:
+    """The thread file the runner uses for this profile (default: no arguments).
+
+    The wake harness runs with --repo-dir <tmp>/repo beside <tmp>/state, so that
+    is the working directory a relative home would resolve against.
+    """
+    return runner.profile_thread_path(
+        state_dir,
+        "slice-123",
+        runner.resolve_profile(
+            codex_home=codex_home, agent_home=None, cwd=state_dir.parent / "repo"
+        ),
+    )
+
+
+def _stale_file(state_dir: Path, codex_home: str | None = None) -> Path:
+    path = _thread_file(state_dir, codex_home)
+    return path.with_name(path.name + ".stale")
+
+
 def _fake_codex(tmp_path: Path, *, thread_id: str, exit_code: int = 0) -> tuple[Path, Path]:
     """Install a stand-in for the Codex CLI.
 
@@ -48,6 +68,8 @@ def _fake_codex(tmp_path: Path, *, thread_id: str, exit_code: int = 0) -> tuple[
         "    'argv': sys.argv[1:],\n"
         "    'cwd': os.getcwd(),\n"
         "    'stdin': sys.stdin.read(),\n"
+        "    'codex_home': os.environ.get('CODEX_HOME'),\n"
+        "    'home': os.environ.get('HOME'),\n"
         "}\n"
         "with open(record, 'w', encoding='utf-8') as handle:\n"
         "    json.dump(payload, handle)\n"
@@ -127,7 +149,7 @@ def test_resume_wake_argv_shape(tmp_path: Path, repo_dir: Path) -> None:
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
+    (_thread_file(state_dir)).write_text(THREAD_A + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake) == 0
 
@@ -164,7 +186,7 @@ def test_repo_dir_is_passed_as_cwd_on_both_paths(tmp_path: Path, repo_dir: Path)
     assert _run(tmp_path, fake=fake) == 0
     fresh_cwd = json.loads(record.read_text(encoding="utf-8"))["cwd"]
 
-    assert (state_dir / "slice-123.codex-thread").read_text(encoding="utf-8").strip() == THREAD_A
+    assert (_thread_file(state_dir)).read_text(encoding="utf-8").strip() == THREAD_A
     assert _run(tmp_path, fake=fake) == 0
     resume_payload = json.loads(record.read_text(encoding="utf-8"))
 
@@ -194,7 +216,7 @@ def test_explicit_sandbox_reaches_codex(tmp_path: Path, repo_dir: Path) -> None:
 
 def test_thread_id_round_trip(tmp_path: Path, repo_dir: Path) -> None:
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
-    thread_path = tmp_path / "state" / "slice-123.codex-thread"
+    thread_path = _thread_file(tmp_path / "state")
 
     assert _run(tmp_path, fake=fake) == 0
     assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
@@ -233,7 +255,7 @@ def test_rejects_malformed_thread_id(
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").write_text(stored, encoding="utf-8")
+    (_thread_file(state_dir)).write_text(stored, encoding="utf-8")
 
     assert _run(tmp_path, fake=fake) == 0
 
@@ -241,7 +263,7 @@ def test_rejects_malformed_thread_id(
     assert "resume" not in argv
     assert stored.strip() not in argv
     # The fresh run repairs the file with the real id it just started.
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_B
 
@@ -254,7 +276,7 @@ def test_trailing_newline_thread_id_is_accepted(tmp_path: Path, repo_dir: Path) 
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").write_text(f"{THREAD_A}\n", encoding="utf-8")
+    (_thread_file(state_dir)).write_text(f"{THREAD_A}\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake) == 0
 
@@ -278,7 +300,7 @@ def test_thread_id_is_read_inside_the_lock(tmp_path: Path, repo_dir: Path) -> No
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     lock_path = state_dir / "slice-123.codex-wake.lock"
 
     # Stand in for "A finished while B was blocked": the id appears after B
@@ -340,13 +362,13 @@ def test_confirmed_missing_session_quarantines_the_id(
     fake = _failing_codex(tmp_path, stderr_text=missing_session_stderr(THREAD_A))
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 1
 
     assert not thread_path.exists()
-    stale = state_dir / "slice-123.codex-thread.stale"
+    stale = _stale_file(state_dir)
     assert stale.read_text(encoding="utf-8").strip() == THREAD_A
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
     assert "quarantined" in log_text
@@ -373,13 +395,13 @@ def test_transient_resume_failure_keeps_the_id(
     fake = _failing_codex(tmp_path, stderr_text=stderr_text)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 1
 
     assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
-    assert not (state_dir / "slice-123.codex-thread.stale").exists()
+    assert not (_stale_file(state_dir)).exists()
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
     assert "keeping the id" in log_text
 
@@ -387,7 +409,7 @@ def test_transient_resume_failure_keeps_the_id(
 def test_next_wake_after_quarantine_starts_fresh(tmp_path: Path, repo_dir: Path) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
+    (_thread_file(state_dir)).write_text(THREAD_A + "\n", encoding="utf-8")
 
     dead = _failing_codex(
         tmp_path, stderr_text=missing_session_stderr(THREAD_A), name="dead-codex"
@@ -399,7 +421,7 @@ def test_next_wake_after_quarantine_starts_fresh(tmp_path: Path, repo_dir: Path)
 
     argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
     assert "resume" not in argv, "the wake after a quarantine must start fresh"
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_B
 
@@ -415,13 +437,13 @@ def test_failed_resume_that_did_attach_keeps_the_id(
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A, exit_code=4)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 4
 
     assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
-    assert not (state_dir / "slice-123.codex-thread.stale").exists()
+    assert not (_stale_file(state_dir)).exists()
 
 
 def test_thread_id_persists_when_the_turn_is_killed_mid_flight(
@@ -448,7 +470,7 @@ def test_thread_id_persists_when_the_turn_is_killed_mid_flight(
 
     _run(tmp_path, fake=fake, state_dir=state_dir)
 
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A, "the id must survive a turn that never completed"
 
@@ -584,7 +606,7 @@ def test_an_unwritable_audit_path_does_not_fail_a_completed_turn(
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
     assert record.exists(), "the turn must still have run"
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
@@ -611,7 +633,7 @@ def test_zero_exit_without_a_thread_event_is_a_protocol_failure(
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_NO_THREAD_EVENT
 
-    assert not (state_dir / "slice-123.codex-thread").exists()
+    assert not (_thread_file(state_dir)).exists()
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
     assert "emitted no valid thread.started event" in log_text
 
@@ -794,7 +816,7 @@ def test_unusable_thread_path_refuses_before_launching_codex(
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").mkdir()  # not a regular file
+    (_thread_file(state_dir)).mkdir()  # not a regular file
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_STATE_UNUSABLE
 
@@ -970,7 +992,7 @@ def test_a_background_process_does_not_outlive_the_lock(
         "a process the turn left running must be stopped before the lock frees"
     )
     # The turn itself still succeeded and is still resumable.
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A
 
@@ -1175,7 +1197,7 @@ def test_a_special_thread_file_is_rejected_without_being_opened(
     fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    target = state_dir / "slice-123.codex-thread"
+    target = _thread_file(state_dir)
     if shape == "fifo":
         os.mkfifo(target)
     else:
@@ -1228,13 +1250,13 @@ def test_an_unrelated_not_found_does_not_quarantine(
     fake = _failing_codex(tmp_path, stderr_text=stderr_text)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 1
 
     assert thread_path.read_text(encoding="utf-8").strip() == THREAD_A
-    assert not (state_dir / "slice-123.codex-thread.stale").exists()
+    assert not (_stale_file(state_dir)).exists()
 
 
 def test_reports_missing_session_requires_the_phrase_and_the_id() -> None:
@@ -1263,7 +1285,7 @@ def test_a_resume_reporting_a_different_thread_is_refused(
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_B)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
 
     exit_code = _run(tmp_path, fake=fake, state_dir=state_dir)
@@ -1285,7 +1307,7 @@ def test_a_fresh_turn_still_records_whatever_thread_it_started(
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_B
 
@@ -1329,7 +1351,7 @@ def test_a_wrong_thread_turn_is_stopped_before_it_can_act(
     fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     thread_path.write_text(THREAD_A + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == runner.EXIT_NO_THREAD_EVENT
@@ -1498,7 +1520,7 @@ def test_a_fresh_turn_is_pinned_to_its_first_thread(
     exit_code = _run(tmp_path, fake=fake, state_dir=state_dir)
 
     assert exit_code == runner.EXIT_NO_THREAD_EVENT
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A, "the first id must survive a contradicting one"
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
@@ -1513,7 +1535,7 @@ def test_a_fresh_turn_repeating_one_thread_is_fine(
     state_dir = tmp_path / "state"
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A
 
@@ -1524,7 +1546,7 @@ def test_a_resume_repeating_its_own_thread_is_fine(
     fake = _multi_thread_codex(tmp_path, [THREAD_A, THREAD_A])
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").write_text(THREAD_A + "\n", encoding="utf-8")
+    (_thread_file(state_dir)).write_text(THREAD_A + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
 
@@ -1562,7 +1584,7 @@ def test_a_non_utf8_byte_does_not_discard_the_turn(
 
     assert side_effect.exists(), "the fake must have reached its side effect"
     assert exit_code == 0
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A, "the turn must stay resumable"
     log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
@@ -1589,7 +1611,7 @@ def test_thread_identity_ignores_casing(
     fake, _record = _fake_codex(tmp_path, thread_id=reported)
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    thread_path = state_dir / "slice-123.codex-thread"
+    thread_path = _thread_file(state_dir)
     thread_path.write_text(stored + "\n", encoding="utf-8")
 
     assert _run(tmp_path, fake=fake, state_dir=state_dir) == 0
@@ -1608,7 +1630,7 @@ def test_a_genuinely_different_thread_is_still_refused(
     fake, _record = _fake_codex(tmp_path, thread_id=THREAD_B.upper())
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    (state_dir / "slice-123.codex-thread").write_text(
+    (_thread_file(state_dir)).write_text(
         THREAD_A + "\n", encoding="utf-8"
     )
 
@@ -1853,7 +1875,7 @@ def test_non_json_stdout_lines_are_counted_not_silently_dropped(
     assert "2 stdout line(s) were not JSON events" in log_text
     assert "warning: this line is not json" in log_text
     # The valid events around them are still processed.
-    assert (tmp_path / "state" / "slice-123.codex-thread").read_text(
+    assert (_thread_file(tmp_path / "state")).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A
 
@@ -2018,7 +2040,7 @@ def test_a_thread_less_turn_does_not_leave_the_previous_result_standing(
     record_path = state_dir / "slice-123.codex-wake.last.md"
     assert record_path.read_text(encoding="utf-8").strip() == "ok"
 
-    (state_dir / "slice-123.codex-thread").unlink()
+    (_thread_file(state_dir)).unlink()
     nameless = _codex_emitting(
         tmp_path,
         "codex-nameless",
@@ -2093,7 +2115,7 @@ def test_a_turn_without_a_usage_receipt_is_a_protocol_failure(
     assert "did the work" in record
     assert "unpriced" in record
     # The turn still happened, so the thread id is kept and the arc survives.
-    assert (state_dir / "slice-123.codex-thread").read_text(
+    assert (_thread_file(state_dir)).read_text(
         encoding="utf-8"
     ).strip() == THREAD_A
 
@@ -2160,24 +2182,26 @@ def test_a_failing_turn_keeps_its_own_exit_code_when_usage_is_missing(
     assert "usage=unavailable" in log_text
 
 
-def test_the_staged_thread_write_refuses_a_planted_name(tmp_path: Path) -> None:
-    """Same rule as the read: never write through a name someone else prepared.
+def test_a_name_planted_at_the_old_staging_path_is_neither_followed_nor_fatal(
+    tmp_path: Path,
+) -> None:
+    """Both sides of the staging boundary.
 
-    The staging name is predictable -- it is derived from the thread file and
-    this process's pid -- so a symlink planted there would redirect the write
-    out of the state directory.
+    Security: a symlink planted where the staging file used to be named must
+    not redirect the write. Availability: a leftover at that name must not make
+    the write fail. The pid-derived name satisfied the first by failing the
+    second, which surfaced as a finished turn with no resumable id.
     """
     target = tmp_path / "slice-123.codex-thread"
-    staged = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    old_staging_name = target.with_name(f".{target.name}.{os.getpid()}.tmp")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.write_text("untouched", encoding="utf-8")
-    staged.symlink_to(elsewhere)
+    old_staging_name.symlink_to(elsewhere)
 
-    with pytest.raises(OSError):
-        runner.write_thread_id(target, THREAD_A)
+    runner.write_thread_id(target, THREAD_A)
 
     assert elsewhere.read_text(encoding="utf-8") == "untouched"
-    assert not target.exists()
+    assert runner.read_thread_id(target) == (THREAD_A, None)
 
 
 def test_the_thread_id_still_round_trips_through_the_staged_write(
@@ -2192,3 +2216,985 @@ def test_the_thread_id_still_round_trips_through_the_staged_write(
     leftovers = [entry.name for entry in tmp_path.iterdir() if entry.name.startswith(".")]
     assert leftovers == [], f"staging file left behind: {leftovers}"
 
+
+def _run_profile(
+    tmp_path: Path,
+    *,
+    fake: Path,
+    codex_home: str | None = None,
+    agent_home: str | None = None,
+    state_dir: Path | None = None,
+    repo: Path | None = None,
+    prompt: str = "wake prompt",
+) -> int:
+    """Run one wake with an explicit profile, the way a watcher config would."""
+    argv = [
+        "--watcher-id", "slice-123",
+        "--repo-dir", str(repo if repo is not None else (tmp_path / "repo")),
+        "--state-dir", str(state_dir if state_dir is not None else (tmp_path / "state")),
+        "--codex-bin", str(fake),
+    ]
+    if codex_home is not None:
+        argv += ["--codex-home", codex_home]
+    if agent_home is not None:
+        argv += ["--agent-home", agent_home]
+
+    class _Stdin:
+        @staticmethod
+        def read() -> str:
+            return prompt
+
+    original = sys.stdin
+    sys.stdin = _Stdin()  # type: ignore[assignment]
+    try:
+        return runner.main(argv)
+    finally:
+        sys.stdin = original
+
+
+@pytest.mark.parametrize(
+    "give_codex_home, give_agent_home",
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_every_profile_argument_combination_reaches_the_child(
+    tmp_path: Path, repo_dir: Path, give_codex_home: bool, give_agent_home: bool
+) -> None:
+    """The argument inventory is CLOSED at four states, so all four are pinned.
+
+    Two independent roots means four combinations and no fifth: Codex reads its
+    config from CODEX_HOME and the shared skills catalogue from
+    $HOME/.agents/skills, so isolating one does not isolate the other.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    ch = tmp_path / "wake-codex-home"
+    ah = tmp_path / "wake-agent-home"
+    ch.mkdir()
+    ah.mkdir()
+
+    exit_code = _run_profile(
+        tmp_path,
+        fake=fake,
+        codex_home=str(ch) if give_codex_home else None,
+        agent_home=str(ah) if give_agent_home else None,
+    )
+
+    assert exit_code == 0
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    if give_codex_home:
+        assert payload["codex_home"] == str(ch)
+    else:
+        assert payload["codex_home"] == os.environ.get("CODEX_HOME")
+    if give_agent_home:
+        assert payload["home"] == str(ah)
+    else:
+        assert payload["home"] == os.environ.get("HOME")
+
+
+def test_no_profile_leaves_the_child_environment_untouched(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression for I2: this feature is opt-in and must not move a deployment."""
+    assert runner.child_environment(
+        runner.resolve_profile(codex_home=None, agent_home=None, cwd=Path("/repo"))
+    ) is None
+
+
+def test_the_receipt_names_the_effective_profile_however_it_was_set(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a receipt built from arguments alone is blind to the env.
+
+    Reproduced against the shipped runner before this change: with CODEX_HOME
+    and HOME set in the environment and neither passed as an argument, the
+    output was byte-identical to a run with no profile at all.
+    """
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    inherited = tmp_path / "inherited-codex-home"
+    inherited.mkdir()
+    monkeypatch.setenv("CODEX_HOME", str(inherited))
+    state_dir = tmp_path / "state"
+
+    assert _run_profile(tmp_path, fake=fake, state_dir=state_dir) == 0
+
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert f"codex_home={inherited} (inherited)" in log_text
+
+
+def test_partial_isolation_is_recorded_as_partial(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Isolating one root measurably under-delivers, so it must not read as full."""
+    fake, _record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    ch = tmp_path / "only-codex-home"
+    ch.mkdir()
+    state_dir = tmp_path / "state"
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=str(ch), state_dir=state_dir) == 0
+
+    log_text = (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+    assert "partial profile isolation" in log_text
+    assert "HOME is not isolated" in log_text
+
+    both = tmp_path / "state-both"
+    ah = tmp_path / "both-agent-home"
+    ah.mkdir()
+    assert _run_profile(
+        tmp_path, fake=fake, codex_home=str(ch), agent_home=str(ah), state_dir=both
+    ) == 0
+    assert "partial profile isolation" not in (
+        both / "slice-123.codex-wake.log"
+    ).read_text(encoding="utf-8")
+
+
+def test_a_missing_profile_is_launched_into_and_fails_closed(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """The contract forbids pre-launch validation; Codex owns profile validity.
+
+    Reproduced against the real CLI: a nonexistent CODEX_HOME makes Codex exit
+    before any model call, without creating the directory and without falling
+    back. So the runner must launch into it and must not substitute a profile.
+    """
+    fake = _codex_emitting(tmp_path, "codex-fails", [], exit_code=7)
+    record = tmp_path / "invocation.json"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, os, sys\n"
+        "sys.stdin.read()\n"
+        f"json.dump({{'codex_home': os.environ.get('CODEX_HOME')}}, open({str(record)!r}, 'w'))\n"
+        "sys.exit(7)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    missing = tmp_path / "does-not-exist"
+    state_dir = tmp_path / "state"
+
+    exit_code = _run_profile(
+        tmp_path, fake=fake, codex_home=str(missing), state_dir=state_dir
+    )
+
+    assert exit_code == 7, "the turn's own exit code must survive"
+    assert record.exists(), "Codex must be invoked, not pre-empted by a runner check"
+    assert json.loads(record.read_text(encoding="utf-8"))["codex_home"] == str(missing)
+    assert not list(state_dir.glob("slice-123.codex-thread*")), (
+        "a turn that never started must record no thread for any profile"
+    )
+
+
+def test_codex_home_is_derived_from_an_isolated_home(tmp_path: Path) -> None:
+    """Regression: Codex has no unset CODEX_HOME; it defaults to $HOME/.codex.
+
+    Verified against the real CLI: running with HOME set and CODEX_HOME absent
+    created <home>/.codex and authenticated against it. Reporting "unset" would
+    put a false profile in the receipt and make two threads from different
+    derived homes compare equal.
+    """
+    agent_home = tmp_path / "wake-home"
+    profile = runner.resolve_profile(
+        codex_home=None, agent_home=str(agent_home), cwd=Path("/repo"), environ={}
+    )
+
+    assert profile.effective_codex_home == str(agent_home / ".codex")
+    assert profile.codex_home_origin == "derived from HOME"
+    # Both roots moved together, so this is not partial isolation.
+    assert profile.partial_reason is None
+
+    only_codex = runner.resolve_profile(
+        codex_home=str(tmp_path / "ch"), agent_home=None, cwd=Path("/repo"),
+        environ={"HOME": "/real"},
+    )
+    assert only_codex.partial_reason is not None
+    assert "HOME is not isolated" in only_codex.partial_reason
+
+
+def test_an_inherited_codex_home_with_an_isolated_home_is_partial(
+    tmp_path: Path,
+) -> None:
+    """Regression: derivation happens only when nothing named a Codex home.
+
+    With CODEX_HOME inherited from the environment and only --agent-home given,
+    the child keeps the inherited profile and just moves HOME, which is partial
+    however it reads at the call site.
+    """
+    inherited = runner.resolve_profile(
+        codex_home=None,
+        agent_home=str(tmp_path / "wake-home"),
+        cwd=Path("/repo"),
+        environ={"CODEX_HOME": "/real/.codex", "HOME": "/real"},
+    )
+
+    assert inherited.effective_codex_home == "/real/.codex"
+    assert inherited.codex_home_origin == "inherited"
+    assert inherited.partial_reason is not None
+    assert "inherited rather than derived" in inherited.partial_reason
+
+    derived = runner.resolve_profile(
+        codex_home=None, agent_home=str(tmp_path / "wake-home"), cwd=Path("/repo"),
+        environ={},
+    )
+    assert derived.codex_home_origin == "derived from HOME"
+    assert derived.partial_reason is None
+
+
+def _profile_thread(state_dir: Path, codex_home: str | None) -> Path:
+    return _thread_file(state_dir, codex_home)
+
+
+def test_each_profile_keeps_its_own_arc_and_switching_back_resumes(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """A rollout lives only inside the CODEX_HOME that created it, so each
+    profile keeps its own thread file and switching back finds it untouched."""
+    state_dir = tmp_path / "state"
+    home_a = str(tmp_path / "home-a")
+    home_b = str(tmp_path / "home-b")
+
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, codex_home=home_a, state_dir=state_dir) == 0
+
+    other = tmp_path / "other"
+    other.mkdir()
+    fake_b, record_b = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, codex_home=home_b, state_dir=state_dir) == 0
+    assert "resume" not in json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+
+    back = tmp_path / "back"
+    back.mkdir()
+    fake_back, record_back = _fake_codex(back, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_back, codex_home=home_a, state_dir=state_dir) == 0
+    argv = json.loads(record_back.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv
+
+    assert runner.read_thread_id(_profile_thread(state_dir, home_a))[0] == THREAD_A
+    assert runner.read_thread_id(_profile_thread(state_dir, home_b))[0] == THREAD_B
+
+
+def test_trailing_slash_spellings_of_one_home_share_one_thread_file(tmp_path: Path) -> None:
+    """Spellings of one directory share one file, and the argument itself
+    reaches the child exactly as written."""
+    state_dir = tmp_path / "state"
+    plain = _profile_thread(state_dir, "/srv/codex-wake")
+    for spelling in ("/srv/codex-wake/", "/srv/./codex-wake", "/srv//codex-wake"):
+        assert runner.profile_directory_argument(spelling) == spelling, "passed through unchanged"
+        assert _profile_thread(state_dir, spelling) == plain, spelling
+
+
+def test_a_stale_staging_file_does_not_fail_the_thread_write(tmp_path: Path) -> None:
+    """Regression: a killed wake's pid-named leftover plus a reused pid.
+
+    Reproduced against the pid-derived staging name: preflight passed and the
+    post-turn write raised FileExistsError after Codex had acted.
+    """
+    thread_path = tmp_path / "slice-123.codex-thread"
+    thread_path.with_name(f".{thread_path.name}.{os.getpid()}.tmp").write_text(
+        "left by a killed wake\n", encoding="utf-8"
+    )
+
+    assert runner.thread_path_problem(thread_path) is None
+    runner.write_thread_id(thread_path, THREAD_A)
+
+    assert runner.read_thread_id(thread_path) == (THREAD_A, None)
+
+
+def test_an_inherited_home_change_does_not_resume_the_other_homes_arc(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: argument-free wakes were keyed by "whatever the environment
+    says now", so two inherited homes shared one thread file.
+
+    Reproduced: an argument-free wake under HOME=/profiles/a and one under
+    HOME=/profiles/b selected the same file, so the second resumed the first's
+    id inside a home that does not hold it, and the quarantine then removed the
+    first home's only pointer to its arc.
+    """
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    state_dir = tmp_path / "state"
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home-a"))
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, state_dir=state_dir) == 0
+    file_a = _thread_file(state_dir)
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home-b"))
+    other = tmp_path / "other"
+    other.mkdir()
+    fake_b, record_b = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, state_dir=state_dir) == 0
+
+    argv = json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv, f"home B must not resume home A's arc: {argv}"
+    assert _thread_file(state_dir) != file_a
+    assert runner.read_thread_id(file_a) == (THREAD_A, None), "home A's arc survives"
+
+
+def test_a_dead_session_quarantines_only_its_own_profile_file(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    home_a = str(tmp_path / "home-a")
+    a_file = _profile_thread(state_dir, home_a)
+    legacy = state_dir / "slice-123.codex-thread"
+    a_file.write_text(THREAD_A + "\n", encoding="utf-8")
+    legacy.write_text(THREAD_B + "\n", encoding="utf-8")
+
+    fake = tmp_path / "codex-missing-a"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.read()\n"
+        f"sys.stderr.write('Error: thread/resume: thread/resume failed: no rollout "
+        f"found for thread id {THREAD_A} (code -32600)\\n')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=home_a, state_dir=state_dir) == 1
+
+    assert not a_file.exists()
+    assert a_file.with_name(a_file.name + ".stale").exists()
+    assert runner.read_thread_id(legacy) == (THREAD_B, None)
+
+
+def test_writers_for_different_profiles_cannot_lose_each_others_arc(tmp_path: Path) -> None:
+    """Regression for the lost update a shared thread map allowed.
+
+    Reproduced against the map implementation: an out-of-band writer recording
+    profile B between profile A's read and write was erased, because A replaced
+    the whole shared document with its stale snapshot. With one single-valued
+    file per profile there is no read-modify-write to lose, which this pins with
+    the same interleaving. It cannot fail against the map code for the same
+    reason it now passes: the variable changed was the storage model itself.
+    """
+    state_dir = tmp_path / "state"
+    a_file = _profile_thread(state_dir, "/profiles/a")
+    b_file = _profile_thread(state_dir, "/profiles/b")
+
+    runner.read_thread_id(a_file)
+    runner.write_thread_id(b_file, THREAD_B)
+    runner.write_thread_id(a_file, THREAD_A)
+
+    assert runner.read_thread_id(a_file) == (THREAD_A, None)
+    assert runner.read_thread_id(b_file) == (THREAD_B, None)
+
+
+def test_the_selected_profile_thread_file_is_preflighted(tmp_path: Path, repo_dir: Path) -> None:
+    """The file this profile will write is the one that must be usable before launch."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    home = str(tmp_path / "home")
+    _profile_thread(state_dir, home).mkdir()
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=home, state_dir=state_dir) == (
+        runner.EXIT_STATE_UNUSABLE
+    )
+    assert not record.exists(), "Codex must not be launched"
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "relative/home", "~/.codex-wake"])
+@pytest.mark.parametrize("flag", ["--codex-home", "--agent-home"])
+def test_profile_arguments_outside_the_admitted_domain_never_launch(
+    tmp_path: Path, repo_dir: Path, flag: str, bad: str
+) -> None:
+    """Regression: an empty profile argument keyed two different Codex homes as one.
+
+    Reproduced: Codex treats an empty CODEX_HOME as unset and uses $HOME/.codex,
+    verified with `codex doctor --json`, while the runner keyed it as "", so an
+    empty --codex-home with --agent-home /a and then /b shared one thread slot.
+    Relative and tilde paths are rejected for the same reason: Codex would
+    resolve them against a directory the operator did not name.
+    """
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    argv = [
+        "--watcher-id", "slice-123",
+        "--repo-dir", str(tmp_path / "repo"),
+        "--state-dir", str(tmp_path / "state"),
+        "--codex-bin", str(fake),
+        flag, bad,
+    ]
+    class _Stdin:
+        @staticmethod
+        def read() -> str:
+            return "wake prompt"
+
+    original = sys.stdin
+    sys.stdin = _Stdin()  # type: ignore[assignment]
+    try:
+        try:
+            outcome = runner.main(argv)
+        except SystemExit as exc:
+            outcome = exc.code
+    finally:
+        sys.stdin = original
+
+    assert not record.exists(), "a rejected profile must not start a turn"
+    assert outcome == 2
+
+
+def test_watcher_thread_files_match_exactly_one_watcher(tmp_path: Path) -> None:
+    """Regression: a prefix glob reached into another valid watcher's files.
+
+    Reproduced: watcher ids may contain dots and hyphens, so the documented
+    "foo.codex-thread*" matched "foo.codex-thread-review.codex-thread", which
+    belongs to the distinct watcher "foo.codex-thread-review".
+    """
+    names = [
+        "foo.codex-thread",
+        "foo.codex-thread.0123456789abcdef",
+        "foo.codex-thread.0123456789abcdef.stale",
+        "foo.codex-thread.stale",
+        "foo.codex-thread-review.codex-thread",
+        "foo.codex-thread-review.codex-thread.0123456789abcdef",
+        "foo.codex-thread.not-a-digest",
+        "foo.codex-wake.log",
+    ]
+    for name in names:
+        (tmp_path / name).write_text("x\n", encoding="utf-8")
+
+    assert runner.valid_watcher_id("foo.codex-thread-review")
+    assert [p.name for p in runner.watcher_thread_files(tmp_path, "foo")] == [
+        "foo.codex-thread",
+        "foo.codex-thread.0123456789abcdef",
+        "foo.codex-thread.0123456789abcdef.stale",
+        "foo.codex-thread.stale",
+    ]
+
+
+def _reset(state_dir: Path, watcher_id: str) -> int:
+    return runner.main([
+        "--watcher-id", watcher_id, "--state-dir", str(state_dir), "--reset-threads",
+    ])
+
+
+def test_reset_threads_removes_exactly_this_watchers_thread_files(tmp_path: Path) -> None:
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    mine = ["foo.codex-thread", "foo.codex-thread.0123456789abcdef", "foo.codex-thread.stale"]
+    theirs = ["foo.codex-thread-review.codex-thread", "foo.codex-wake.log"]
+    for name in mine + theirs:
+        (state_dir / name).write_text("x\n", encoding="utf-8")
+
+    assert _reset(state_dir, "foo") == 0
+
+    assert not any((state_dir / n).exists() for n in mine)
+    assert all((state_dir / n).exists() for n in theirs)
+
+
+
+
+def test_reset_threads_waits_for_the_wake_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A reset must not interleave with a wake in flight, which would write its
+    own thread file back after the reset."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    keep = state_dir / "foo.codex-thread.0123456789abcdef"
+    keep.write_text(THREAD_A + "\n", encoding="utf-8")
+    monkeypatch.setattr(runner, "LOCK_WAIT_SECONDS", 0)
+
+    with (state_dir / "foo.codex-wake.lock").open("w", encoding="utf-8") as held:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        assert _reset(state_dir, "foo") == runner.EXIT_LOCK_TIMEOUT
+
+    assert keep.exists(), "nothing is removed without the lock"
+
+
+# --- Thread-state table -------------------------------------------------------
+#
+# One invariant governs every thread file: a wake resumes an id only from the
+# file of its own canonical CODEX_HOME, and no operation except a reset of this
+# watcher changes a file that is not that wake's own. The table below states the
+# outcome of every operation on every starting state that the file model
+# admits, and the test runs every cell, so a new code path cannot satisfy the
+# invariant on one path and break it on another.
+#
+# Starting states, per watcher:
+#   own    -- this wake's home file: absent / a valid id / unusable content
+#   other  -- another home's file for the same watcher: absent / present
+#   legacy -- the single pre-profile file: absent / present (never resumed)
+#   plus, always, a different watcher whose id begins with this one's file name.
+# Non-regular own files (directory, FIFO, symlink) refuse before launch and are
+# pinned by their own tests above; they change no file either.
+#
+# Operations and expected outcomes:
+#   wake       -- resume iff own is valid; afterwards own holds the turn's id;
+#                 every other file byte-identical.
+#   dead       -- (own valid only) Codex reports the session missing: own moves
+#                 to own.stale; every other file byte-identical.
+#   dry-run    -- resume iff own is valid; every file byte-identical.
+#   reset      -- every file of this watcher gone; the other watcher untouched.
+
+TABLE_HOME = "/profiles/wake"
+OTHER_HOME = "/profiles/other"
+NEIGHBOUR = "slice-123.codex-thread-review.codex-thread"
+
+
+def _snapshot(state_dir: Path) -> dict[str, bytes]:
+    """Every entry in the state directory except the wake's own log, lock and
+    result record, so a file the table does not expect still shows up."""
+    return {
+        entry.name: entry.read_bytes() if entry.is_file() else b"<not a file>"
+        for entry in sorted(state_dir.iterdir())
+        if not entry.name.startswith("slice-123.codex-wake.")
+    }
+
+
+def _dead_session_codex(tmp_path: Path) -> Path:
+    fake = tmp_path / "codex-dead-session"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stdin.read()\n"
+        f"sys.stderr.write('Error: thread/resume: thread/resume failed: no rollout "
+        f"found for thread id {THREAD_A} (code -32600)\\n')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return fake
+
+
+@pytest.mark.parametrize("operation", ["wake", "dead", "dry-run", "reset"])
+@pytest.mark.parametrize("legacy", [False, True], ids=["no-legacy", "legacy"])
+@pytest.mark.parametrize("other", [False, True], ids=["no-other", "other"])
+@pytest.mark.parametrize("own", ["absent", "valid", "unusable"])
+def test_thread_state_table(
+    tmp_path: Path,
+    repo_dir: Path,
+    capsys: pytest.CaptureFixture[str],
+    own: str,
+    other: bool,
+    legacy: bool,
+    operation: str,
+) -> None:
+    if operation == "dead" and own != "valid":
+        pytest.skip("a dead session exists only for a stored id")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    own_file = _thread_file(state_dir, TABLE_HOME)
+    if own == "valid":
+        own_file.write_text(THREAD_A + "\n", encoding="utf-8")
+    elif own == "unusable":
+        own_file.write_text("not a session id\n", encoding="utf-8")
+    if other:
+        _thread_file(state_dir, OTHER_HOME).write_text(THREAD_B + "\n", encoding="utf-8")
+    if legacy:
+        (state_dir / "slice-123.codex-thread").write_text(THREAD_B + "\n", encoding="utf-8")
+    (state_dir / NEIGHBOUR).write_text(THREAD_B + "\n", encoding="utf-8")
+    before = _snapshot(state_dir)
+    base = [
+        "--watcher-id", "slice-123", "--repo-dir", str(repo_dir),
+        "--state-dir", str(state_dir), "--codex-home", TABLE_HOME,
+    ]
+
+    if operation == "reset":
+        assert _reset(state_dir, "slice-123") == 0
+        assert _snapshot(state_dir) == {NEIGHBOUR: before[NEIGHBOUR]}
+        return
+
+    if operation == "dry-run":
+        fake, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+        assert runner.main(base + ["--codex-bin", str(fake), "--dry-run"]) == 0
+        out = capsys.readouterr().out
+        assert ("mode=resume" in out) == (own == "valid")
+        assert THREAD_B not in out, "no other file's id may be offered for resume"
+        assert _snapshot(state_dir) == before
+        return
+
+    expected = dict(before)
+    if operation == "dead":
+        fake = _dead_session_codex(tmp_path)
+        assert _run_profile(tmp_path, fake=fake, codex_home=TABLE_HOME, state_dir=state_dir) == 1
+        expected[own_file.name + ".stale"] = expected.pop(own_file.name)
+        assert _snapshot(state_dir) == expected
+        return
+
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake, codex_home=TABLE_HOME, state_dir=state_dir) == 0
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert ("resume" in argv) == (own == "valid"), argv
+    assert THREAD_B not in argv, "no other file's id may be resumed"
+    expected[own_file.name] = (THREAD_A + "\n").encode("utf-8")
+    assert _snapshot(state_dir) == expected
+
+
+# --- Canonical keying ---------------------------------------------------------
+
+
+def test_one_home_spelled_two_ways_resumes_one_arc(
+    tmp_path: Path, repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: an inherited home was keyed by its raw spelling.
+
+    Reproduced on 029e00624: an argument-free wake under inherited
+    CODEX_HOME=/srv/codex/ and a later wake given --codex-home /srv/codex/ run
+    Codex under the same home but selected different thread files, so the
+    second started a fresh thread and abandoned the first's arc.
+    """
+    home = tmp_path / "codex-home"
+    state_dir = tmp_path / "state"
+    monkeypatch.setenv("CODEX_HOME", str(home) + "/")
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, state_dir=state_dir) == 0
+
+    monkeypatch.delenv("CODEX_HOME")
+    again = tmp_path / "again"
+    again.mkdir()
+    fake_b, record = _fake_codex(again, thread_id=THREAD_A)
+    assert _run_profile(
+        tmp_path, fake=fake_b, codex_home=str(home) + "/", state_dir=state_dir
+    ) == 0
+
+    argv = json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv, argv
+
+
+def test_a_relative_inherited_home_is_keyed_per_repository(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a relative inherited CODEX_HOME was keyed by its raw text.
+
+    Codex resolves a relative CODEX_HOME against its working directory --
+    verified with `codex doctor --json`, which reported <cwd>/rel from two
+    different directories -- and a wake's working directory is --repo-dir.
+    Reproduced on 029e00624: the same watcher woken in two repositories keyed
+    both homes as one, so the second resumed an id its home does not hold.
+    The child environment itself must still carry the value unchanged.
+    """
+    state_dir = tmp_path / "state"
+    repo_one = tmp_path / "one"
+    repo_two = tmp_path / "two"
+    repo_one.mkdir()
+    repo_two.mkdir()
+    monkeypatch.setenv("CODEX_HOME", "rel-codex")
+
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, state_dir=state_dir, repo=repo_one) == 0
+
+    other = tmp_path / "other"
+    other.mkdir()
+    fake_b, record = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, state_dir=state_dir, repo=repo_two) == 0
+
+    payload = json.loads(record.read_text(encoding="utf-8"))
+    assert "resume" not in payload["argv"], payload["argv"]
+    assert payload["codex_home"] == "rel-codex", "the child environment is not rewritten"
+
+
+def test_reset_threads_flushes_the_state_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the reset's removals were never flushed to disk.
+
+    Reproduced on 029e00624: a reset issued no directory fsync, while a wake
+    flushes the directory after recording an id. A host failure right after a
+    reset could therefore restore the removed id, and the next wake would
+    resume the arc the operator had just reset.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    (state_dir / "foo.codex-thread.0123456789abcdef").write_text(THREAD_A + "\n", encoding="utf-8")
+    synced: list[str] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd: int) -> None:
+        if stat.S_ISDIR(os.fstat(fd).st_mode):
+            synced.append(os.readlink(f"/proc/self/fd/{fd}"))
+        real_fsync(fd)
+
+    monkeypatch.setattr(runner.os, "fsync", recording_fsync)
+    assert _reset(state_dir, "foo") == 0
+
+    assert str(state_dir) in synced
+
+
+def test_dotdot_after_a_symlink_is_not_collapsed_into_another_home(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: lexical normalization merged two different Codex homes.
+
+    Reproduced on 639de1256 with the real CLI: given
+    CODEX_HOME=<root>/link/../profile where link points into another tree,
+    `codex doctor --json` reported <other>/profile, while the runner keyed it
+    as <root>/profile. A later wake genuinely using <root>/profile then
+    resumed the first home's id. The argument also reached the child rewritten.
+    """
+    root = tmp_path / "root"
+    (tmp_path / "other" / "sub").mkdir(parents=True)
+    root.mkdir()
+    (root / "link").symlink_to(tmp_path / "other" / "sub")
+    through_link = f"{root}/link/../profile"
+    state_dir = tmp_path / "state"
+
+    fake_a, record_a = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, codex_home=through_link, state_dir=state_dir) == 0
+    assert json.loads(record_a.read_text(encoding="utf-8"))["codex_home"] == through_link
+
+    other = tmp_path / "second"
+    other.mkdir()
+    fake_b, record_b = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(
+        tmp_path, fake=fake_b, codex_home=str(root / "profile"), state_dir=state_dir
+    ) == 0
+    argv = json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+    assert "resume" not in argv, f"a different home must not resume the first arc: {argv}"
+
+
+def test_a_reset_that_finds_nothing_names_the_directory_it_searched(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: a reset aimed at the wrong state directory looked complete.
+
+    Reproduced on 639de1256: with the watcher's thread file in a custom state
+    directory, the documented reset without --state-dir searched the default
+    one, printed nothing and exited 0, leaving the arc to be resumed by the
+    next PR on that watcher.
+    """
+    empty = tmp_path / "default-state"
+
+    assert _reset(empty, "foo") == 0
+
+    assert f"no thread files for foo in {empty}" in capsys.readouterr().out
+
+
+# --- Path spelling to thread key ---------------------------------------------
+#
+# The thread key must name the directory Codex opens. Every way a spelling can
+# differ from that directory is one row: folded when it cannot change the
+# directory, kept distinct when it can (`..` after a symlink), and hashed as
+# filesystem bytes so no valid POSIX path can fail to key.
+
+SPELLINGS = [
+    # (second spelling, relative to a real tree root R, same home as R/codex?)
+    ("{R}/codex/", True),
+    ("{R}/./codex", True),
+    ("{R}//codex", True),
+    ("/{R}/codex", True),  # exactly two leading slashes
+    ("{R}/x/../codex", True),  # x is a real directory
+    ("{R}/alias", True),  # alias -> R/codex
+    ("{R}/link/../codex", False),  # link -> R/elsewhere/sub, so this is R/elsewhere/codex
+    ("{R}/Codex", False),
+]
+
+
+@pytest.mark.parametrize("second, same", SPELLINGS)
+def test_path_spellings_key_the_directory_codex_opens(
+    tmp_path: Path, second: str, same: bool
+) -> None:
+    root = tmp_path / "tree"
+    for directory in ("codex", "Codex", "x", "elsewhere/sub", "elsewhere/codex"):
+        (root / directory).mkdir(parents=True)
+    (root / "alias").symlink_to(root / "codex")
+    (root / "link").symlink_to(root / "elsewhere" / "sub")
+    state_dir = tmp_path / "state"
+
+    keyed = _profile_thread(state_dir, second.format(R=root))
+    assert (keyed == _profile_thread(state_dir, str(root / "codex"))) is same
+
+
+def test_a_retargeted_profile_link_does_not_share_an_arc(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: a key built from the spelling followed the link's name,
+    not its target.
+
+    Reproduced on 3eaeace38: with /profiles/current pointing at A and then
+    retargeted to B, both wakes selected one thread file, so the B wake tried
+    A's id under B, and the missing-session path would quarantine A's only
+    pointer. `codex doctor --json` reports the link's target as CODEX_HOME,
+    so Codex itself treats them as two homes.
+    """
+    profiles = tmp_path / "profiles"
+    (profiles / "a").mkdir(parents=True)
+    (profiles / "b").mkdir()
+    current = profiles / "current"
+    current.symlink_to(profiles / "a")
+    state_dir = tmp_path / "state"
+
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, codex_home=str(current), state_dir=state_dir) == 0
+
+    current.unlink()
+    current.symlink_to(profiles / "b")
+    on_b = tmp_path / "on-b"
+    on_b.mkdir()
+    fake_b, record_b = _fake_codex(on_b, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, codex_home=str(current), state_dir=state_dir) == 0
+    assert "resume" not in json.loads(record_b.read_text(encoding="utf-8"))["argv"]
+
+    current.unlink()
+    current.symlink_to(profiles / "a")
+    back = tmp_path / "back"
+    back.mkdir()
+    fake_back, record_back = _fake_codex(back, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_back, codex_home=str(current), state_dir=state_dir) == 0
+    argv = json.loads(record_back.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv, "switching the link back resumes A's arc"
+
+
+def test_a_relative_repo_dir_is_keyed_against_the_process_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a relative --repo-dir was keyed as text.
+
+    Reproduced on 8cbb93e12: with --repo-dir repo and inherited
+    CODEX_HOME=rel, wakes started from /a and /b both keyed repo/rel, although
+    Codex runs under /a/repo/rel and /b/repo/rel, so the second resumed the
+    first home's id.
+    """
+    state_dir = tmp_path / "state"
+    for name in ("a", "b"):
+        (tmp_path / name / "repo").mkdir(parents=True)
+    monkeypatch.setenv("CODEX_HOME", "rel")
+
+    monkeypatch.chdir(tmp_path / "a")
+    fake_a, _ = _fake_codex(tmp_path, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_a, state_dir=state_dir, repo=Path("repo")) == 0
+
+    monkeypatch.chdir(tmp_path / "b")
+    other = tmp_path / "other"
+    other.mkdir()
+    fake_b, record = _fake_codex(other, thread_id=THREAD_B)
+    assert _run_profile(tmp_path, fake=fake_b, state_dir=state_dir, repo=Path("repo")) == 0
+
+    assert "resume" not in json.loads(record.read_text(encoding="utf-8"))["argv"]
+
+
+def test_a_non_utf8_profile_path_keys_logs_and_resumes(
+    tmp_path: Path, repo_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression: a valid POSIX path with a non-UTF-8 byte crashed the wake.
+
+    Reproduced on 8cbb93e12: an absolute --codex-home holding byte 0xff passed
+    admission, then keying it raised UnicodeEncodeError, even on --dry-run.
+    """
+    home = os.fsdecode(bytes(tmp_path) + b"/co\xffdex")
+    state_dir = tmp_path / "state"
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_A)
+
+    assert runner.main([
+        "--watcher-id", "slice-123", "--repo-dir", str(repo_dir),
+        "--state-dir", str(state_dir), "--codex-bin", str(fake),
+        "--codex-home", home, "--dry-run",
+    ]) == 0
+    assert "co\\xffdex" in capsys.readouterr().out
+
+    assert _run_profile(tmp_path, fake=fake, codex_home=home, state_dir=state_dir) == 0
+    again = tmp_path / "again"
+    again.mkdir()
+    fake_again, record_again = _fake_codex(again, thread_id=THREAD_A)
+    assert _run_profile(tmp_path, fake=fake_again, codex_home=home, state_dir=state_dir) == 0
+    argv = json.loads(record_again.read_text(encoding="utf-8"))["argv"]
+    assert "resume" in argv and THREAD_A in argv
+    assert "co\\xffdex" in (state_dir / "slice-123.codex-wake.log").read_text(encoding="utf-8")
+
+
+def test_a_queued_wake_resolves_its_profile_after_taking_the_lock(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: the profile was resolved before waiting for the lock.
+
+    Reproduced on f630a21ee: a wake queued behind a held lock resolved
+    current -> A, the link was retargeted to B while it waited, and on getting
+    the lock it launched Codex into B while keying A's thread file, so it
+    resumed A's id under B.
+    """
+    profiles = tmp_path / "profiles"
+    (profiles / "a").mkdir(parents=True)
+    (profiles / "b").mkdir()
+    current = profiles / "current"
+    current.symlink_to(profiles / "a")
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    a_file = _profile_thread(state_dir, str(profiles / "a"))
+    a_file.write_text(THREAD_A + "\n", encoding="utf-8")
+    b_file = _profile_thread(state_dir, str(profiles / "b"))
+    fake, record = _fake_codex(tmp_path, thread_id=THREAD_B)
+    log_path = state_dir / "slice-123.codex-wake.log"
+    prompt_file = tmp_path / "prompt.txt"
+    prompt_file.write_text("wake prompt", encoding="utf-8")
+    stderr_file = tmp_path / "queued.stderr"
+
+    with (state_dir / "slice-123.codex-wake.lock").open("w", encoding="utf-8") as held, \
+            prompt_file.open("rb") as stdin, stderr_file.open("wb") as stderr:
+        fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+        queued = subprocess.Popen(
+            [
+                sys.executable, str(SCRIPT), "--watcher-id", "slice-123",
+                "--repo-dir", str(repo_dir), "--state-dir", str(state_dir),
+                "--codex-bin", str(fake), "--codex-home", str(current),
+            ],
+            stdin=stdin, stdout=subprocess.DEVNULL, stderr=stderr,
+        )
+        deadline = time.monotonic() + 10
+        # The log is opened just before the lock wait, after argument parsing.
+        while not log_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        time.sleep(0.3)
+        assert queued.poll() is None, "the wake must be waiting for the lock"
+        current.unlink()
+        current.symlink_to(profiles / "b")
+    queued.wait(timeout=30)
+
+    assert queued.returncode == 0, stderr_file.read_text(encoding="utf-8", errors="replace")
+    assert "resume" not in json.loads(record.read_text(encoding="utf-8"))["argv"]
+    assert runner.read_thread_id(b_file) == (THREAD_B, None)
+    assert runner.read_thread_id(a_file) == (THREAD_A, None), "A's arc is untouched"
+
+
+def test_dry_run_and_reset_threads_cannot_be_combined(tmp_path: Path) -> None:
+    """Regression: --reset-threads --dry-run performed the reset.
+
+    Reproduced on f630a21ee: the combination removed the watcher's thread
+    file and exited 0, although a dry run promises to change nothing.
+    """
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    keep = state_dir / "foo.codex-thread.0123456789abcdef"
+    keep.write_text(THREAD_A + "\n", encoding="utf-8")
+
+    with pytest.raises(SystemExit) as exited:
+        runner.main([
+            "--watcher-id", "foo", "--state-dir", str(state_dir),
+            "--reset-threads", "--dry-run",
+        ])
+
+    assert exited.value.code == 2
+    assert keep.read_text(encoding="utf-8") == THREAD_A + "\n"
+
+
+def test_an_unset_home_resolves_through_the_account_home(
+    tmp_path: Path, repo_dir: Path
+) -> None:
+    """Regression: with HOME and CODEX_HOME both unset the key was "<unset>".
+
+    Reproduced on 74f6baeff: a dry run with both removed keyed and logged
+    codex_home=<unset>, one shared file for every such wake whatever account
+    it ran as, and a different file from the same profile reached through
+    HOME. Codex, like the OS, falls back to the account's home from the
+    password database, so the runner does the same.
+    """
+    import pwd
+
+    account = os.path.realpath(pwd.getpwuid(os.getuid()).pw_dir)
+    env = {k: v for k, v in os.environ.items() if k not in ("HOME", "CODEX_HOME")}
+    completed = subprocess.run(
+        [
+            sys.executable, str(SCRIPT), "--watcher-id", "slice-123",
+            "--repo-dir", str(repo_dir), "--state-dir", str(tmp_path / "state"),
+            "--dry-run",
+        ],
+        env=env, capture_output=True, text=True, timeout=30, check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"codex_home={account}/.codex (derived from HOME)" in completed.stdout
+    assert f"home={account} (account home)" in completed.stdout
+    via_home = runner.resolve_profile(
+        codex_home=None, agent_home=None, cwd=repo_dir, environ={"HOME": account}
+    )
+    keyed = runner.profile_thread_path(tmp_path / "state", "slice-123", via_home).name
+    assert f"thread_file={keyed}" in completed.stdout, "same profile, same file as via HOME"

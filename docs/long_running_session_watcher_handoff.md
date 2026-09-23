@@ -129,6 +129,74 @@ session's watcher config. Use the installed runner, not a bare `codex exec`:
 CODEX_WAKE_COMMAND="'/home/<you>/.local/bin/atlas-codex-wake-run' --watcher-id '<session-id>' --repo-dir '/home/<you>/path/to/repo'"
 ```
 
+A wake can also be given its own Codex profile, which is where nearly all of a
+wake's cost lives. Measured on this host with one identical prompt, an
+interactive profile cost 75,685 tokens on the first wake and added 87,509 per
+wake after, while the whole two-turn conversation was about 90 tokens. The rest
+is context re-injected every turn: a list of plugins that are not installed, a
+capped copy of `AGENTS.md`, memory-folder guidance, and a skills catalogue sent
+twice. Under an isolated profile the same pair cost 27,495 and 13,862.
+
+```bash
+CODEX_WAKE_COMMAND="'/home/<you>/.local/bin/atlas-codex-wake-run' --watcher-id '<session-id>' --repo-dir '<repo>' --codex-home '/home/<you>/.codex-wake' --agent-home '/home/<you>/.codex-wake-home'"
+```
+
+`--codex-home` sets `CODEX_HOME`, which supplies config, memories and built-in
+skills. `--agent-home` sets `HOME`, because the shared skills catalogue lives at
+`$HOME/.agents/skills` and is not under `CODEX_HOME`. They are independent: each
+takes effect alone, and isolating only one is recorded in the wake log as
+partial, because `CODEX_HOME` alone still carried all 26 shared skills.
+
+A wake `HOME` still needs the tools the agent uses. Symlink `.gitconfig`,
+`.ssh` and `.config/gh` into it from the real home, or the woken agent loses its
+git identity and `gh` auth. The runner does not probe for them.
+
+Both arguments must be non-empty absolute paths; anything else is rejected
+before a turn starts. An empty value is not a profile, because Codex treats an
+empty `CODEX_HOME` as unset and falls back to `$HOME/.codex`, and a relative or
+`~` path would be resolved against a directory the watcher config does not
+name. Beyond that, the runner does not validate a profile. Codex already refuses a nonexistent
+`CODEX_HOME` before any model call, and fails an unauthenticated or
+non-writable one without billing tokens, so a check here would duplicate that
+and could reject a profile Codex accepts. Every launching turn logs which
+profile it used, including when none is configured.
+
+A stored thread id belongs to the `CODEX_HOME` that created it, so each
+effective Codex home keeps its own thread file, named
+`<session-id>.codex-thread.<digest>` from a digest of that home. That includes
+a wake given no profile arguments: its home is whatever `CODEX_HOME` or
+`$HOME/.codex` it inherits, so if a watcher's environment changes, the new home
+starts a fresh thread instead of resuming one that home does not hold. The home
+is the directory Codex actually uses, resolved at wake time the way `codex
+doctor` reports it: a relative value is taken against the wake's `--repo-dir`,
+and symlinks are followed. Two spellings or aliases of one directory therefore
+share one arc, and a profile link retargeted to another directory starts that
+directory's own arc; pointing it back resumes the first. Do not retarget a
+profile link while one of its wakes is running. A path that is not valid UTF-8
+works, and is shown with backslash escapes in the log. The wake log's
+`profile ...` line names the resolved home and the file in use.
+
+A watcher created before this change has a single `<session-id>.codex-thread`
+file. The runner never reads it, so that watcher's next wake starts one fresh
+thread under its home. Run the reset below once per existing watcher after
+upgrading to remove the old file.
+
+To reset a watcher, at post-merge teardown or when resumes keep failing, run
+the runner's reset command rather than deleting files by pattern. Pass the same
+`--state-dir` as the watcher's `CODEX_WAKE_COMMAND`, or omit it only if that
+command omits it too; a reset of a different directory finds nothing and
+prints `no thread files for <session-id> in <dir>`:
+
+```bash
+~/.local/bin/atlas-codex-wake-run --watcher-id '<session-id>' --state-dir '<same state dir as the wake command>' --reset-threads
+```
+
+It removes exactly that watcher's thread files, including quarantined ones and
+the pre-profile file, and it takes the watcher's wake lock first, so it cannot
+interleave with a wake in flight. A filename glob is not safe here: watcher ids
+may contain dots and hyphens, so `<session-id>.codex-thread*` also matches a
+different watcher named `<session-id>.codex-thread-<anything>`.
+
 Use absolute paths, and quote each one individually as shown. The bridge does
 not run this through a shell: it `shlex.split`s the value and hands the argv
 straight to `subprocess.run`. Two consequences follow. A `${HOME}` or `~` stays
@@ -149,8 +217,9 @@ all trusted; watcher-sourced text is treated as untrusted prompt input.
 exists because a bare `codex exec` per wake starts a **fresh thread**: the
 woken agent has no memory of the arc it is continuing, and the operator pays
 full cold-start context on every wake. The runner keeps one Codex thread per
-watcher id, recorded at
-`~/.local/state/atlas-pr-watchers/<session-id>.codex-thread`, and resumes it.
+watcher id and Codex home, recorded at
+`~/.local/state/atlas-pr-watchers/<session-id>.codex-thread.<digest>` (see the
+profile section above), and resumes it.
 
 It also pins the argv to what the installed Codex actually accepts. The
 hand-written local script this replaces passed `--ask-for-approval`, which
@@ -191,9 +260,11 @@ Codex process and the ordinary commands it starts do not outlive the wake lock.
 A descendant that calls `setsid` leaves that group and is not covered; issue
 #2526 tracks containment a descendant cannot opt out of.
 
-A merged PR leaves its `.codex-thread` file behind. Remove it during the
-post-merge teardown in AGENTS 3c.1 so the next PR on that watcher id does not
-resume a finished arc.
+A merged PR leaves its thread state behind: one thread file per Codex home the
+watcher ran under. Run the reset command above, with the watcher's own
+`--state-dir`, during the post-merge teardown in AGENTS 3c.1 so the next PR
+on that watcher id does not resume a finished arc. The reset takes the wake
+lock, so it waits for any wake in flight rather than racing it.
 
 Wake-source rules:
 

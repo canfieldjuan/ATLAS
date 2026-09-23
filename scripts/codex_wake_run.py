@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Codex wake turns against a persistent per-watcher thread.
+"""Run Codex wake turns against a persistent thread per watcher and Codex home.
 
 The PR watcher and `codex_wake_bridge.py` decide whether a wake should happen
 and what the prompt says. This runner is the last stage: it takes that prompt
@@ -19,8 +19,10 @@ import argparse
 import datetime as dt
 import errno
 import fcntl
+import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import shutil
@@ -559,18 +561,22 @@ def _atomic_write(path: Path, text: str) -> None:
     is worth two fsyncs on a file written once per wake.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    staged = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    # Never write through a name something else may have prepared, and never
+    # let a name something else left behind block the write. mkstemp gives
+    # both: it opens with O_CREAT|O_EXCL|O_NOFOLLOW at mode 0600, so a planted
+    # file or symlink is never reused or followed, and it picks an unpredictable
+    # name and retries on collision, so nothing can be planted in advance.
+    #
+    # The previous staging name was derived from the pid. That made a file left
+    # by a killed wake fatal once the pid was reused: preflight passed, Codex
+    # edited, pushed or commented, and only then did the thread-id write raise
+    # FileExistsError, leaving a finished turn with no resumable id. A preflight
+    # cannot close that, because the collision happens at write time.
+    fd, staged_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent)
+    )
+    staged = Path(staged_name)
     try:
-        # Same rule as reading the id: never write through a name something
-        # else may have prepared. O_EXCL refuses to reuse anything already at
-        # the staging name, which also makes a stale file from a recycled pid
-        # an error rather than a silent overwrite, and O_NOFOLLOW refuses a
-        # symlink planted there to redirect the write.
-        fd = os.open(
-            staged,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o600,
-        )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
             handle.flush()
@@ -589,6 +595,228 @@ def _atomic_write(path: Path, text: str) -> None:
 def write_thread_id(path: Path, thread_id: str) -> None:
     """Persist atomically so a killed wake cannot leave a partial id."""
     _atomic_write(path, thread_id + "\n")
+
+
+PROFILE_UNSET = "<unset>"
+
+
+class WakeProfile(NamedTuple):
+    """Which Codex profile this wake runs under, and where that came from.
+
+    Codex reads its injected context from two roots resolved from two separate
+    environment variables: `CODEX_HOME` supplies config, memories and built-in
+    skills, and `$HOME/.agents/skills` supplies the shared skills catalogue.
+    Neither is a per-invocation flag, so the only way an unattended wake can
+    avoid inheriting the operator's interactive surface is to run under a
+    different profile.
+    """
+
+    codex_home: str | None
+    agent_home: str | None
+    effective_codex_home: str
+    effective_home: str
+    codex_home_origin: str
+    home_origin: str
+
+    @property
+    def isolates_anything(self) -> bool:
+        return self.codex_home is not None or self.agent_home is not None
+
+    @property
+    def partial_reason(self) -> str | None:
+        """Name the root this wake did NOT isolate, or None when moot.
+
+        Partial isolation measurably under-delivers -- `CODEX_HOME` alone still
+        carried all 26 shared skills -- so it is allowed but must not read like
+        full isolation in the log.
+        """
+        if not self.isolates_anything:
+            return None
+        if self.codex_home is None:
+            if self.codex_home_origin == "derived from HOME":
+                # Not partial: nothing named a Codex home, so Codex derives it
+                # from the isolated HOME and both roots move together.
+                return None
+            # An inherited CODEX_HOME is not derived. The child keeps that
+            # profile and only HOME moves, which is partial isolation however
+            # it reads at the call site.
+            return (
+                "CODEX_HOME is inherited rather than derived from the isolated "
+                "HOME, so this wake still uses that profile's config, memories "
+                "and built-in skills"
+            )
+        if self.agent_home is None:
+            return (
+                "HOME is not isolated, so this wake still loads the shared "
+                "skills catalogue from that home's .agents/skills"
+            )
+        return None
+
+
+def _canonical_directory(cwd: Path, value: str) -> str:
+    """The directory Codex will actually use for `value`, resolved now.
+
+    Codex keys its own profile by the resolved path: `codex doctor --json`
+    given CODEX_HOME=<link> reports the link's target, not the link. So does
+    this key. Asking the kernel settles every way a spelling can differ from
+    the directory in one step: `.`, repeated or doubled leading slashes, a
+    trailing slash, `..` after a symlink (which the kernel resolves after
+    following the link), two aliases of one directory, and a link retargeted
+    between wakes, which a key built from the spelling alone would have shared
+    between two homes. A relative value is first joined to the child's working
+    directory, itself made absolute against this process's, because that is
+    where Codex resolves it.
+
+    Resolution happens under the wake lock, immediately before the turn. A
+    link retargeted in the moment between this call and Codex opening the
+    profile is outside the model, like hand-editing the state directory
+    during a wake.
+    """
+    return os.path.realpath(Path(cwd).absolute() / value)
+
+
+def display_path(value: str) -> str:
+    """A path as it can always be written to the UTF-8 log and stdout.
+
+    A POSIX path may hold bytes that are not UTF-8; Python carries them as
+    surrogate escapes, which a strict UTF-8 writer refuses. Showing them as
+    backslash escapes keeps the receipt honest without failing the wake.
+    """
+    return os.fsencode(value).decode("utf-8", "backslashreplace")
+
+
+def resolve_profile(
+    *,
+    codex_home: str | None,
+    agent_home: str | None,
+    cwd: Path,
+    environ: Any = None,
+) -> WakeProfile:
+    """Decide the profile and record what the child will actually see.
+
+    The effective values matter more than the arguments. An operator can set
+    either variable in a systemd unit, in which case the child uses it and no
+    argument names it; a receipt built from arguments alone would be blind in
+    exactly that case.
+
+    The effective values are the directories Codex will actually use,
+    resolved by `_canonical_directory`. Only the key and the receipt use them;
+    the child environment is never rewritten from them.
+    """
+    source = os.environ if environ is None else environ
+
+    def effective(argument: str | None, key: str) -> tuple[str, str]:
+        if argument is not None:
+            return _canonical_directory(cwd, argument), "argument"
+        inherited = source.get(key)
+        if inherited:
+            return _canonical_directory(cwd, inherited), "inherited"
+        return PROFILE_UNSET, "unset"
+
+    home_value, home_origin = effective(agent_home, "HOME")
+    if home_origin == "unset":
+        # Codex finds its home the way the OS does: $HOME, then the account's
+        # home from the password database. Keying "<unset>" instead would give
+        # every such wake one shared file, whatever account it runs as, and a
+        # different file from the same profile reached through HOME.
+        try:
+            account_home = pwd.getpwuid(os.getuid()).pw_dir
+        except KeyError:
+            account_home = ""
+        if account_home:
+            home_value, home_origin = _canonical_directory(cwd, account_home), "account home"
+    codex_value, codex_origin = effective(codex_home, "CODEX_HOME")
+    if codex_origin == "unset" and home_value != PROFILE_UNSET:
+        # Codex has no unset CODEX_HOME: it defaults to $HOME/.codex, and HOME
+        # is a value this runner may itself be changing. Verified by running
+        # Codex with HOME set and CODEX_HOME absent, which created
+        # <home>/.codex and authenticated against it. Reporting "unset" here
+        # would put a false profile in the receipt and, worse, make two threads
+        # from different derived homes compare equal.
+        # Resolved again, since <home>/.codex may itself be a link.
+        codex_value = _canonical_directory(Path(home_value), ".codex")
+        codex_origin = "derived from HOME"
+    return WakeProfile(
+        codex_home=codex_home,
+        agent_home=agent_home,
+        effective_codex_home=codex_value,
+        effective_home=home_value,
+        codex_home_origin=codex_origin,
+        home_origin=home_origin,
+    )
+
+
+def child_environment(profile: WakeProfile) -> dict[str, str] | None:
+    """Return the child environment, or None to inherit unchanged.
+
+    None rather than a copy of `os.environ` on purpose: with no profile
+    configured the child must be launched exactly as it is today, and not
+    passing `env=` at all is the only way to guarantee that.
+    """
+    if not profile.isolates_anything:
+        return None
+    env = dict(os.environ)
+    if profile.codex_home is not None:
+        env["CODEX_HOME"] = profile.codex_home
+    if profile.agent_home is not None:
+        env["HOME"] = profile.agent_home
+    return env
+
+
+THREAD_DIGEST_LEN = 16
+
+
+def profile_thread_path(state_dir: Path, watcher_id: str, profile: WakeProfile) -> Path:
+    """The file holding this profile's thread id for this watcher.
+
+    A rollout lives only inside the CODEX_HOME that created it, so a thread id
+    is meaningful only under that home. Every profile, including the one a wake
+    inherits when it is given no profile arguments, is therefore keyed by its
+    effective CODEX_HOME. Keying the argument-free case by "whatever the
+    environment says right now" instead let two different homes share one file
+    whenever a watcher's inherited HOME or CODEX_HOME changed between wakes,
+    and the second home then resumed the first's id and quarantined it.
+
+    One single-valued file per home needs no read-modify-write, so no
+    interleaving of writers can lose another home's arc. The digest is used
+    because a CODEX_HOME can be a long absolute path unsafe in a filename; the
+    receipt line names the file in use.
+    """
+    # The filesystem bytes, not UTF-8 text: a valid POSIX path need not be
+    # UTF-8, and encoding its surrogate escapes as UTF-8 raises.
+    digest = hashlib.sha256(os.fsencode(profile.effective_codex_home)).hexdigest()
+    return state_dir / f"{watcher_id}.codex-thread.{digest[:THREAD_DIGEST_LEN]}"
+
+
+def _watcher_thread_pattern(watcher_id: str) -> re.Pattern[str]:
+    # Exact: this watcher's per-home files, the single file the runner used
+    # before profiles existed, and the quarantined form of each. Watcher ids
+    # may contain dots and hyphens, so a prefix glob such as
+    # "<id>.codex-thread*" also matches another valid watcher named
+    # "<id>.codex-thread-<anything>".
+    return re.compile(
+        rf"{re.escape(watcher_id)}\.codex-thread"
+        rf"(?:\.[0-9a-f]{{{THREAD_DIGEST_LEN}}})?"
+        r"(?:\.stale)?"
+    )
+
+
+def watcher_thread_files(state_dir: Path, watcher_id: str) -> list[Path]:
+    """Every thread-state file belonging to exactly this watcher."""
+    # Callers create the state directory before listing it, so a failure here
+    # is a real fault and is raised rather than read as "no files".
+    pattern = _watcher_thread_pattern(watcher_id)
+    return sorted(state_dir / n for n in os.listdir(state_dir) if pattern.fullmatch(n))
+
+
+def profile_receipt(profile: WakeProfile, thread_path: Path) -> str:
+    """One log line naming the effective profile and the thread file in use."""
+    return (
+        "profile "
+        f"codex_home={display_path(profile.effective_codex_home)} ({profile.codex_home_origin}) "
+        f"home={display_path(profile.effective_home)} ({profile.home_origin}) "
+        f"thread_file={thread_path.name}"
+    )
 
 
 def thread_path_problem(path: Path) -> str | None:
@@ -765,9 +993,12 @@ def run_one_turn(
     sandbox: str,
     codex_bin: str,
     log_handle: Any,
+    profile: WakeProfile | None = None,
     lock_fd: int | None = None,
 ) -> TurnResult:
     """Spend exactly one Codex turn. The caller must already hold the wake lock."""
+    if profile is None:
+        profile = resolve_profile(codex_home=None, agent_home=None, cwd=repo_dir)
     # Read the thread id under the lock. Reading it before acquiring the lock
     # leaves a stale-read interleaving: this process can read "no thread" while
     # another holds the lock, that one records a new id and releases, and this
@@ -802,6 +1033,14 @@ def run_one_turn(
     mode = "resume" if thread_id else "fresh"
     _log(log_handle, f"wake {mode} watcher={watcher_id} repo={repo_dir}")
     _log(log_handle, "argv=" + " ".join(argv))
+    # The receipt for which profile this turn ran under, and which thread file
+    # holds its arc. Logged on every launching turn, including when nothing is
+    # configured, because "no line" and "ran on the inherited profile" have to
+    # read differently to whoever comes back to the log.
+    _log(log_handle, profile_receipt(profile, thread_path))
+    partial = profile.partial_reason
+    if partial:
+        _log(log_handle, f"partial profile isolation: {partial}")
 
     _libc, pdeath_reason = parent_death_signal_support()
     if pdeath_reason:
@@ -925,6 +1164,7 @@ def run_one_turn(
                         # way to resume work that already happened.
                         encoding="utf-8",
                         errors="replace",
+                        env=child_environment(profile),
                         preexec_fn=die_with_parent,
                         # The wake lock is an open file description, which fork
                         # and exec preserve. The supervisor holds it for the
@@ -1089,6 +1329,53 @@ def run_one_turn(
     return finish(exit_code, last_message + "\n")
 
 
+def _acquire_wake_lock(
+    lock_handle: Any, log_handle: Any, lock_path: Path, watcher_id: str
+) -> int | None:
+    """Wait for the per-watcher wake lock. Returns None once held, else an exit code."""
+    # Wait for the lock instead of handing this prompt to whoever holds it. A
+    # file-based handoff cannot be made strand-free: every version of it left a
+    # window between the holder's last queue check and its release in which a
+    # contender could enqueue and return success with nobody left to consume.
+    # Waiting removes the queue, so the only shared state is the lock itself
+    # and every wake that acquires it runs its own turn with its own prompt.
+    deadline = time.monotonic() + LOCK_WAIT_SECONDS
+    while True:
+        try:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            if exc.errno == errno.EINTR:
+                # A signal arrived mid-call; that is not contention.
+                continue
+            if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                # EIO, EBADF, ENOLCK and friends are not another holder.
+                # Retrying them for the full wait window would stall every wake
+                # for ten minutes and then report a lock timeout that hides the
+                # real fault.
+                _log(
+                    log_handle,
+                    f"cannot lock {lock_path}: {exc}. This is not "
+                    "contention, so the wake is failing immediately "
+                    "rather than waiting out the timeout.",
+                )
+                print(f"cannot lock {lock_path}: {exc}", file=sys.stderr)
+                return EXIT_STATE_UNUSABLE
+            if time.monotonic() >= deadline:
+                _log(
+                    log_handle,
+                    f"gave up after {LOCK_WAIT_SECONDS}s waiting for the "
+                    f"{watcher_id} wake lock; this wake did not run",
+                )
+                print(
+                    f"timed out waiting for the {watcher_id} wake lock",
+                    file=sys.stderr,
+                )
+                return EXIT_LOCK_TIMEOUT
+            time.sleep(1.0)
+            continue
+        return None
+
+
 def run_wake(
     *,
     watcher_id: str,
@@ -1098,7 +1385,17 @@ def run_wake(
     sandbox: str,
     codex_bin: str,
     dry_run: bool,
+    codex_home: str | None = None,
+    agent_home: str | None = None,
 ) -> int:
+    """Run one wake, or print what it would run.
+
+    The profile is resolved here, from the raw arguments, and for a real wake
+    only once the wake lock is held. Resolving follows symlinks, so resolving
+    before waiting for the lock would let a link retargeted while this wake
+    queued key one home's thread file and launch Codex into another. Taking
+    arguments rather than a resolved profile keeps that ordering structural.
+    """
     try:
         state_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
@@ -1107,17 +1404,22 @@ def run_wake(
         # the very first filesystem touch is not one.
         print(f"cannot use the state directory {state_dir}: {exc}", file=sys.stderr)
         return EXIT_STATE_UNUSABLE
-    thread_path = state_dir / f"{watcher_id}.codex-thread"
     lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
     log_path = state_dir / f"{watcher_id}.codex-wake.log"
 
     if dry_run:
+        # Read-only, so no lock: it reports what a wake would do right now.
+        profile = resolve_profile(codex_home=codex_home, agent_home=agent_home, cwd=repo_dir)
+        thread_path = profile_thread_path(state_dir, watcher_id, profile)
         thread_id, ignored_reason = read_thread_id(thread_path)
         argv = build_argv(codex_bin=codex_bin, thread_id=thread_id, sandbox=sandbox)
         print(f"mode={'resume' if thread_id else 'fresh'}")
-        print(f"cwd={repo_dir}")
+        print(f"cwd={display_path(str(repo_dir))}")
         if ignored_reason:
             print(f"ignored_stored_thread_id={ignored_reason}")
+        print(profile_receipt(profile, thread_path))
+        if profile.partial_reason:
+            print(f"partial_profile_isolation={profile.partial_reason}")
         print("argv=" + " ".join(argv))
         return 0
 
@@ -1136,54 +1438,16 @@ def run_wake(
             return 2
 
         with lock_handle:
-            # Wait for the lock instead of handing this prompt to whoever holds
-            # it. A file-based handoff cannot be made strand-free: every version
-            # of it left a window between the holder's last queue check and its
-            # release in which a contender could enqueue and return success with
-            # nobody left to consume. Waiting removes the queue, so the only
-            # shared state is the lock itself and every wake that acquires it
-            # runs its own turn with its own prompt.
-            deadline = time.monotonic() + LOCK_WAIT_SECONDS
-            acquired = False
-            while True:
-                try:
-                    fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except OSError as exc:
-                    if exc.errno == errno.EINTR:
-                        # A signal arrived mid-call; that is not contention.
-                        continue
-                    if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                        # EIO, EBADF, ENOLCK and friends are not another
-                        # holder. Retrying them for the full wait window would
-                        # stall every wake for ten minutes and then report a
-                        # lock timeout that hides the real fault.
-                        _log(
-                            log_handle,
-                            f"cannot lock {lock_path}: {exc}. This is not "
-                            "contention, so the wake is failing immediately "
-                            "rather than waiting out the timeout.",
-                        )
-                        print(f"cannot lock {lock_path}: {exc}", file=sys.stderr)
-                        return EXIT_STATE_UNUSABLE
-                    if time.monotonic() >= deadline:
-                        break
-                    time.sleep(1.0)
-                    continue
-                acquired = True
-                break
+            refusal = _acquire_wake_lock(
+                lock_handle, log_handle, lock_path, watcher_id
+            )
+            if refusal is not None:
+                return refusal
 
-            if not acquired:
-                _log(
-                    log_handle,
-                    f"gave up after {LOCK_WAIT_SECONDS}s waiting for the "
-                    f"{watcher_id} wake lock; this wake did not run",
-                )
-                print(
-                    f"timed out waiting for the {watcher_id} wake lock",
-                    file=sys.stderr,
-                )
-                return EXIT_LOCK_TIMEOUT
-
+            profile = resolve_profile(
+                codex_home=codex_home, agent_home=agent_home, cwd=repo_dir
+            )
+            thread_path = profile_thread_path(state_dir, watcher_id, profile)
             result = run_one_turn(
                 watcher_id=watcher_id,
                 repo_dir=repo_dir,
@@ -1193,16 +1457,107 @@ def run_wake(
                 sandbox=sandbox,
                 codex_bin=codex_bin,
                 log_handle=log_handle,
+                profile=profile,
                 lock_fd=lock_handle.fileno(),
             )
             _log(log_handle, f"wake complete exit={result.exit_code}")
             return result.exit_code
 
 
+def reset_watcher_threads(*, watcher_id: str, state_dir: Path) -> int:
+    """Remove every thread-state file of exactly this watcher, under its lock.
+
+    Taking the wake lock means a reset cannot interleave with a wake in flight,
+    which would otherwise write its own thread file back after the reset. Every
+    writer of these files is a wake holding that same lock, so the file set
+    listed under the lock is the complete set: nothing admitted can add to it
+    before the reset returns. The
+    file set comes from an exact pattern rather than a prefix glob, because a
+    glob such as "<id>.codex-thread*" also matches a different valid watcher
+    named "<id>.codex-thread-<anything>".
+    """
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        log_handle = (state_dir / f"{watcher_id}.codex-wake.log").open("a", encoding="utf-8")
+    except OSError as exc:
+        print(f"cannot use the state directory {state_dir}: {exc}", file=sys.stderr)
+        return EXIT_STATE_UNUSABLE
+    lock_path = state_dir / f"{watcher_id}.codex-wake.lock"
+    with log_handle:
+        try:
+            lock_handle = lock_path.open("w", encoding="utf-8")
+        except OSError as exc:
+            print(f"cannot open wake lock {lock_path}: {exc}", file=sys.stderr)
+            return 2
+        with lock_handle:
+            refusal = _acquire_wake_lock(lock_handle, log_handle, lock_path, watcher_id)
+            if refusal is not None:
+                return refusal
+            failed = 0
+            found = watcher_thread_files(state_dir, watcher_id)
+            if not found:
+                # Success, since there is nothing to reset, but name the
+                # directory: a reset pointed at a different state directory
+                # than the watcher's wakes use finds nothing here and would
+                # otherwise look exactly like a completed teardown.
+                print(f"no thread files for {watcher_id} in {state_dir}")
+                _log(log_handle, f"reset found no thread files in {state_dir}")
+            for path in found:
+                try:
+                    # Already gone is the outcome a reset wants, not a failure.
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    failed += 1
+                    print(f"could not remove {path}: {exc}", file=sys.stderr)
+                    _log(log_handle, f"reset could not remove {path.name}: {exc}")
+                    continue
+                print(f"removed {path.name}")
+                _log(log_handle, f"reset removed {path.name}")
+            # The removals are directory metadata. A wake flushes the directory
+            # after recording an id, so a reset that did not would be the weaker
+            # write: a host failure right after it could bring a removed id back
+            # and the next wake would resume the arc the operator just reset.
+            try:
+                dir_fd = os.open(str(state_dir), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError as exc:
+                failed += 1
+                print(f"could not flush {state_dir}: {exc}", file=sys.stderr)
+                _log(log_handle, f"reset could not flush the state directory: {exc}")
+            return EXIT_STATE_UNUSABLE if failed else 0
+
+
+def profile_directory_argument(value: str) -> str:
+    """Admit only a non-empty absolute path, lexically normalized.
+
+    The admitted domain is closed and derived from what Codex itself does with
+    the value. An empty string is not a profile: Codex treats an empty
+    CODEX_HOME as unset and falls back to $HOME/.codex, verified with
+    `codex doctor --json`, so accepting "" would key two different Codex homes
+    as one. A relative path is resolved by Codex against its working directory,
+    which is the repository, not what an operator reading the watcher config
+    would expect, and `~` is not expanded because the bridge runs no shell.
+    The value is returned unchanged, so the child sees exactly what the
+    operator wrote; the thread key canonicalizes it separately in
+    `resolve_profile`. Everything outside the domain is rejected here, before
+    any turn exists.
+    """
+    if not value or not value.strip():
+        raise argparse.ArgumentTypeError("profile directory must not be empty")
+    if not os.path.isabs(value):
+        raise argparse.ArgumentTypeError(
+            f"profile directory must be an absolute path, got {value!r}"
+        )
+    return value
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--watcher-id", required=True)
-    parser.add_argument("--repo-dir", required=True, type=Path)
+    parser.add_argument("--repo-dir", type=Path)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument(
         "--sandbox",
@@ -1214,8 +1569,39 @@ def _build_parser() -> argparse.ArgumentParser:
             "default stays workspace-write."
         ),
     )
-    parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
     parser.add_argument(
+        "--codex-home",
+        default=None,
+        type=profile_directory_argument,
+        help=(
+            "Run Codex under this CODEX_HOME instead of the one this process "
+            "inherited. Absolute path. Isolates config, memories and built-in "
+            "skills."
+        ),
+    )
+    parser.add_argument(
+        "--agent-home",
+        default=None,
+        type=profile_directory_argument,
+        help=(
+            "Run Codex under this HOME instead of the inherited one. Absolute "
+            "path. The shared skills catalogue lives at $HOME/.agents/skills, "
+            "so this is a separate root from --codex-home and each takes "
+            "effect alone."
+        ),
+    )
+    parser.add_argument("--codex-bin", default=DEFAULT_CODEX_BIN)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--reset-threads",
+        action="store_true",
+        help=(
+            "Remove every thread file of exactly this watcher, under its wake "
+            "lock, so its next wake starts fresh under every profile. Use this "
+            "rather than a filename glob."
+        ),
+    )
+    mode.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the argv this wake would run and exit without calling Codex.",
@@ -1246,6 +1632,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"invalid watcher id: {args.watcher_id!r}", file=sys.stderr)
         return 2
 
+    if args.reset_threads:
+        return reset_watcher_threads(
+            watcher_id=args.watcher_id, state_dir=args.state_dir.expanduser()
+        )
+
+    if args.repo_dir is None:
+        print("--repo-dir is required", file=sys.stderr)
+        return 2
     repo_dir = args.repo_dir.expanduser()
     if not repo_dir.is_dir():
         print(f"repo dir is not a directory: {repo_dir}", file=sys.stderr)
@@ -1264,6 +1658,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         sandbox=args.sandbox,
         codex_bin=args.codex_bin,
         dry_run=args.dry_run,
+        codex_home=args.codex_home,
+        agent_home=args.agent_home,
     )
 
 
