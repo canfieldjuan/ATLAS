@@ -16,7 +16,7 @@ aiofiles>=25.1.0
 
 # Embeddings (optional - for local embeddings)
 sentence-transformers>=2.2.0
-numpy>=1.24.0
+numpy>=2.5.2
 torch>=2.0.0
 
 # Neo4j Driver (usually bundled with graphiti-core)
