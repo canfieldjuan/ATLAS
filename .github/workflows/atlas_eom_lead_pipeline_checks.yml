@@ -17,6 +17,8 @@ on:
       - "atlas_brain/main.py"
       - "atlas_brain/main_eom.py"
       - "atlas_brain/storage/database.py"
+      - "atlas_brain/reasoning/events.py"
+      - "atlas_brain/reasoning/producers.py"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/contacts.py"
       - "atlas_brain/api/comms/webhooks.py"
@@ -60,6 +62,7 @@ on:
       - "atlas_brain/storage/repositories/scoped_mailbox_credential.py"
       - "atlas_brain/storage/migrations/012_appointments.sql"
       - "atlas_brain/storage/migrations/035_contacts.sql"
+      - "atlas_brain/storage/migrations/071_reasoning_agent_foundation.sql"
       - "atlas_brain/storage/migrations/040_business_contexts.sql"
       - "atlas_brain/storage/migrations/256_contact_interaction_dedupe.sql"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
@@ -129,6 +132,7 @@ on:
       - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_eom_scoped_gmail_credentials.py"
       - "tests/test_eom_scoped_gmail_hardening.py"
+      - "tests/test_reasoning_event_emission_integration.py"
       - "atlas_brain/storage/migrations/__init__.py"
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
@@ -154,6 +158,8 @@ on:
       - "atlas_brain/main.py"
       - "atlas_brain/main_eom.py"
       - "atlas_brain/storage/database.py"
+      - "atlas_brain/reasoning/events.py"
+      - "atlas_brain/reasoning/producers.py"
       - "atlas_brain/api/__init__.py"
       - "atlas_brain/api/contacts.py"
       - "atlas_brain/api/comms/webhooks.py"
@@ -197,6 +203,7 @@ on:
       - "atlas_brain/storage/repositories/scoped_mailbox_credential.py"
       - "atlas_brain/storage/migrations/012_appointments.sql"
       - "atlas_brain/storage/migrations/035_contacts.sql"
+      - "atlas_brain/storage/migrations/071_reasoning_agent_foundation.sql"
       - "atlas_brain/storage/migrations/040_business_contexts.sql"
       - "atlas_brain/storage/migrations/256_contact_interaction_dedupe.sql"
       - "atlas_brain/storage/migrations/346_contact_lead_pipeline.sql"
@@ -266,6 +273,7 @@ on:
       - "tests/test_eom_recurring_appointments_integration.py"
       - "tests/test_eom_scoped_gmail_credentials.py"
       - "tests/test_eom_scoped_gmail_hardening.py"
+      - "tests/test_reasoning_event_emission_integration.py"
       - "atlas_brain/storage/migrations/__init__.py"
       - "tests/test_eom_sent_email_tenant_scope.py"
       - "tests/test_leads_intake.py"
@@ -365,6 +373,8 @@ jobs:
           # invoicing workflow: eom_crm_mutations triggers THIS workflow, and
           # its normalize_contact_email decides billing-recipient eligibility
           # and the address those routes return.
+          # test_reasoning_event_emission_integration.py proves the CRM
+          # provider's reasoning events persist through the real emit path.
           python -m pytest \
             tests/test_ack_commercial_templates.py \
             tests/test_ack_variant_classification.py \
@@ -402,4 +412,5 @@ jobs:
             tests/test_leads_intake.py \
             tests/test_migrations_runner.py \
             tests/test_migration_365_business_context_fk.py \
+            tests/test_reasoning_event_emission_integration.py \
             -q
