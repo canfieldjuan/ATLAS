@@ -141,6 +141,6 @@ Unit Gate deselects it. Rollback is a revert; no schema or data changes.
 |---|---:|
 | `.github/workflows/atlas_eom_lead_pipeline_checks.yml` | 11 |
 | `atlas_brain/reasoning/events.py` | 8 |
-| `plans/PR-Reasoning-Event-UUID-Payload.md` | 150 |
-| `tests/test_reasoning_event_emission_integration.py` | 157 |
-| **Total** | **326** |
+| `plans/PR-Reasoning-Event-UUID-Payload.md` | 146 |
+| `tests/test_reasoning_event_emission_integration.py` | 154 |
+| **Total** | **319** |
