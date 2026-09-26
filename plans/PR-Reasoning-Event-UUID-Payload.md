@@ -84,8 +84,10 @@ Max files: 4
     string form, which is what a producer passing `str(id)` already sends.
   - R6: the swallow in `emit_if_enabled` hid this for months; making the
     failure louder is parked below rather than changed here.
-  - R12: the test is enrolled in `atlas_eom_lead_pipeline_checks.yml`, which
-    provisions Postgres and already owns `crm_provider.py`.
+  - R12: the test is enrolled in
+    `.github/workflows/atlas_eom_lead_pipeline_checks.yml`, which
+    provisions Postgres and already owns
+    `atlas_brain/services/crm_provider.py`.
   - R13: fixed at the one sink every producer shares, with a nested-value
     test beyond the two reported producers.
 
