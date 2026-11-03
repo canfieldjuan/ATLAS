@@ -4589,28 +4589,39 @@ async def test_operator_contact_route_billing_address_absent_stays_absent():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("cleared", [None, "", "   "])
-async def test_operator_contact_route_billing_address_clear_requires_contact_id(cleared):
-    """Null or blank clears, but only on an edit that names the contact.
+@pytest.mark.parametrize(
+    "billing_address", ["114 W Washington Ave", None, "", "   "]
+)
+async def test_operator_contact_route_billing_address_requires_contact_id(
+    billing_address,
+):
+    """billingAddress is edit-only, whatever its value.
 
     Without contactId the boundary is create-or-return and can resolve to a
-    contact matched on phone or email, so a clear would wipe the bill-to of a
-    contact the caller never named.
+    contact matched on phone or email, possibly one linked to another
+    Customer, so setting or clearing the bill-to there would change a contact
+    the caller never named.
     """
     crm = _CRM()
     refused = await _post_operator_contact(
-        crm, _operator_contact_payload(billingAddress=cleared)
+        crm, _operator_contact_payload(billingAddress=billing_address)
     )
     assert refused.status_code == 422, refused.text
     assert crm.operator_contact_calls == []
 
     edit = await _post_operator_contact(
-        crm, _operator_contact_payload(contactId=str(uuid4()), billingAddress=cleared)
+        crm,
+        _operator_contact_payload(
+            contactId=str(uuid4()), billingAddress=billing_address
+        ),
     )
     assert edit.status_code in (200, 201), edit.text
     command = crm.operator_contact_calls[0]
     assert "billing_address" in command.fields
-    assert command.fields["billing_address"] is None
+    expected = (
+        billing_address.strip() if billing_address and billing_address.strip() else None
+    )
+    assert command.fields["billing_address"] == expected
 
 
 @pytest.mark.asyncio
@@ -4618,14 +4629,14 @@ async def test_operator_contact_route_billing_address_length_bound():
     """500 characters is the column CHECK; 501 is a 422, not a 500."""
     crm = _CRM()
     at_limit = await _post_operator_contact(
-        crm, _operator_contact_payload(billingAddress="a" * 500)
+        crm, _operator_contact_payload(contactId=str(uuid4()), billingAddress="a" * 500)
     )
-    assert at_limit.status_code == 201, at_limit.text
+    assert at_limit.status_code in (200, 201), at_limit.text
     assert crm.operator_contact_calls[0].fields["billing_address"] == "a" * 500
 
     crm = _CRM()
     over = await _post_operator_contact(
-        crm, _operator_contact_payload(billingAddress="a" * 501)
+        crm, _operator_contact_payload(contactId=str(uuid4()), billingAddress="a" * 501)
     )
     assert over.status_code == 422, over.text
     assert crm.operator_contact_calls == []

@@ -9400,45 +9400,6 @@ async def _create_bill_to_customer(conn, provider, *, fields):
 
 
 @pytest.mark.asyncio
-async def test_operator_contact_create_stores_billing_address():
-    database_url = _database_url_or_skip()
-    schema = f"atlas_eom_bill_to_create_{uuid.uuid4().hex}"
-    conn = await asyncpg.connect(database_url)
-    try:
-        await _prepare_schema(conn, schema, apply_privilege_migration=False)
-        provider = DatabaseCRMProvider(pool=conn)
-
-        contact_id = await _create_bill_to_customer(
-            conn,
-            provider,
-            fields={
-                "full_name": "Milano & Grunloh Engineers",
-                "phone": "(217) 555-0191",
-                "address": "1 Service Site Rd",
-                "billing_address": "114 W Washington Ave, Effingham, IL 62401",
-            },
-        )
-        row = await conn.fetchrow(
-            "SELECT address, billing_address, bill_to_revision FROM contacts WHERE id = $1",
-            uuid.UUID(contact_id),
-        )
-        assert row["address"] == "1 Service Site Rd"
-        assert row["billing_address"] == "114 W Washington Ave, Effingham, IL 62401"
-        assert row["bill_to_revision"] is None
-
-        # A create without the field leaves the column NULL (the default the
-        # migration gives every existing row).
-        plain_id = await _create_bill_to_customer(
-            conn, provider, fields={"full_name": "Plain", "phone": "(217) 555-0192"}
-        )
-        assert await conn.fetchval(
-            "SELECT billing_address FROM contacts WHERE id = $1", uuid.UUID(plain_id)
-        ) is None
-    finally:
-        await conn.close()
-
-
-@pytest.mark.asyncio
 async def test_operator_contact_billing_address_edit_leaves_address_untouched():
     database_url = _database_url_or_skip()
     schema = f"atlas_eom_bill_to_edit_{uuid.uuid4().hex}"

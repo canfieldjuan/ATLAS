@@ -379,16 +379,13 @@ class EOMOperatorContactMutation:
                 )
         normalized_fields = _normalize_fields(fields)
         # Without contactId this boundary is create-OR-return: the request can
-        # resolve to a contact it merely matched on phone or email. A clear or a
-        # fence there would act on a contact the caller never named, so both
-        # are edit-only.
+        # resolve to a contact it merely matched on phone or email, possibly one
+        # linked to another Customer. The bill-to address and the fence must
+        # only ever act on the contact the caller named, so both are edit-only.
         if not contact_id:
-            if (
-                "billing_address" in normalized_fields
-                and normalized_fields["billing_address"] is None
-            ):
+            if "billing_address" in normalized_fields:
                 raise EOMOperatorContactMutationError(
-                    422, "billingAddress can only be cleared on an edit that names contactId"
+                    422, "billingAddress requires contactId"
                 )
             if identity_revision is not None:
                 raise EOMOperatorContactMutationError(
