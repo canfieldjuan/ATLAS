@@ -51,9 +51,9 @@ Slice phase: Vertical slice
 1. Migration `400_eom_contact_bill_to_identity.sql`: nullable
    `contacts.billing_address` (at most 500 characters) and nullable
    `contacts.bill_to_revision` (positive), each enforced by a CHECK.
-2. Operator boundary admits `billingAddress` (absent = untouched; null or blank
-   clears it, only on an edit that names `contactId`) and `identityRevision`
-   (positive integer, only with `contactId`).
+2. Operator boundary admits `billingAddress` only on an edit that names
+   `contactId` (absent = untouched; a value sets it; null or blank clears it)
+   and `identityRevision` (positive integer, only with `contactId`).
 3. Revision fence in the atomic provider mutation: an identity write applies
    only when its revision is greater than the stored `bill_to_revision`, and
    stores it in the same UPDATE.
@@ -71,8 +71,9 @@ Slice phase: Vertical slice
     and leaves `address` untouched --
     `tests/test_eom_lead_conversion_integration.py::test_operator_contact_billing_address_edit_leaves_address_untouched`.
   - Absent `billingAddress` never reaches the command; present null with
-    `contactId` reaches it as None; null or blank without `contactId` is 422
-    before the provider; over 500 characters is 422 --
+    `contactId` reaches it as None; any `billingAddress` without `contactId`
+    (a value, blank, or null) is 422 before the provider; over 500 characters
+    is 422 --
     `tests/test_eom_lead_conversion.py::test_operator_contact_route_billing_address_*`.
   - Revision fence, execution model (AGENTS 3k.4): every write that names
     `contactId` holds the `eom-operator-contact:contact:{id}` advisory lock and
@@ -92,9 +93,6 @@ Slice phase: Vertical slice
   - A command that sends neither new field keeps the exact pre-change request
     fingerprint, so in-flight retries across the deploy still replay --
     `tests/test_eom_lead_conversion.py::test_operator_contact_fingerprint_unchanged_without_bill_to_fields`.
-  - Create through the operator boundary stores `billingAddress`
-    (`_insert_contact_row` names the column only when it is supplied) --
-    `tests/test_eom_lead_conversion_integration.py::test_operator_contact_create_stores_billing_address`.
   - `contact.bill_to_identity` maps to `POST /eom-funnel/operator-contacts`,
     shares availability with `contact.operator_mutation`, and is served --
     `tests/test_eom_funnel_capability_manifest.py::test_bill_to_identity_capability_versions_the_operator_mutation_semantics`.
@@ -111,11 +109,11 @@ Slice phase: Vertical slice
 - Affected surfaces: `atlas_brain/eom_api/funnel.py` (request model, field
   map, response item, capability map), `atlas_brain/services/eom_crm_mutations.py`
   (field set, limits, command), `atlas_brain/services/crm_provider.py`
-  (atomic mutation, contact insert), migration 400, monthly invoice generation.
+  (atomic mutation), migration 400, monthly invoice generation.
 - Risk areas: fingerprint drift for in-flight retries; create-or-return
-  clearing a matched contact's billing address; the fence admitting an equal
-  revision; a pending migration breaking contact inserts for callers that never
-  send `billing_address`; booking locations moving.
+  changing the billing address of a contact it merely matched (possibly one
+  linked to another Customer); the fence admitting an equal revision; booking
+  locations moving.
 - Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R7, R8, R10, R12, R13, R14.
 
 ### Guard-class closure declaration
@@ -175,9 +173,13 @@ and `chk_contacts_bill_to_revision_positive`.
 `billing_address` joins `EOM_OPERATOR_CONTACT_FIELDS` with a 500-character
 limit, so it rides the existing normalization, update, and lifecycle-event
 paths (`changed_fields`, `previous_values`, `cleared_fields`). `from_raw`
-rejects a null `billing_address` and any `identity_revision` when no
-`contact_id` is named: a create-or-return request can resolve to a contact it
-merely matched, and must not clear or fence that contact. The request
+rejects any `billing_address` and any `identity_revision` when no `contact_id`
+is named: a create-or-return request can resolve to a contact it merely
+matched on email or phone, possibly one linked to another Customer, and must
+not change that contact's bill-to address or fence it. The tracker sends a new
+Customer's billing address through the identity sync after the create links
+it. Because no create can carry `billing_address`, the contact INSERT does not
+change. The request
 fingerprint adds `identity_revision` only when it is present, so older
 requests hash exactly as before.
 
@@ -185,10 +187,7 @@ In the atomic mutation, the existing receipt lookup runs first (a retry under
 its key replays). `_update_existing` then compares `identity_revision` with the
 row's `bill_to_revision` under the locks already held for a `contactId` edit,
 raises 409 when it is not greater, and otherwise writes `bill_to_revision`
-with the field updates. `_insert_contact_row` takes `billing_address` as a
-keyword (like `customer_type`) and names the column only when it is supplied,
-so contact inserts from callers that never send it do not depend on migration
-400.
+with the field updates.
 
 Monthly invoice generation reads the bill-to address through
 `_contact_bill_to_address(contact)`.
