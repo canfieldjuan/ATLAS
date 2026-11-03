@@ -224,15 +224,16 @@ Parked hardening: none.
 
 - Passed locally: new route tests
   `./ops test focused tests/test_eom_lead_conversion.py -k "bill_to or billing_address or identity_revision or fingerprint_unchanged or stale_revision"`
-  (16 passed); capability and bill-to precedence tests (6 passed);
+  (17 passed); capability and bill-to precedence tests (6 passed);
   `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` including the
   generator-run bill-to test (5 passed).
 - Passed locally: every unit test file that imports the changed modules
-  (53 files): 2374 passed, 462 skipped, 7 failed. All 7 failures reproduce on a
+  (53 files): 2375 passed, 461 skipped, 7 failed. All 7 failures reproduce on a
   clean `origin/main` checkout (`tests/test_b2b_crm_events.py::test_get_enrichment_stats_rejects_unauthenticated_before_db_touch`
   and six in `tests/test_mcp_servers.py`), so none comes from this diff.
-- Skipped locally, proven in CI: the three database-backed tests in
-  `tests/test_eom_lead_conversion_integration.py` (no disposable database is
+- Skipped locally, proven in CI: the two database-backed tests in
+  `tests/test_eom_lead_conversion_integration.py` (an edit changes the billing
+  address without moving `address`; the revision fence; no disposable database is
   prepared on this machine; the runbook routes that proof to GitHub Actions).
 - Passed locally: `ruff check` adds no findings over `origin/main` on any
   changed file; ASCII check; `python scripts/check_guard_class_closure.py --base origin/main --strict`.
@@ -243,13 +244,13 @@ Parked hardening: none.
 |---|---:|
 | `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 16 |
 | `atlas_brain/eom_api/funnel.py` | 31 |
-| `atlas_brain/services/crm_provider.py` | 38 |
-| `atlas_brain/services/eom_crm_mutations.py` | 63 |
+| `atlas_brain/services/crm_provider.py` | 20 |
+| `atlas_brain/services/eom_crm_mutations.py` | 60 |
 | `atlas_brain/storage/migrations/400_eom_contact_bill_to_identity.sql` | 56 |
 | `plans/PR-EOM-Contact-Bill-To-Identity.md` | 256 |
 | `tests/test_eom_funnel_capability_manifest.py` | 24 |
-| `tests/test_eom_lead_conversion.py` | 226 |
-| `tests/test_eom_lead_conversion_integration.py` | 224 |
+| `tests/test_eom_lead_conversion.py` | 237 |
+| `tests/test_eom_lead_conversion_integration.py` | 198 |
 | `tests/test_monthly_invoice_generation.py` | 32 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 62 |
-| **Total** | **1028** |
+| **Total** | **992** |
