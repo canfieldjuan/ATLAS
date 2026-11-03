@@ -14,6 +14,13 @@ a person with no address. The tracker side (slice B) will send the bill-to
 identity; this slice gives Atlas somewhere correct to store it and a way to
 refuse stale writes.
 
+Diff budget: about 1,000 lines against the 400-line target, of which about
+200 are production code (migration, boundary, provider, invoice precedence);
+the rest is this plan and tests on both sides of every new guard. The slice is
+indivisible: the field and the fence ship under one capability name because
+the tracker must not send a bill-to identity that Atlas cannot order, and the
+invoice precedence is what makes the stored field reach a bill.
+
 ### Problem-derived contract
 
 - Root cause: Atlas has no bill-to address. `contacts.address` already serves a
@@ -147,7 +154,17 @@ decided by request content and the stored row only.
 
 ### Files touched
 
-- TODO: run `python scripts/sync_pr_plan.py plans/PR-EOM-Contact-Bill-To-Identity.md` after implementation.
+- `atlas_brain/autonomous/tasks/monthly_invoice_generation.py`
+- `atlas_brain/eom_api/funnel.py`
+- `atlas_brain/services/crm_provider.py`
+- `atlas_brain/services/eom_crm_mutations.py`
+- `atlas_brain/storage/migrations/400_eom_contact_bill_to_identity.sql`
+- `plans/PR-EOM-Contact-Bill-To-Identity.md`
+- `tests/test_eom_funnel_capability_manifest.py`
+- `tests/test_eom_lead_conversion.py`
+- `tests/test_eom_lead_conversion_integration.py`
+- `tests/test_monthly_invoice_generation.py`
+- `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py`
 
 ## Mechanism
 
@@ -206,11 +223,34 @@ Parked hardening: none.
 
 ## Verification
 
-- Pending before push: focused unit tests, integration tests in CI, ruff,
-  ASCII check, guard-class closure audit, plan sync.
+- Passed locally: new route tests
+  `./ops test focused tests/test_eom_lead_conversion.py -k "bill_to or billing_address or identity_revision or fingerprint_unchanged or stale_revision"`
+  (16 passed); capability and bill-to precedence tests (6 passed);
+  `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` including the
+  generator-run bill-to test (5 passed).
+- Passed locally: every unit test file that imports the changed modules
+  (53 files): 2374 passed, 462 skipped, 7 failed. All 7 failures reproduce on a
+  clean `origin/main` checkout (`tests/test_b2b_crm_events.py::test_get_enrichment_stats_rejects_unauthenticated_before_db_touch`
+  and six in `tests/test_mcp_servers.py`), so none comes from this diff.
+- Skipped locally, proven in CI: the three database-backed tests in
+  `tests/test_eom_lead_conversion_integration.py` (no disposable database is
+  prepared on this machine; the runbook routes that proof to GitHub Actions).
+- Passed locally: `ruff check` adds no findings over `origin/main` on any
+  changed file; ASCII check; `python scripts/check_guard_class_closure.py --base origin/main --strict`.
 
 ## Estimated diff size
 
 | File | LOC |
 |---|---:|
-| **Total** | **0** |
+| `atlas_brain/autonomous/tasks/monthly_invoice_generation.py` | 16 |
+| `atlas_brain/eom_api/funnel.py` | 31 |
+| `atlas_brain/services/crm_provider.py` | 38 |
+| `atlas_brain/services/eom_crm_mutations.py` | 63 |
+| `atlas_brain/storage/migrations/400_eom_contact_bill_to_identity.sql` | 56 |
+| `plans/PR-EOM-Contact-Bill-To-Identity.md` | 256 |
+| `tests/test_eom_funnel_capability_manifest.py` | 24 |
+| `tests/test_eom_lead_conversion.py` | 226 |
+| `tests/test_eom_lead_conversion_integration.py` | 224 |
+| `tests/test_monthly_invoice_generation.py` | 32 |
+| `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 62 |
+| **Total** | **1028** |
