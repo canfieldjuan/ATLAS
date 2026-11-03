@@ -47,6 +47,7 @@ invoice precedence is what makes the stored field reach a bill.
 
 Ownership lane: eom-crm/lead-funnel
 Slice phase: Vertical slice
+Max files: 11
 
 1. Migration `400_eom_contact_bill_to_identity.sql`: nullable
    `contacts.billing_address` (at most 500 characters) and nullable
@@ -247,10 +248,10 @@ Parked hardening: none.
 | `atlas_brain/services/crm_provider.py` | 20 |
 | `atlas_brain/services/eom_crm_mutations.py` | 60 |
 | `atlas_brain/storage/migrations/400_eom_contact_bill_to_identity.sql` | 56 |
-| `plans/PR-EOM-Contact-Bill-To-Identity.md` | 256 |
+| `plans/PR-EOM-Contact-Bill-To-Identity.md` | 257 |
 | `tests/test_eom_funnel_capability_manifest.py` | 24 |
 | `tests/test_eom_lead_conversion.py` | 237 |
 | `tests/test_eom_lead_conversion_integration.py` | 198 |
 | `tests/test_monthly_invoice_generation.py` | 32 |
 | `tests/test_monthly_invoice_generation_cross_pipeline_dedup.py` | 62 |
-| **Total** | **992** |
+| **Total** | **993** |
