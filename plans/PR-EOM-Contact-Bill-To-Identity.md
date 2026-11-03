@@ -116,7 +116,7 @@ Slice phase: Vertical slice
   clearing a matched contact's billing address; the fence admitting an equal
   revision; a pending migration breaking contact inserts for callers that never
   send `billing_address`; booking locations moving.
-- Reviewer rules triggered: R1, R2, R3, R5, R7, R10, R12, R13, R14.
+- Reviewer rules triggered: R1, R2, R3, R4, R5, R6, R7, R8, R10, R12, R13, R14.
 
 ### Guard-class closure declaration
 
