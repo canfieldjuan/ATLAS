@@ -9369,13 +9369,15 @@ async def test_operator_contact_clear_is_scoped_to_nullable_optional_fields():
         await conn.close()
 
 
-def _bill_to_command(*, operation_key, contact_id, fields, identity_revision=None):
+def _bill_to_command(
+    *, operation_key, contact_id, source_ref, fields, identity_revision=None
+):
     return EOMOperatorContactMutation.from_raw(
         operation_key=operation_key,
         actor_id=7,
         actor_name="Mayra Canfield",
         source_channel="time_tracker",
-        source_ref="customer:91",
+        source_ref=source_ref,
         contact_type="customer",
         fields=fields,
         contact_id=contact_id,
@@ -9383,7 +9385,14 @@ def _bill_to_command(*, operation_key, contact_id, fields, identity_revision=Non
     )
 
 
-async def _create_bill_to_customer(conn, provider, *, fields):
+async def _create_bill_to_customer(provider, *, fields):
+    """Create one customer under its own source ref; return (id, source_ref).
+
+    The provider matches on source provenance as well as phone and email, so
+    two customers sharing a source ref would collapse into one contact. Edits
+    to the same customer reuse the returned ref.
+    """
+    source_ref = f"customer:{uuid.uuid4().hex[:12]}"
     created = await mutate_eom_operator_contact(
         provider,
         EOMOperatorContactMutation.from_raw(
@@ -9391,12 +9400,12 @@ async def _create_bill_to_customer(conn, provider, *, fields):
             actor_id=7,
             actor_name="Mayra Canfield",
             source_channel="time_tracker",
-            source_ref="customer:91",
+            source_ref=source_ref,
             contact_type="customer",
             fields=fields,
         ),
     )
-    return created["contact_id"]
+    return created["contact_id"], source_ref
 
 
 @pytest.mark.asyncio
@@ -9407,8 +9416,7 @@ async def test_operator_contact_billing_address_edit_leaves_address_untouched():
     try:
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
         provider = DatabaseCRMProvider(pool=conn)
-        contact_id = await _create_bill_to_customer(
-            conn,
+        contact_id, source_ref = await _create_bill_to_customer(
             provider,
             fields={
                 "full_name": "Julie Bushue",
@@ -9422,6 +9430,7 @@ async def test_operator_contact_billing_address_edit_leaves_address_untouched():
             _bill_to_command(
                 operation_key=f"bill-to-edit-{uuid.uuid4().hex}",
                 contact_id=contact_id,
+                source_ref=source_ref,
                 fields={
                     "full_name": "Milano & Grunloh Engineers",
                     "billing_address": "114 W Washington Ave, Effingham, IL 62401",
@@ -9460,6 +9469,7 @@ async def test_operator_contact_billing_address_edit_leaves_address_untouched():
             _bill_to_command(
                 operation_key=f"bill-to-clear-{uuid.uuid4().hex}",
                 contact_id=contact_id,
+                source_ref=source_ref,
                 fields={"billing_address": None},
                 identity_revision=2,
             ),
@@ -9479,8 +9489,7 @@ async def test_operator_contact_identity_revision_fence():
     try:
         await _prepare_schema(conn, schema, apply_privilege_migration=False)
         provider = DatabaseCRMProvider(pool=conn)
-        contact_id = await _create_bill_to_customer(
-            conn,
+        contact_id, source_ref = await _create_bill_to_customer(
             provider,
             fields={"full_name": "Fence Co", "phone": "(217) 555-0194"},
         )
@@ -9489,6 +9498,7 @@ async def test_operator_contact_identity_revision_fence():
             _bill_to_command(
                 operation_key=f"fence-5-{uuid.uuid4().hex}",
                 contact_id=contact_id,
+                source_ref=source_ref,
                 fields={"full_name": "Name Five"},
                 identity_revision=5,
             ),
@@ -9498,6 +9508,7 @@ async def test_operator_contact_identity_revision_fence():
         six = _bill_to_command(
             operation_key=six_key,
             contact_id=contact_id,
+            source_ref=source_ref,
             fields={"full_name": "Name Six", "billing_address": "6 Bill St"},
             identity_revision=6,
         )
@@ -9522,6 +9533,7 @@ async def test_operator_contact_identity_revision_fence():
                     _bill_to_command(
                         operation_key=f"fence-stale-{uuid.uuid4().hex}",
                         contact_id=contact_id,
+                        source_ref=source_ref,
                         fields={"full_name": f"Stale {stale_revision}"},
                         identity_revision=stale_revision,
                     ),
@@ -9537,6 +9549,7 @@ async def test_operator_contact_identity_revision_fence():
             _bill_to_command(
                 operation_key=f"fence-none-{uuid.uuid4().hex}",
                 contact_id=contact_id,
+                source_ref=source_ref,
                 fields={"notes": "unfenced edit"},
             ),
         )
