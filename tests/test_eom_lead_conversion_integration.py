@@ -156,6 +156,8 @@ async def _prepare_schema(
         # The provider's contact INSERT names customer_type explicitly, so the
         # column has to exist for any operator write in these tests.
         "366_contacts_customer_type.sql",
+        # billing_address + bill_to_revision; the operator fence reads them.
+        "400_eom_contact_bill_to_identity.sql",
     ]
     if apply_customer_type_revision_migration:
         migration_names.append("367_contacts_customer_type_revision.sql")
@@ -9364,4 +9366,226 @@ async def test_operator_contact_clear_is_scoped_to_nullable_optional_fields():
         assert noop_metadata["previous_values"] == {}
     finally:
         await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+def _bill_to_command(*, operation_key, contact_id, fields, identity_revision=None):
+    return EOMOperatorContactMutation.from_raw(
+        operation_key=operation_key,
+        actor_id=7,
+        actor_name="Mayra Canfield",
+        source_channel="time_tracker",
+        source_ref="customer:91",
+        contact_type="customer",
+        fields=fields,
+        contact_id=contact_id,
+        identity_revision=identity_revision,
+    )
+
+
+async def _create_bill_to_customer(conn, provider, *, fields):
+    created = await mutate_eom_operator_contact(
+        provider,
+        EOMOperatorContactMutation.from_raw(
+            operation_key=f"bill-to-create-{uuid.uuid4().hex}",
+            actor_id=7,
+            actor_name="Mayra Canfield",
+            source_channel="time_tracker",
+            source_ref="customer:91",
+            contact_type="customer",
+            fields=fields,
+        ),
+    )
+    return created["contact_id"]
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_create_stores_billing_address():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_bill_to_create_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        contact_id = await _create_bill_to_customer(
+            conn,
+            provider,
+            fields={
+                "full_name": "Milano & Grunloh Engineers",
+                "phone": "(217) 555-0191",
+                "address": "1 Service Site Rd",
+                "billing_address": "114 W Washington Ave, Effingham, IL 62401",
+            },
+        )
+        row = await conn.fetchrow(
+            "SELECT address, billing_address, bill_to_revision FROM contacts WHERE id = $1",
+            uuid.UUID(contact_id),
+        )
+        assert row["address"] == "1 Service Site Rd"
+        assert row["billing_address"] == "114 W Washington Ave, Effingham, IL 62401"
+        assert row["bill_to_revision"] is None
+
+        # A create without the field leaves the column NULL (the default the
+        # migration gives every existing row).
+        plain_id = await _create_bill_to_customer(
+            conn, provider, fields={"full_name": "Plain", "phone": "(217) 555-0192"}
+        )
+        assert await conn.fetchval(
+            "SELECT billing_address FROM contacts WHERE id = $1", uuid.UUID(plain_id)
+        ) is None
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_billing_address_edit_leaves_address_untouched():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_bill_to_edit_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = await _create_bill_to_customer(
+            conn,
+            provider,
+            fields={
+                "full_name": "Julie Bushue",
+                "phone": "(217) 555-0193",
+                "address": "1 Service Site Rd",
+            },
+        )
+
+        edited = await mutate_eom_operator_contact(
+            provider,
+            _bill_to_command(
+                operation_key=f"bill-to-edit-{uuid.uuid4().hex}",
+                contact_id=contact_id,
+                fields={
+                    "full_name": "Milano & Grunloh Engineers",
+                    "billing_address": "114 W Washington Ave, Effingham, IL 62401",
+                },
+                identity_revision=1,
+            ),
+        )
+
+        assert edited["operation"] == "contact_updated"
+        row = await conn.fetchrow(
+            "SELECT full_name, address, billing_address, bill_to_revision "
+            "FROM contacts WHERE id = $1",
+            uuid.UUID(contact_id),
+        )
+        assert row["full_name"] == "Milano & Grunloh Engineers"
+        assert row["billing_address"] == "114 W Washington Ave, Effingham, IL 62401"
+        assert row["address"] == "1 Service Site Rd", "booking address must not move"
+        assert row["bill_to_revision"] == 1
+        event = await conn.fetchrow(
+            """
+            SELECT metadata FROM eom_lead_lifecycle_events
+            WHERE contact_id = $1 AND event_type = 'contact_updated'
+            """,
+            uuid.UUID(contact_id),
+        )
+        metadata = _metadata_dict(event["metadata"])
+        assert metadata["changed_fields"] == ["billing_address", "full_name"]
+        assert metadata["previous_values"] == {
+            "billing_address": None,
+            "full_name": "Julie Bushue",
+        }
+        assert metadata["identity_revision"] == 1
+
+        cleared = await mutate_eom_operator_contact(
+            provider,
+            _bill_to_command(
+                operation_key=f"bill-to-clear-{uuid.uuid4().hex}",
+                contact_id=contact_id,
+                fields={"billing_address": None},
+                identity_revision=2,
+            ),
+        )
+        assert cleared["contact"]["billing_address"] is None
+        assert cleared["contact"]["address"] == "1 Service Site Rd"
+    finally:
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_identity_revision_fence():
+    """Stored 5: 6 applies; 6, 5, 4 under new keys refuse; 6's key replays."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_bill_to_fence_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        contact_id = await _create_bill_to_customer(
+            conn,
+            provider,
+            fields={"full_name": "Fence Co", "phone": "(217) 555-0194"},
+        )
+        await mutate_eom_operator_contact(
+            provider,
+            _bill_to_command(
+                operation_key=f"fence-5-{uuid.uuid4().hex}",
+                contact_id=contact_id,
+                fields={"full_name": "Name Five"},
+                identity_revision=5,
+            ),
+        )
+
+        six_key = f"fence-6-{uuid.uuid4().hex}"
+        six = _bill_to_command(
+            operation_key=six_key,
+            contact_id=contact_id,
+            fields={"full_name": "Name Six", "billing_address": "6 Bill St"},
+            identity_revision=6,
+        )
+        applied = await mutate_eom_operator_contact(provider, six)
+        assert applied["idempotent"] is False
+
+        async def _row():
+            return await conn.fetchrow(
+                "SELECT full_name, billing_address, bill_to_revision, updated_at "
+                "FROM contacts WHERE id = $1",
+                uuid.UUID(contact_id),
+            )
+
+        after_six = await _row()
+        assert after_six["full_name"] == "Name Six"
+        assert after_six["bill_to_revision"] == 6
+
+        for stale_revision in (6, 5, 4):
+            with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+                await mutate_eom_operator_contact(
+                    provider,
+                    _bill_to_command(
+                        operation_key=f"fence-stale-{uuid.uuid4().hex}",
+                        contact_id=contact_id,
+                        fields={"full_name": f"Stale {stale_revision}"},
+                        identity_revision=stale_revision,
+                    ),
+                )
+            assert exc_info.value.status_code == 409
+            assert exc_info.value.code == "stale_identity_revision"
+            assert await _row() == after_six, "a refused write must change nothing"
+
+        # An edit with no revision (e.g. a customer-type change) is not fenced
+        # and does not move the stored revision.
+        await mutate_eom_operator_contact(
+            provider,
+            _bill_to_command(
+                operation_key=f"fence-none-{uuid.uuid4().hex}",
+                contact_id=contact_id,
+                fields={"notes": "unfenced edit"},
+            ),
+        )
+        assert (await _row())["bill_to_revision"] == 6
+
+        replay = await mutate_eom_operator_contact(provider, six)
+        assert replay["idempotent"] is True
+        assert (await _row())["full_name"] == "Name Six"
+        assert await conn.fetchval(
+            "SELECT COUNT(*) FROM eom_lead_lifecycle_events WHERE operation_key LIKE 'fence-stale-%'"
+        ) == 0
+    finally:
         await conn.close()

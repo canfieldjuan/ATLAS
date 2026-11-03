@@ -359,3 +359,27 @@ def test_field_clear_capability_versions_the_operator_mutation_semantics() -> No
         "contact.operator_mutation" in served
     ), "shared route means shared availability"
     assert "contact.field_clear" in served
+
+
+def test_bill_to_identity_capability_versions_the_operator_mutation_semantics() -> None:
+    """`contact.bill_to_identity` shares the operator-mutation route ON PURPOSE.
+
+    Like `contact.field_clear`, the name versions SEMANTICS: an older build
+    serves the same POST route but rejects `billingAddress` and
+    `identityRevision` as unknown fields. The tracker gates its bill-to
+    identity sync on this name + route pair, so pin both the pairing and the
+    shared availability.
+    """
+    assert funnel_mod._CAPABILITY_ROUTES["contact.bill_to_identity"] == (
+        "POST",
+        "/eom-funnel/operator-contacts",
+    )
+    assert (
+        funnel_mod._CAPABILITY_ROUTES["contact.bill_to_identity"]
+        == funnel_mod._CAPABILITY_ROUTES["contact.operator_mutation"]
+    )
+    served = funnel_mod.served_capabilities()
+    assert ("contact.bill_to_identity" in served) == (
+        "contact.operator_mutation" in served
+    ), "shared route means shared availability"
+    assert "contact.bill_to_identity" in served

@@ -1066,6 +1066,7 @@ class DatabaseCRMProvider:
         data: Mapping[str, Any],
         *,
         customer_type: str | None = None,
+        billing_address: str | None = None,
     ) -> dict[str, Any]:
         """Insert one contact through the provider-owned persistence site.
 
@@ -1081,6 +1082,14 @@ class DatabaseCRMProvider:
         if "customer_type" in data:
             raise ValueError(
                 "customer_type must be set through the operator mutation "
+                "boundary, not through a generic contact insert"
+            )
+        # Same rule for the bill-to address (migration 400): it is what an
+        # invoice is addressed to, so only the normalized operator boundary may
+        # set it, and only a caller that supplied it names the column.
+        if "billing_address" in data:
+            raise ValueError(
+                "billing_address must be set through the operator mutation "
                 "boundary, not through a generic contact insert"
             )
 
@@ -1104,6 +1113,9 @@ class DatabaseCRMProvider:
         if customer_type is not None:
             optional_columns.append("customer_type")
             optional_values.append(customer_type)
+        if billing_address is not None:
+            optional_columns.append("billing_address")
+            optional_values.append(billing_address)
 
         column_sql = ", ".join(optional_columns)
         if column_sql:
@@ -1338,6 +1350,7 @@ class DatabaseCRMProvider:
             EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS,
             EOM_OPERATOR_EDIT_BLOCK_REASON_STAGE,
             EOM_BUSINESS_CONTEXT_ID,
+            EOM_OPERATOR_STALE_IDENTITY_REVISION,
             EOMOperatorContactMutationError,
             get_eom_operator_contact_editability,
         )
@@ -1606,11 +1619,30 @@ class DatabaseCRMProvider:
             conn: Any, target: Mapping[str, Any]
         ) -> dict[str, Any]:
             _assert_contact_type_matches(target)
+            # The revision fence. Only an edit that names contactId carries a
+            # revision, so this runs under that contact's advisory lock and row
+            # lock, after the receipt lookup (a retry under its own key has
+            # already replayed). Equal is stale too: two reservations never
+            # share a revision.
+            if command.identity_revision is not None:
+                stored_revision = target.get("bill_to_revision")
+                if (
+                    stored_revision is not None
+                    and command.identity_revision <= int(stored_revision)
+                ):
+                    raise EOMOperatorContactMutationError(
+                        409,
+                        "identityRevision is not newer than the contact's "
+                        "bill-to revision",
+                        code=EOM_OPERATOR_STALE_IDENTITY_REVISION,
+                    )
             updates = {
                 key: value
                 for key, value in command.fields.items()
                 if target.get(key) != value
             }
+            if command.identity_revision is not None:
+                updates["bill_to_revision"] = command.identity_revision
             if target.get("business_context_id") is None:
                 updates["business_context_id"] = EOM_BUSINESS_CONTEXT_ID
             provenance_metadata, provenance_changed = _operator_provenance_metadata(target)
@@ -1656,6 +1688,7 @@ class DatabaseCRMProvider:
             fields = dict(command.fields)
             # Lifted out of the dict on purpose -- see _insert_contact_row.
             operator_customer_type = fields.pop("customer_type", None)
+            operator_billing_address = fields.pop("billing_address", None)
             data = {
                 **fields,
                 "full_name": full_name,
@@ -1668,7 +1701,10 @@ class DatabaseCRMProvider:
                 "metadata": _operator_provenance_metadata({})[0],
             }
             return await self._insert_contact_row(
-                conn, data, customer_type=operator_customer_type
+                conn,
+                data,
+                customer_type=operator_customer_type,
+                billing_address=operator_billing_address,
             )
 
         async def _write_lifecycle_event(

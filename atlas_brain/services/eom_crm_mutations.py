@@ -115,6 +115,9 @@ EOM_OPERATOR_CONTACT_FIELDS = (
     "zip",
     "notes",
     "customer_type",
+    # The bill-to address, distinct from `address` (the service location that
+    # booking events use). Invoices prefer it; see migration 400.
+    "billing_address",
 )
 _FIELD_LIMITS = {
     "full_name": 256,
@@ -123,7 +126,11 @@ _FIELD_LIMITS = {
     "city": 128,
     "state": 64,
     "zip": 16,
+    # Bound to chk_contacts_billing_address_length (migration 400).
+    "billing_address": 500,
 }
+# bill_to_revision is BIGINT (migration 400).
+_IDENTITY_REVISION_MAX = 2**63 - 1
 _EMAIL_MIN_LENGTH = 3
 _EMAIL_LOCAL_MAX_LENGTH = 64
 _EMAIL_DOMAIN_MAX_LENGTH = 255
@@ -138,12 +145,25 @@ _PHONE_EXTENSION_RE = re.compile(
 _PHONE_ALLOWED_RE = re.compile(r"^[0-9\s()+.\-]*$")
 
 
-class EOMOperatorContactMutationError(Exception):
-    """HTTP-mappable domain error for the EOM operator mutation boundary."""
+# Machine-readable code for the one refusal a caller must act on differently:
+# a bill-to identity edit older than the one already applied. The tracker
+# closes that reservation as superseded instead of retrying it.
+EOM_OPERATOR_STALE_IDENTITY_REVISION = "stale_identity_revision"
 
-    def __init__(self, status_code: int, message: str) -> None:
+
+class EOMOperatorContactMutationError(Exception):
+    """HTTP-mappable domain error for the EOM operator mutation boundary.
+
+    ``code`` is set only where a caller must branch on the refusal; every other
+    error keeps the plain-string detail existing callers read.
+    """
+
+    def __init__(
+        self, status_code: int, message: str, *, code: str | None = None
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.code = code
 
 
 def _blank_to_none(value: Any) -> Any:
@@ -321,6 +341,9 @@ class EOMOperatorContactMutation:
     fields: Mapping[str, Any]
     contact_id: str | None = None
     contact_type: str | None = None
+    # Fence token for a bill-to identity edit: applied only when greater than
+    # the contact's stored bill_to_revision (see the atomic provider mutation).
+    identity_revision: int | None = None
 
     @classmethod
     def from_raw(
@@ -334,6 +357,7 @@ class EOMOperatorContactMutation:
         fields: Mapping[str, Any],
         contact_id: str | None = None,
         contact_type: str | None = None,
+        identity_revision: int | None = None,
     ) -> "EOMOperatorContactMutation":
         normalized_channel = str(source_channel or "").strip()
         if normalized_channel not in EOM_OPERATOR_SOURCE_CHANNELS:
@@ -354,6 +378,30 @@ class EOMOperatorContactMutation:
                     422, "contactType is not supported"
                 )
         normalized_fields = _normalize_fields(fields)
+        # Without contactId this boundary is create-OR-return: the request can
+        # resolve to a contact it merely matched on phone or email. A clear or a
+        # fence there would act on a contact the caller never named, so both
+        # are edit-only.
+        if not contact_id:
+            if (
+                "billing_address" in normalized_fields
+                and normalized_fields["billing_address"] is None
+            ):
+                raise EOMOperatorContactMutationError(
+                    422, "billingAddress can only be cleared on an edit that names contactId"
+                )
+            if identity_revision is not None:
+                raise EOMOperatorContactMutationError(
+                    422, "identityRevision requires contactId"
+                )
+        if identity_revision is not None and (
+            isinstance(identity_revision, bool)
+            or not isinstance(identity_revision, int)
+            or not 0 < identity_revision <= _IDENTITY_REVISION_MAX
+        ):
+            raise EOMOperatorContactMutationError(
+                422, "identityRevision must be a positive integer"
+            )
         return cls(
             operation_key=operation_key,
             actor_id=actor_id,
@@ -363,6 +411,7 @@ class EOMOperatorContactMutation:
             fields=MappingProxyType(normalized_fields),
             contact_id=str(contact_id) if contact_id else None,
             contact_type=normalized_type,
+            identity_revision=identity_revision,
         )
 
     @property
@@ -383,6 +432,11 @@ class EOMOperatorContactMutation:
             "source_channel": self.source_channel,
             "source_ref": self.source_ref,
         }
+        # Only when present: a request that sends no revision must hash exactly
+        # as it did before the fence existed, or a retry in flight across the
+        # deploy would be refused as a different mutation.
+        if self.identity_revision is not None:
+            payload["identity_revision"] = self.identity_revision
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -394,6 +448,11 @@ class EOMOperatorContactMutation:
             "source_ref": self.source_ref,
             "request_fingerprint": self.request_fingerprint,
             "field_names": sorted(self.fields.keys()),
+            **(
+                {"identity_revision": self.identity_revision}
+                if self.identity_revision is not None
+                else {}
+            ),
         }
 
 
