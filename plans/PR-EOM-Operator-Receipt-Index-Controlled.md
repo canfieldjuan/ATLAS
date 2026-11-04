@@ -173,14 +173,14 @@ Parked hardening: none.
 | File | LOC |
 |---|---:|
 | `.agent/capabilities.yaml` | 11 |
-| `.agent/runbooks/database.md` | 24 |
-| `atlas_brain/storage/migrations/401_eom_operator_contact_matched_receipt_index.sql` | 40 |
+| `.agent/runbooks/database.md` | 23 |
+| `atlas_brain/storage/migrations/401_eom_operator_contact_matched_receipt_index.sql` | 42 |
 | `atlas_brain/storage/migrations/__init__.py` | 1 |
-| `ops` | 5 |
-| `plans/PR-EOM-Operator-Receipt-Index-Controlled.md` | 150 |
+| `ops` | 7 |
+| `plans/PR-EOM-Operator-Receipt-Index-Controlled.md` | 186 |
 | `scripts/apply_eom_first_clean_completion_schema.py` | 10 |
 | `scripts/apply_eom_operator_contact_receipt_index_schema.py` | 42 |
-| `tests/test_agent_operations_contract.py` | 40 |
-| `tests/test_eom_first_clean_completion_dba_runner.py` | 125 |
-| `tests/test_migrations_runner.py` | 30 |
-| **Total** | **~480** |
+| `tests/test_agent_operations_contract.py` | 38 |
+| `tests/test_eom_first_clean_completion_dba_runner.py` | 108 |
+| `tests/test_migrations_runner.py` | 42 |
+| **Total** | **510** |
