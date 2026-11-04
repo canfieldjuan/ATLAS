@@ -21,6 +21,9 @@ CARD_VAULT_SCRIPT = ROOT / "scripts" / "apply_eom_card_vault_schema.py"
 CARD_SERVICE_COMMITMENT_SCRIPT = (
     ROOT / "scripts" / "apply_eom_card_service_commitment_schema.py"
 )
+RECEIPT_INDEX_SCRIPT = (
+    ROOT / "scripts" / "apply_eom_operator_contact_receipt_index_schema.py"
+)
 
 
 def _load_runner_module() -> ModuleType:
@@ -346,6 +349,7 @@ def test_runner_rejects_non_superuser_before_apply(monkeypatch) -> None:
         "397_eom_terms_acceptance",
         "398_eom_card_vault",
         "399_eom_card_service_commitments",
+        "401_eom_operator_contact_matched_receipt_index",
     ],
 )
 def test_runner_applies_only_its_named_migration_in_pinned_transaction(
@@ -376,6 +380,12 @@ def test_runner_applies_only_its_named_migration_in_pinned_transaction(
             in {"398_eom_card_vault", "399_eom_card_service_commitments"},
             "398_eom_card_vault": migration_name == "399_eom_card_service_commitments",
             "399_eom_card_service_commitments": False,
+        }
+    if migration_name == "401_eom_operator_contact_matched_receipt_index":
+        state.migration_records = {
+            "364_eom_operator_contact_operation_key_index": True,
+            "394_eom_first_clean_completion_receipts": True,
+            migration_name: False,
         }
     runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
     dba_pool = _Pool(state)
@@ -705,6 +715,104 @@ def test_card_vault_refuses_any_unrecorded_predecessor(
         )
     assert runtime_pool.closed is True
     assert dba_pool.closed is True
+
+
+@pytest.mark.parametrize(
+    "missing_predecessor",
+    [
+        "364_eom_operator_contact_operation_key_index",
+        "394_eom_first_clean_completion_receipts",
+    ],
+)
+def test_operator_contact_receipt_index_refuses_any_unrecorded_predecessor(
+    monkeypatch,
+    missing_predecessor: str,
+) -> None:
+    """401 rebuilds 364's index on the table 394 gave to the guard owner."""
+    runner = _load_runner_module()
+    runtime_database_url = "postgresql://runtime@example.test/atlas"
+    schema_name = "eom_canonical"
+    monkeypatch.setenv(runner.DBA_DSN_ENV, "postgresql://example.test/atlas")
+    monkeypatch.setenv(runner.DBA_SCHEMA_ENV, schema_name)
+    state = SimpleNamespace(
+        executor_is_superuser=True,
+        migrations_table_exists=True,
+        migration_recorded=False,
+        migration_records={
+            "364_eom_operator_contact_operation_key_index": True,
+            "394_eom_first_clean_completion_receipts": True,
+            "401_eom_operator_contact_matched_receipt_index": False,
+        },
+        schema_name=schema_name,
+    )
+    state.migration_records[missing_predecessor] = False
+    runtime_pool = _Pool(SimpleNamespace(schema_name=schema_name))
+    dba_pool = _Pool(state)
+    applied: list[tuple[str, ...]] = []
+
+    async def create_pool(
+        database_url: str, *, schema_name: str | None = None
+    ) -> _Pool:
+        if database_url == runtime_database_url:
+            return runtime_pool
+        return dba_pool
+
+    async def run_migrations(_pool: object, *, only: tuple[str, ...]) -> None:
+        applied.append(only)
+
+    args = runner._parse_args(
+        ["--apply", "--migration", "401_eom_operator_contact_matched_receipt_index"]
+    )
+    with pytest.raises(
+        RuntimeError,
+        match=f"Controlled predecessor {missing_predecessor} must be recorded",
+    ):
+        asyncio.run(
+            runner._run(
+                args,
+                create_pool=create_pool,
+                run_migrations_fn=run_migrations,
+                config_factory=lambda: runner.EOMFirstCleanCompletionDBAConfig(
+                    _env_file=None
+                ),
+                funnel_config_factory=lambda: SimpleNamespace(
+                    db_connection_string=runtime_database_url
+                ),
+            )
+        )
+    assert applied == []
+    assert runtime_pool.closed is True
+    assert dba_pool.closed is True
+
+
+def test_operator_contact_receipt_index_entrypoint_pins_migration_401() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "test_eom_operator_contact_receipt_index_runner_script", RECEIPT_INDEX_SCRIPT
+    )
+    assert spec is not None and spec.loader is not None
+    receipt_index_runner = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(RECEIPT_INDEX_SCRIPT.parent))
+    try:
+        spec.loader.exec_module(receipt_index_runner)
+    finally:
+        sys.path.pop(0)
+
+    argv = receipt_index_runner._receipt_index_argv(["--apply", "--json"])
+    assert argv == [
+        "--migration",
+        "401_eom_operator_contact_matched_receipt_index",
+        "--apply",
+        "--json",
+    ]
+    shared_runner = sys.modules[receipt_index_runner._main.__module__]
+    assert (
+        shared_runner._parse_args(argv).migration
+        == "401_eom_operator_contact_matched_receipt_index"
+    )
+    with pytest.raises(SystemExit):
+        receipt_index_runner._receipt_index_argv(
+            ["--migration=399_eom_card_service_commitments"]
+        )
 
 
 def test_card_service_commitment_refuses_unrecorded_card_vault_predecessor(

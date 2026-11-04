@@ -3622,3 +3622,153 @@ def test_funnel_advertises_post_clean_candidate_semantics_only_with_routes() -> 
     assert {create_capability, list_capability} <= set(
         funnel_mod.served_capabilities()
     )
+
+
+# --- Controlled migration 401: the operator receipt-lookup index -------------
+
+_RECEIPT_INDEX_MIGRATION = "401_eom_operator_contact_matched_receipt_index"
+_RECEIPT_INDEX = "idx_eom_lead_lifecycle_operator_contact_operation_key"
+
+
+class _SingleConnectionPool:
+    """The pool shape the controlled runner acquires its one connection from."""
+
+    def __init__(self, connection: Any) -> None:
+        self._connection = connection
+
+    @asynccontextmanager
+    async def acquire(self):
+        yield self._connection
+
+
+def _load_controlled_runner() -> Any:
+    import importlib.util
+    import sys
+
+    module_name = "test_eom_receipt_index_controlled_runner"
+    script = ROOT / "scripts" / "apply_eom_first_clean_completion_schema.py"
+    spec = importlib.util.spec_from_file_location(module_name, script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # dataclasses resolve their defining module through sys.modules.
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+async def _receipt_index_state(dba: Any) -> tuple[str, str, bool]:
+    row = await dba.fetchrow(
+        """
+        SELECT pg_get_indexdef(index.indexrelid) AS definition,
+               pg_get_userbyid(relation.relowner) AS owner,
+               index.indisvalid AS valid
+        FROM pg_index AS index
+        JOIN pg_class AS relation ON relation.oid = index.indexrelid
+        WHERE index.indexrelid = $1::regclass
+        """,
+        _RECEIPT_INDEX,
+    )
+    assert row is not None
+    return row["definition"], row["owner"], row["valid"]
+
+
+async def _receipt_index_recorded(dba: Any) -> str | None:
+    if not await dba.fetchval("SELECT to_regclass('schema_migrations') IS NOT NULL"):
+        return None
+    return await dba.fetchval(
+        "SELECT content_sha256 FROM schema_migrations WHERE name = $1",
+        _RECEIPT_INDEX_MIGRATION,
+    )
+
+
+@pytest.mark.asyncio
+async def test_receipt_index_migration_401_needs_the_dba_and_commits_with_its_record() -> (
+    None
+):
+    """ATLAS #2548's 401 failed at startup: 394 gave the table to the guard.
+
+    Against a disposable schema where migration 394 has already moved
+    eom_lead_lifecycle_events to atlas_eom_handoff_owner -- exactly the office
+    database -- prove that a non-DBA executor is refused before any change, that
+    the controlled runner rolls the rebuild back when its ledger write fails,
+    and that it then commits the widened index together with its record.
+    """
+    from atlas_brain.storage import migrations as migrations_module
+
+    runner = _load_controlled_runner()
+    sql = (MIGRATIONS / f"{_RECEIPT_INDEX_MIGRATION}.sql").read_text()
+    async with _test_store() as (pool, _schema):
+        dba = pool._connection
+        # Migration 364's index, built before 394 as in production, belongs to
+        # the guard owner along with its table.
+        await dba.execute(
+            f"CREATE INDEX {_RECEIPT_INDEX} ON eom_lead_lifecycle_events "
+            "(operation_key, contact_id, event_type) "
+            "WHERE operation_key IS NOT NULL "
+            "AND event_type IN ('contact_created', 'contact_updated')"
+        )
+        before = await _receipt_index_state(dba)
+        assert before[1] == "atlas_eom_handoff_owner"
+        assert "contact_matched" not in before[0]
+
+        # A non-DBA executor is refused before the migration changes anything.
+        role = f"eom_receipt_index_runtime_{uuid4().hex[:16]}"
+        role_ident = _quote_ident(role)
+        await dba.execute(f"CREATE ROLE {role_ident} NOLOGIN NOINHERIT")
+        try:
+            await dba.execute(f"SET ROLE {role_ident}")
+            with pytest.raises(
+                asyncpg.RaiseError,
+                match=f"database administrator must run {_RECEIPT_INDEX_MIGRATION}",
+            ):
+                await dba.execute(sql)
+        finally:
+            await dba.execute("RESET ROLE")
+            await dba.execute(f"DROP ROLE {role_ident}")
+        assert await _receipt_index_state(dba) == before
+
+        # The rebuild and its ledger row are one unit. A ledger that refuses
+        # 401's row (a real constraint, not a fake) makes the real INSERT fail
+        # inside the runner's transaction: 364's index must survive unchanged
+        # and nothing may be recorded.
+        await dba.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                content_sha256 VARCHAR(64),
+                applied_at TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT refuse_receipt_index_record CHECK (version <> 401)
+            )
+            """
+        )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await runner._run_pinned_controlled_migration(
+                _SingleConnectionPool(dba),
+                migration_name=_RECEIPT_INDEX_MIGRATION,
+                run_migrations_fn=migrations_module.run_migrations,
+            )
+        assert await _receipt_index_state(dba) == before
+        assert await _receipt_index_recorded(dba) is None
+        await dba.execute(
+            "ALTER TABLE schema_migrations "
+            "DROP CONSTRAINT refuse_receipt_index_record"
+        )
+
+        # The controlled runner, as the DBA, commits the widened index and its
+        # record together; the index stays the guard owner's.
+        await runner._run_pinned_controlled_migration(
+            _SingleConnectionPool(dba),
+            migration_name=_RECEIPT_INDEX_MIGRATION,
+            run_migrations_fn=migrations_module.run_migrations,
+        )
+        definition, owner, valid = await _receipt_index_state(dba)
+        for receipt in ("contact_created", "contact_updated", "contact_matched"):
+            assert f"'{receipt}'" in definition
+        assert owner == "atlas_eom_handoff_owner"
+        assert valid is True
+        assert await _receipt_index_recorded(dba) == (
+            migrations_module._migration_content_sha256(
+                (MIGRATIONS / f"{_RECEIPT_INDEX_MIGRATION}.sql").read_bytes()
+            )
+        )

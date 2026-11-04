@@ -212,6 +212,17 @@ database:
       current_session_capable: false-until-the-protected-DBA-configuration-is-exported
       mutation: preflight is read-only; apply creates immutable guard-owned residential service-commitment evidence, adds the card-enrollment guard, and records migration 399
       rollback: stop decision and card-vault callers, retain all decision and card-vault evidence plus both migration records, and follow .agent/runbooks/database.md
+    eom_operator_contact_receipt_index:
+      status: guarded-preflight-and-apply
+      migration: 401_eom_operator_contact_matched_receipt_index
+      predecessor: 364_eom_operator_contact_operation_key_index and 394_eom_first_clean_completion_receipts
+      preflight: ./ops db controlled eom-operator-contact-receipt-index preflight
+      apply: ./ops db controlled eom-operator-contact-receipt-index apply
+      implementation: scripts/apply_eom_operator_contact_receipt_index_schema.py
+      authentication: protected direct PostgreSQL-superuser DSN plus canonical EOM funnel runtime configuration
+      current_session_capable: false-until-the-protected-DBA-configuration-is-exported
+      mutation: preflight is read-only; apply rebuilds the guard-owned operator receipt-lookup index over contact_created, contact_updated, and contact_matched and records migration 401
+      rollback: as a DBA, recreate migration 364's index from the rollback evidence in migration 401, and keep the migration record
   mutation: fixed inspections are read-only; app startup and integration tests can mutate
   likely_failures:
     - assuming root Docker Compose provides PostgreSQL

@@ -46,6 +46,9 @@ TERMS_AUTHORITY_MIGRATION_NAME = "396_eom_terms_authority"
 TERMS_ACCEPTANCE_MIGRATION_NAME = "397_eom_terms_acceptance"
 CARD_VAULT_MIGRATION_NAME = "398_eom_card_vault"
 CARD_SERVICE_COMMITMENT_MIGRATION_NAME = "399_eom_card_service_commitments"
+OPERATOR_CONTACT_RECEIPT_INDEX_MIGRATION_NAME = (
+    "401_eom_operator_contact_matched_receipt_index"
+)
 CONTROLLED_MIGRATION_NAMES = frozenset(
     {
         MIGRATION_NAME,
@@ -53,6 +56,7 @@ CONTROLLED_MIGRATION_NAMES = frozenset(
         TERMS_ACCEPTANCE_MIGRATION_NAME,
         CARD_VAULT_MIGRATION_NAME,
         CARD_SERVICE_COMMITMENT_MIGRATION_NAME,
+        OPERATOR_CONTACT_RECEIPT_INDEX_MIGRATION_NAME,
     }
 )
 CONTROLLED_MIGRATION_PREDECESSORS = {
@@ -62,6 +66,12 @@ CONTROLLED_MIGRATION_PREDECESSORS = {
         TERMS_ACCEPTANCE_MIGRATION_NAME,
     ),
     CARD_SERVICE_COMMITMENT_MIGRATION_NAME: (CARD_VAULT_MIGRATION_NAME,),
+    # 364 built the index 401 widens; 394 gave its table to the guard owner,
+    # which is why 401 needs this runner at all.
+    OPERATOR_CONTACT_RECEIPT_INDEX_MIGRATION_NAME: (
+        "364_eom_operator_contact_operation_key_index",
+        MIGRATION_NAME,
+    ),
 }
 
 
