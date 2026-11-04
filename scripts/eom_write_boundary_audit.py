@@ -41,8 +41,10 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 EOM_TENANT = "effingham_maids"
 
-# The event types the operator mutation boundary writes
-# (atlas_brain/services/eom_crm_mutations.py::EOM_OPERATOR_CONTACT_EVENT_TYPES).
+# The receipts the operator mutation boundary records when it WRITES a contact
+# (atlas_brain/services/eom_crm_mutations.py::EOM_OPERATOR_CONTACT_EVENT_TYPES
+# minus contact_matched, which records a match that changed nothing -- not even
+# provenance -- so it cannot account for a write).
 # Correlating on these specifically, not on "any lifecycle row": an EOM lead
 # already carries a lead_created row from migration 351, so a bypass that adds
 # operator provenance to an existing contact would be excluded by a bare

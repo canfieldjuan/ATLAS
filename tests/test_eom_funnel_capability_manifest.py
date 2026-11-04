@@ -383,3 +383,25 @@ def test_bill_to_identity_capability_versions_the_operator_mutation_semantics() 
         "contact.operator_mutation" in served
     ), "shared route means shared availability"
     assert "contact.bill_to_identity" in served
+
+
+def test_match_without_write_capability_versions_the_operator_mutation_semantics() -> None:
+    """`contact.match_without_write` shares the operator-mutation route too.
+
+    An older build serves the route but rejects `onMatch` as an unknown field,
+    and its create-or-return overwrites a matched contact. The tracker sends
+    `onMatch` only behind this name + route pair.
+    """
+    assert funnel_mod._CAPABILITY_ROUTES["contact.match_without_write"] == (
+        "POST",
+        "/eom-funnel/operator-contacts",
+    )
+    assert (
+        funnel_mod._CAPABILITY_ROUTES["contact.match_without_write"]
+        == funnel_mod._CAPABILITY_ROUTES["contact.operator_mutation"]
+    )
+    served = funnel_mod.served_capabilities()
+    assert ("contact.match_without_write" in served) == (
+        "contact.operator_mutation" in served
+    ), "shared route means shared availability"
+    assert "contact.match_without_write" in served

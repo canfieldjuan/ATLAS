@@ -1332,7 +1332,9 @@ class DatabaseCRMProvider:
         from .eom_crm_mutations import (
             EOM_OPERATOR_CONTACT_CREATED,
             EOM_OPERATOR_CONTACT_EVENT_TYPES,
+            EOM_OPERATOR_CONTACT_MATCHED,
             EOM_OPERATOR_CONTACT_UPDATED,
+            EOM_OPERATOR_ON_MATCH_RETURN,
             EOM_OPERATOR_EDIT_BLOCK_REASON_ARCHIVED,
             EOM_OPERATOR_EDIT_BLOCK_REASON_CONTACT_TYPE,
             EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS,
@@ -1815,6 +1817,16 @@ class DatabaseCRMProvider:
                 contact = await _create_contact(conn)
                 event_type = EOM_OPERATOR_CONTACT_CREATED
                 previous = None
+            elif command.on_match == EOM_OPERATOR_ON_MATCH_RETURN:
+                # The caller cannot know before this call whether it would
+                # create or match, nor -- on a match -- who holds the contact
+                # (a tracker Customer create learns that only from the contact
+                # id returned here). So a match it asked to return writes
+                # nothing: same refusals as an update, then the receipt alone.
+                _assert_contact_type_matches(target)
+                previous = dict(target)
+                contact = previous
+                event_type = EOM_OPERATOR_CONTACT_MATCHED
             else:
                 previous = dict(target)
                 contact = await _update_existing(conn, target)

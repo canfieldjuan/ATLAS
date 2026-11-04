@@ -19,6 +19,7 @@ from atlas_brain.services.crm_provider import (  # noqa: E402
     _eom_identity_lock_key,
 )
 from atlas_brain.services.eom_crm_mutations import (  # noqa: E402
+    EOM_OPERATOR_CONTACT_EVENT_TYPES,
     EOMOperatorContactMutation,
     EOMOperatorContactMutationError,
     mutate_eom_operator_contact,
@@ -9562,4 +9563,239 @@ async def test_operator_contact_identity_revision_fence():
             "SELECT COUNT(*) FROM eom_lead_lifecycle_events WHERE operation_key LIKE 'fence-stale-%'"
         ) == 0
     finally:
+        await conn.close()
+
+
+# --- onMatch="return": a create-or-return that leaves a matched contact alone --
+
+
+def _match_return_command(*, operation_key, fields, on_match="return"):
+    return EOMOperatorContactMutation.from_raw(
+        operation_key=operation_key,
+        actor_id=1,
+        actor_name="Juan Canfield",
+        source_channel="time_tracker",
+        source_ref=str(uuid.uuid4()),
+        fields=fields,
+        contact_type="customer",
+        on_match=on_match,
+    )
+
+
+async def _operator_receipts(conn):
+    return await conn.fetch(
+        """
+        SELECT contact_id, event_type, operation_key, from_stage, to_stage, metadata
+        FROM eom_lead_lifecycle_events
+        WHERE event_type = ANY($1::varchar[])
+        """,
+        list(EOM_OPERATOR_CONTACT_EVENT_TYPES),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("match_on", ["email", "phone"])
+async def test_operator_contact_on_match_return_leaves_the_matched_contact_unchanged(
+    match_on,
+):
+    """Issue 282: a Customer create that matches another Customer's contact.
+
+    With onMatch="return" the match writes nothing -- not the name, email or
+    phone it carried, and not provenance, business context or updated_at --
+    and the only trace is the contact_matched receipt.
+    """
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_match_return_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        held = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=held,
+            full_name="Held Customer LLC",
+            email="billing@held.example",
+            phone="217-555-0142",
+            contact_type="customer",
+            lead_stage=None,
+            source="calendar_import",
+        )
+        before = dict(await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", held))
+
+        fields = {"full_name": "Another Customer Inc"}
+        if match_on == "email":
+            fields.update(email="billing@held.example", phone="217-555-0999")
+        else:
+            fields.update(email="office@another.example", phone="(217) 555-0142")
+        key = f"match-return-{uuid.uuid4().hex}"
+        result = await mutate_eom_operator_contact(
+            provider, _match_return_command(operation_key=key, fields=fields)
+        )
+
+        assert result["operation"] == "contact_matched"
+        assert result["contact_id"] == str(held)
+        assert result["idempotent"] is False
+        after = dict(await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", held))
+        assert after == before
+        assert await conn.fetchval("SELECT COUNT(*) FROM contacts") == 1
+
+        receipts = await _operator_receipts(conn)
+        assert len(receipts) == 1
+        receipt = receipts[0]
+        assert receipt["event_type"] == "contact_matched"
+        assert receipt["contact_id"] == held
+        assert receipt["operation_key"] == key
+        assert receipt["from_stage"] == receipt["to_stage"]
+        metadata = _metadata_dict(receipt["metadata"])
+        assert metadata["changed_fields"] == []
+        assert metadata["previous_values"] == {}
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_on_match_return_creates_when_nothing_matches():
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_match_create_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+
+        result = await mutate_eom_operator_contact(
+            provider,
+            _match_return_command(
+                operation_key=f"match-create-{uuid.uuid4().hex}",
+                fields={"full_name": "Brand New Customer", "phone": "217-555-0177"},
+            ),
+        )
+
+        assert result["operation"] == "contact_created"
+        contact = await conn.fetchrow(
+            "SELECT full_name FROM contacts WHERE id = $1",
+            uuid.UUID(result["contact_id"]),
+        )
+        assert contact["full_name"] == "Brand New Customer"
+        assert [r["event_type"] for r in await _operator_receipts(conn)] == [
+            "contact_created"
+        ]
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_on_match_return_replays_and_refuses_a_changed_key():
+    """A retry gets the same receipt; the same key cannot switch to "apply"."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_match_replay_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        held = uuid.uuid4()
+        await _insert_contact(
+            conn,
+            contact_id=held,
+            full_name="Held Customer LLC",
+            phone="217-555-0142",
+            contact_type="customer",
+            lead_stage=None,
+        )
+        before = dict(await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", held))
+        key = f"match-replay-{uuid.uuid4().hex}"
+        fields = {"full_name": "Another Customer Inc", "phone": "217-555-0142"}
+        command = _match_return_command(operation_key=key, fields=fields)
+
+        first = await mutate_eom_operator_contact(provider, command)
+        replay = await mutate_eom_operator_contact(provider, command)
+
+        assert first["operation"] == replay["operation"] == "contact_matched"
+        assert replay["contact_id"] == first["contact_id"] == str(held)
+        assert replay["idempotent"] is True
+        assert len(await _operator_receipts(conn)) == 1
+
+        same_key_apply = EOMOperatorContactMutation.from_raw(
+            operation_key=key,
+            actor_id=command.actor_id,
+            actor_name=command.actor_name,
+            source_channel=command.source_channel,
+            source_ref=command.source_ref,
+            fields=fields,
+            contact_type="customer",
+            on_match="apply",
+        )
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(provider, same_key_apply)
+        assert exc_info.value.status_code == 409
+        after = dict(await conn.fetchrow("SELECT * FROM contacts WHERE id = $1", held))
+        assert after == before
+        assert len(await _operator_receipts(conn)) == 1
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        await conn.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["ambiguous", "contact_type"])
+async def test_operator_contact_on_match_return_keeps_todays_refusals(case):
+    """Returning a match is not a looser match: today's 409s still apply."""
+    database_url = _database_url_or_skip()
+    schema = f"atlas_eom_operator_match_refusal_{uuid.uuid4().hex}"
+    conn = await asyncpg.connect(database_url)
+    try:
+        await _prepare_schema(conn, schema, apply_privilege_migration=False)
+        provider = DatabaseCRMProvider(pool=conn)
+        if case == "ambiguous":
+            # One contact matches on phone, another on email.
+            await _insert_contact(
+                conn,
+                contact_id=uuid.uuid4(),
+                full_name="Phone Holder",
+                phone="217-555-0142",
+                contact_type="customer",
+                lead_stage=None,
+            )
+            await _insert_contact(
+                conn,
+                contact_id=uuid.uuid4(),
+                full_name="Email Holder",
+                email="shared@example.com",
+                contact_type="customer",
+                lead_stage=None,
+            )
+            fields = {
+                "full_name": "Another Customer Inc",
+                "phone": "217-555-0142",
+                "email": "shared@example.com",
+            }
+        else:
+            # A customer create that matches a lead belongs to conversion.
+            await _insert_contact(
+                conn,
+                contact_id=uuid.uuid4(),
+                full_name="Open Lead",
+                phone="217-555-0142",
+                contact_type="lead",
+                lead_stage="new",
+            )
+            fields = {"full_name": "Another Customer Inc", "phone": "217-555-0142"}
+        before = [dict(r) for r in await conn.fetch("SELECT * FROM contacts ORDER BY id")]
+
+        with pytest.raises(EOMOperatorContactMutationError) as exc_info:
+            await mutate_eom_operator_contact(
+                provider,
+                _match_return_command(
+                    operation_key=f"match-refusal-{uuid.uuid4().hex}", fields=fields
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+        after = [dict(r) for r in await conn.fetch("SELECT * FROM contacts ORDER BY id")]
+        assert after == before
+        assert await _operator_receipts(conn) == []
+    finally:
+        await conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
         await conn.close()
