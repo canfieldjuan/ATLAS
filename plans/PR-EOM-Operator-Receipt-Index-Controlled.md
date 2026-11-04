@@ -193,7 +193,7 @@ Parked hardening: none.
 | `scripts/apply_eom_first_clean_completion_schema.py` | 10 |
 | `scripts/apply_eom_operator_contact_receipt_index_schema.py` | 42 |
 | `tests/test_agent_operations_contract.py` | 38 |
-| `tests/test_eom_first_clean_completion.py` | 138 |
+| `tests/test_eom_first_clean_completion.py` | 150 |
 | `tests/test_eom_first_clean_completion_dba_runner.py` | 108 |
 | `tests/test_migrations_runner.py` | 42 |
-| **Total** | **661** |
+| **Total** | **673** |
