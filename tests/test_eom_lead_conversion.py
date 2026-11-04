@@ -4770,3 +4770,79 @@ def test_operator_contact_fingerprint_unchanged_without_bill_to_fields():
     assert fenced.request_fingerprint != legacy, (
         "a revision must change the fingerprint so one key cannot carry two"
     )
+
+
+# --- onMatch: a create-or-return that leaves a matched contact unchanged -----
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on_match", ["apply", "return"])
+async def test_operator_contact_route_on_match_reaches_the_command(on_match):
+    crm = _CRM()
+    response = await _post_operator_contact(
+        crm, _operator_contact_payload(onMatch=on_match)
+    )
+
+    assert response.status_code == 201, response.text
+    assert crm.operator_contact_calls[0].on_match == on_match
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_on_match_absent_is_apply():
+    crm = _CRM()
+    response = await _post_operator_contact(crm, _operator_contact_payload())
+
+    assert response.status_code == 201, response.text
+    assert crm.operator_contact_calls[0].on_match == "apply"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on_match", [None, "", "RETURN", "skip", True, 1])
+async def test_operator_contact_route_rejects_an_unknown_on_match(on_match):
+    """A closed enum: null is not "absent", and nothing is coerced into it."""
+    crm = _CRM()
+    response = await _post_operator_contact(
+        crm, _operator_contact_payload(onMatch=on_match)
+    )
+
+    assert response.status_code == 422, response.text
+    assert crm.operator_contact_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("on_match", ["apply", "return"])
+async def test_operator_contact_route_on_match_requires_no_contact_id(on_match):
+    """An edit names its contact, so what to do on a match means nothing there."""
+    crm = _CRM()
+    response = await _post_operator_contact(
+        crm,
+        _operator_contact_payload(contactId=str(uuid4()), onMatch=on_match),
+    )
+
+    assert response.status_code == 422, response.text
+    assert crm.operator_contact_calls == []
+
+
+def test_operator_contact_fingerprint_changes_only_for_on_match_return():
+    """Absent and "apply" are today's request; "return" is a different one.
+
+    An unchanged hash keeps receipts stored before the deploy replaying. A
+    changed one for "return" means one key cannot carry both behaviors.
+    """
+    from atlas_brain.services.eom_crm_mutations import EOMOperatorContactMutation
+
+    def command(**on_match):
+        return EOMOperatorContactMutation.from_raw(
+            operation_key="office-match",
+            actor_id=3,
+            actor_name="Office",
+            source_channel="time_tracker",
+            source_ref="customer:42",
+            fields={"full_name": "Ada Operator", "phone": "(217) 555-0100"},
+            contact_type="customer",
+            **on_match,
+        )
+
+    absent = command()
+    assert command(on_match="apply").request_fingerprint == absent.request_fingerprint
+    assert command(on_match="return").request_fingerprint != absent.request_fingerprint

@@ -793,6 +793,49 @@ def test_eom_operator_contact_operation_key_index_covers_contact_mutations():
     assert "ALTER TABLE" not in upper
 
 
+def test_operator_contact_receipt_index_lists_exactly_the_receipt_types():
+    """Migration 401 widens 364's index to every operator receipt type.
+
+    The receipt lookup asks for EOM_OPERATOR_CONTACT_EVENT_TYPES; a partial
+    index whose predicate omits one of them cannot serve that lookup, so the
+    predicate is compared with the tuple itself rather than with a copy.
+    """
+    from atlas_brain.services.eom_crm_mutations import (
+        EOM_OPERATOR_CONTACT_EVENT_TYPES,
+    )
+    from atlas_brain.storage.migrations import _split_sql_statements
+
+    index = "idx_eom_lead_lifecycle_operator_contact_operation_key"
+    migration = (
+        Path(__file__).resolve().parent.parent
+        / "atlas_brain"
+        / "storage"
+        / "migrations"
+        / "401_eom_operator_contact_matched_receipt_index.sql"
+    ).read_text()
+    executable = "\n".join(
+        line for line in migration.splitlines() if not line.lstrip().startswith("--")
+    )
+
+    # Two statements, run one at a time: the drop, then the plain create (no
+    # IF NOT EXISTS, so a leftover INVALID index is rebuilt, not skipped).
+    statements = [s.strip() for s in _split_sql_statements(executable) if s.strip()]
+    assert len(statements) == 2
+    assert statements[0] == f"DROP INDEX CONCURRENTLY IF EXISTS {index};"
+    assert statements[1].startswith(f"CREATE INDEX CONCURRENTLY {index}\n")
+    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in statements[1]
+    assert "operation_key IS NOT NULL" in statements[1]
+
+    predicate = re.search(r"event_type IN \(([^)]*)\)", statements[1])
+    assert predicate is not None
+    listed = tuple(re.findall(r"'([a-z_]+)'", predicate.group(1)))
+    assert sorted(listed) == sorted(EOM_OPERATOR_CONTACT_EVENT_TYPES)
+    assert len(listed) == len(set(listed))
+
+    assert "Rollback evidence" in migration
+    assert "TABLE" not in executable.upper()
+
+
 def test_eom_lead_lifecycle_sequence_is_db_owned_and_writer_compatible():
     migration = (
         Path(__file__).resolve().parent.parent

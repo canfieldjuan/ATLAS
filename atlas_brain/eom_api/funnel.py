@@ -48,6 +48,7 @@ from ..services.eom_crm_mutations import (
     EOM_OPERATOR_EDIT_BLOCK_REASONS,
     EOMOperatorContactMutation,
     EOMOperatorContactMutationError,
+    EOMOperatorOnMatch,
     mutate_eom_operator_contact,
 )
 from ..services.eom_onboarding_drafts import (
@@ -572,6 +573,10 @@ class EOMOperatorContactRequest(BaseModel):
             alias="identityRevision",
         ),
     ]
+    # What a create-or-return does to a contact it matched (EOMOperatorOnMatch).
+    # Absent means "apply"; null or any other value is a 422 here. The route
+    # forwards it only when it was sent, so from_raw can refuse it on an edit.
+    on_match: EOMOperatorOnMatch = Field(default="apply", alias="onMatch")
     source_channel: Annotated[
         str,
         Field(min_length=1, max_length=64, alias="sourceChannel"),
@@ -1241,6 +1246,10 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     # address, separate from the booking address) and the identityRevision
     # fence ship together, and the tracker needs both before it sends either.
     "contact.bill_to_identity": ("POST", "/eom-funnel/operator-contacts"),
+    # Same route: onMatch="return" makes a create-or-return leave a contact it
+    # matched unchanged (receipt contact_matched). The tracker's Customer create
+    # needs it before sending onMatch, which an older build refuses as extra.
+    "contact.match_without_write": ("POST", "/eom-funnel/operator-contacts"),
     "lead.lost": ("POST", "/eom-funnel/leads/{contact_id}/lost"),
     "lead.reopen": ("POST", "/eom-funnel/leads/{contact_id}/reopen"),
     # A separate, narrow seam rather than an inferred lead-stage: the office
@@ -1477,6 +1486,11 @@ async def mutate_operator_contact(
                 contact_id=str(payload.contact_id) if payload.contact_id else None,
                 contact_type=payload.contact_type,
                 identity_revision=payload.identity_revision,
+                on_match=(
+                    payload.on_match
+                    if "on_match" in payload.model_fields_set
+                    else None
+                ),
             ),
         )
     except EOMOperatorContactMutationError as exc:

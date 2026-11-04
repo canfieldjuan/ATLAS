@@ -13,7 +13,7 @@ import json
 import re
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping, get_args
 
 from .eom_lead_ingress import (
     EOM_BUSINESS_CONTEXT_ID,
@@ -22,10 +22,25 @@ from .eom_lead_ingress import (
 
 EOM_OPERATOR_CONTACT_CREATED = "contact_created"
 EOM_OPERATOR_CONTACT_UPDATED = "contact_updated"
+# The receipt of a create-or-return that resolved to an existing contact and,
+# because the caller sent onMatch="return", changed nothing on it.
+EOM_OPERATOR_CONTACT_MATCHED = "contact_matched"
+# Every receipt the boundary records under an operation key. Migration 401's
+# receipt-lookup index lists exactly these.
 EOM_OPERATOR_CONTACT_EVENT_TYPES = (
     EOM_OPERATOR_CONTACT_CREATED,
     EOM_OPERATOR_CONTACT_UPDATED,
+    EOM_OPERATOR_CONTACT_MATCHED,
 )
+# What a create-or-return does to a contact it matched rather than created.
+# "apply" writes the supplied fields as operator intent: the default, and the
+# only behavior before onMatch existed. "return" leaves the contact unchanged,
+# so a caller that cannot know before the call who holds the contact (the
+# tracker's Customer create) decides before anything is written to it.
+EOMOperatorOnMatch = Literal["apply", "return"]
+EOM_OPERATOR_ON_MATCH_APPLY = "apply"
+EOM_OPERATOR_ON_MATCH_RETURN = "return"
+EOM_OPERATOR_ON_MATCH_VALUES = get_args(EOMOperatorOnMatch)
 EOM_OPERATOR_SOURCE_CHANNELS = (
     "time_tracker",
     "operator_portal",
@@ -344,6 +359,7 @@ class EOMOperatorContactMutation:
     # Fence token for a bill-to identity edit: applied only when greater than
     # the contact's stored bill_to_revision (see the atomic provider mutation).
     identity_revision: int | None = None
+    on_match: EOMOperatorOnMatch = EOM_OPERATOR_ON_MATCH_APPLY
 
     @classmethod
     def from_raw(
@@ -358,6 +374,7 @@ class EOMOperatorContactMutation:
         contact_id: str | None = None,
         contact_type: str | None = None,
         identity_revision: int | None = None,
+        on_match: str | None = None,
     ) -> "EOMOperatorContactMutation":
         normalized_channel = str(source_channel or "").strip()
         if normalized_channel not in EOM_OPERATOR_SOURCE_CHANNELS:
@@ -399,6 +416,17 @@ class EOMOperatorContactMutation:
             raise EOMOperatorContactMutationError(
                 422, "identityRevision must be a positive integer"
             )
+        # onMatch only decides what a create-or-return does to a contact it
+        # matched; an edit names its contact, so the field has no meaning there.
+        if contact_id and on_match is not None:
+            raise EOMOperatorContactMutationError(
+                422, "onMatch is only valid without contactId"
+            )
+        normalized_on_match = (
+            EOM_OPERATOR_ON_MATCH_APPLY if on_match is None else on_match
+        )
+        if normalized_on_match not in EOM_OPERATOR_ON_MATCH_VALUES:
+            raise EOMOperatorContactMutationError(422, "onMatch is not supported")
         return cls(
             operation_key=operation_key,
             actor_id=actor_id,
@@ -409,6 +437,7 @@ class EOMOperatorContactMutation:
             contact_id=str(contact_id) if contact_id else None,
             contact_type=normalized_type,
             identity_revision=identity_revision,
+            on_match=normalized_on_match,
         )
 
     @property
@@ -434,6 +463,9 @@ class EOMOperatorContactMutation:
         # deploy would be refused as a different mutation.
         if self.identity_revision is not None:
             payload["identity_revision"] = self.identity_revision
+        # Same rule: an absent or "apply" request is today's request.
+        if self.on_match != EOM_OPERATOR_ON_MATCH_APPLY:
+            payload["on_match"] = self.on_match
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
