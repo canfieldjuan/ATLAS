@@ -1353,3 +1353,35 @@ async def test_export_invoice_pdf():
         assert result["pdf_size_bytes"] > 500
     finally:
         await close_database()
+
+
+# --- Bill-to address precedence (migration 400) ------------------------------
+
+
+def test_contact_bill_to_address_prefers_billing_address():
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _contact_bill_to_address,
+    )
+
+    contact = {
+        "address": "1 Service Site Rd",
+        "billing_address": "114 W Washington Ave, Effingham, IL 62401",
+    }
+    assert _contact_bill_to_address(contact) == (
+        "114 W Washington Ave, Effingham, IL 62401"
+    )
+
+
+@pytest.mark.parametrize("billing_address", [None, "", "   ", 42])
+def test_contact_bill_to_address_falls_back_to_address(billing_address):
+    """No usable billing address bills to the service address, as before 400."""
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import (
+        _contact_bill_to_address,
+    )
+
+    contact = {"address": "1 Service Site Rd", "billing_address": billing_address}
+    assert _contact_bill_to_address(contact) == "1 Service Site Rd"
+    assert _contact_bill_to_address({"address": "1 Service Site Rd"}) == (
+        "1 Service Site Rd"
+    ), "a row from before migration 400 has no billing_address key"
+    assert _contact_bill_to_address({}) is None

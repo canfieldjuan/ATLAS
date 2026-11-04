@@ -325,3 +325,65 @@ async def test_legacy_writer_fails_closed_when_cross_pipeline_check_errors(
     lines = _build_notification_lines(result)
     assert "DEDUP CHECK FAILED (1) -- invoice writes skipped:" in lines
     assert f"  {flaky_contact} [Office Cleaning]: transient read error" in lines
+
+
+@pytest.mark.asyncio
+async def test_legacy_writer_bills_to_the_billing_address_when_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+):
+    """Migration 400: run() addresses the invoice to billing_address, and a
+    contact without one keeps its service address -- both contacts in one
+    run, so the second is the negative control."""
+    import atlas_brain.services.crm_provider as crm_provider_mod
+    from atlas_brain.autonomous.tasks.monthly_invoice_generation import run
+
+    billed_contact = uuid4()
+    plain_contact = uuid4()
+    contacts = {
+        str(billed_contact): {
+            "full_name": "Milano & Grunloh Engineers",
+            "email": None,
+            "phone": None,
+            "address": "1 Service Site Rd",
+            "billing_address": "114 W Washington Ave, Effingham, IL 62401",
+        },
+        str(plain_contact): {
+            "full_name": "Plain Customer",
+            "email": None,
+            "phone": None,
+            "address": "9 Home St",
+            "billing_address": None,
+        },
+    }
+
+    class _BillToCRMProvider:
+        async def get_contact(self, contact_id):
+            return contacts[str(contact_id)]
+
+    fake_inv_repo = _FakeInvoiceRepo({})
+    _patch_run_dependencies(
+        monkeypatch,
+        tmp_path,
+        services=[
+            _per_month_service(
+                contact_id=billed_contact, name="Office Cleaning", keyword="Milano"
+            ),
+            _per_month_service(
+                contact_id=plain_contact, name="Office Cleaning", keyword="Plain"
+            ),
+        ],
+        fake_inv_repo=fake_inv_repo,
+    )
+    monkeypatch.setattr(
+        crm_provider_mod, "get_crm_provider", lambda: _BillToCRMProvider()
+    )
+
+    result = await run(_scheduled_task("2026-11"))
+
+    assert result["invoices_created"] == 2
+    by_contact = {call["contact_id"]: call for call in fake_inv_repo.create_calls}
+    assert by_contact[billed_contact]["customer_name"] == "Milano & Grunloh Engineers"
+    assert by_contact[billed_contact]["customer_address"] == (
+        "114 W Washington Ave, Effingham, IL 62401"
+    )
+    assert by_contact[plain_contact]["customer_address"] == "9 Home St"

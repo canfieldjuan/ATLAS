@@ -1338,6 +1338,7 @@ class DatabaseCRMProvider:
             EOM_OPERATOR_EDIT_BLOCK_REASON_LEAD_STATUS,
             EOM_OPERATOR_EDIT_BLOCK_REASON_STAGE,
             EOM_BUSINESS_CONTEXT_ID,
+            EOM_OPERATOR_STALE_IDENTITY_REVISION,
             EOMOperatorContactMutationError,
             get_eom_operator_contact_editability,
         )
@@ -1606,11 +1607,30 @@ class DatabaseCRMProvider:
             conn: Any, target: Mapping[str, Any]
         ) -> dict[str, Any]:
             _assert_contact_type_matches(target)
+            # The revision fence. Only an edit that names contactId carries a
+            # revision, so this runs under that contact's advisory lock and row
+            # lock, after the receipt lookup (a retry under its own key has
+            # already replayed). Equal is stale too: two reservations never
+            # share a revision.
+            if command.identity_revision is not None:
+                stored_revision = target.get("bill_to_revision")
+                if (
+                    stored_revision is not None
+                    and command.identity_revision <= int(stored_revision)
+                ):
+                    raise EOMOperatorContactMutationError(
+                        409,
+                        "identityRevision is not newer than the contact's "
+                        "bill-to revision",
+                        code=EOM_OPERATOR_STALE_IDENTITY_REVISION,
+                    )
             updates = {
                 key: value
                 for key, value in command.fields.items()
                 if target.get(key) != value
             }
+            if command.identity_revision is not None:
+                updates["bill_to_revision"] = command.identity_revision
             if target.get("business_context_id") is None:
                 updates["business_context_id"] = EOM_BUSINESS_CONTEXT_ID
             provenance_metadata, provenance_changed = _operator_provenance_metadata(target)

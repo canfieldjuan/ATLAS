@@ -410,7 +410,7 @@ async def run(task: ScheduledTask) -> dict:
         customer_name = (contact or {}).get("full_name", "Customer")
         customer_email = (contact or {}).get("email")
         customer_phone = (contact or {}).get("phone")
-        customer_address = (contact or {}).get("address")
+        customer_address = _contact_bill_to_address(contact or {})
 
         # Sort line items by date
         line_items.sort(key=lambda li: li.get("date") or "")
@@ -748,6 +748,20 @@ def _assign_events_to_services(
         })
 
     return dict(events_by_service), collisions
+
+
+def _contact_bill_to_address(contact: dict) -> str | None:
+    """The address an invoice for this contact is billed to.
+
+    ``billing_address`` is the bill-to address when the office has set one.
+    ``address`` is the service location (booking events use it), and stays the
+    bill-to for every contact without a billing address, as before migration
+    400. A blank billing address counts as unset.
+    """
+    billing_address = contact.get("billing_address")
+    if isinstance(billing_address, str) and billing_address.strip():
+        return billing_address
+    return contact.get("address")
 
 
 def _month_name(month: int) -> str:

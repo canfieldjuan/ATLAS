@@ -127,6 +127,7 @@ class _CRM:
                 # NULL. Modelling that here keeps the fake honest about what the
                 # route actually echoes.
                 "customer_type": command.fields.get("customer_type", "unknown"),
+                "billing_address": command.fields.get("billing_address"),
                 "lead_stage": "new" if command.contact_type == "lead" else None,
                 "status": "active",
                 "source": command.contact_source,
@@ -4533,3 +4534,239 @@ async def test_operator_contact_route_keeps_present_null_distinct_from_absent():
         assert cleared_field in command.fields, "present null must reach the command"
         assert command.fields[cleared_field] is None
         assert absent_field not in command.fields, "absent key must stay absent"
+
+
+# --- Bill-to identity (migration 400): billingAddress + identityRevision -----
+
+
+async def _post_operator_contact(crm, payload):
+    app = _app(crm, _enabled_config())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.post(
+            "/eom-funnel/operator-contacts",
+            headers=_headers(approval_key=f"office-bill-to-{uuid4().hex}"),
+            json=payload,
+        )
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_billing_address_reaches_command_and_response():
+    """The alias, the command, the revision, and the echoed contact."""
+    crm = _CRM()
+    contact_id = str(uuid4())
+    response = await _post_operator_contact(
+        crm,
+        _operator_contact_payload(
+            contactId=contact_id,
+            billingAddress="  114 W Washington Ave, Effingham, IL 62401  ",
+            identityRevision=7,
+        ),
+    )
+
+    assert response.status_code in (200, 201), response.text
+    command = crm.operator_contact_calls[0]
+    assert command.fields["billing_address"] == "114 W Washington Ave, Effingham, IL 62401"
+    assert "address" not in command.fields, "the bill-to must not touch the booking address"
+    assert command.identity_revision == 7
+    assert command.lifecycle_metadata["identity_revision"] == 7
+    assert response.json()["contact"]["billingAddress"] == (
+        "114 W Washington Ave, Effingham, IL 62401"
+    )
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_billing_address_absent_stays_absent():
+    crm = _CRM()
+    response = await _post_operator_contact(crm, _operator_contact_payload())
+
+    assert response.status_code == 201, response.text
+    command = crm.operator_contact_calls[0]
+    assert "billing_address" not in command.fields
+    assert command.identity_revision is None
+    assert "identity_revision" not in command.lifecycle_metadata
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "billing_address", ["114 W Washington Ave", None, "", "   "]
+)
+async def test_operator_contact_route_billing_address_requires_contact_id(
+    billing_address,
+):
+    """billingAddress is edit-only, whatever its value.
+
+    Without contactId the boundary is create-or-return and can resolve to a
+    contact matched on phone or email, possibly one linked to another
+    Customer, so setting or clearing the bill-to there would change a contact
+    the caller never named.
+    """
+    crm = _CRM()
+    refused = await _post_operator_contact(
+        crm, _operator_contact_payload(billingAddress=billing_address)
+    )
+    assert refused.status_code == 422, refused.text
+    assert crm.operator_contact_calls == []
+
+    edit = await _post_operator_contact(
+        crm,
+        _operator_contact_payload(
+            contactId=str(uuid4()), billingAddress=billing_address
+        ),
+    )
+    assert edit.status_code in (200, 201), edit.text
+    command = crm.operator_contact_calls[0]
+    assert "billing_address" in command.fields
+    expected = (
+        billing_address.strip() if billing_address and billing_address.strip() else None
+    )
+    assert command.fields["billing_address"] == expected
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_billing_address_length_bound():
+    """500 characters is the column CHECK; 501 is a 422, not a 500."""
+    crm = _CRM()
+    at_limit = await _post_operator_contact(
+        crm, _operator_contact_payload(contactId=str(uuid4()), billingAddress="a" * 500)
+    )
+    assert at_limit.status_code in (200, 201), at_limit.text
+    assert crm.operator_contact_calls[0].fields["billing_address"] == "a" * 500
+
+    crm = _CRM()
+    over = await _post_operator_contact(
+        crm, _operator_contact_payload(contactId=str(uuid4()), billingAddress="a" * 501)
+    )
+    assert over.status_code == 422, over.text
+    assert crm.operator_contact_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "revision", [0, -1, "5", True, 1.5, 2**63, None]
+)
+async def test_operator_contact_route_rejects_invalid_identity_revision(revision):
+    """identityRevision is a positive BIGINT, sent only with contactId."""
+    crm = _CRM()
+    payload = _operator_contact_payload(contactId=str(uuid4()), identityRevision=revision)
+    response = await _post_operator_contact(crm, payload)
+    if revision is None:
+        # Explicit null is the same as absent: no fence.
+        assert response.status_code in (200, 201), response.text
+        assert crm.operator_contact_calls[0].identity_revision is None
+        return
+    assert response.status_code == 422, response.text
+    assert crm.operator_contact_calls == []
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_identity_revision_requires_contact_id():
+    crm = _CRM()
+    refused = await _post_operator_contact(
+        crm, _operator_contact_payload(identityRevision=3)
+    )
+    assert refused.status_code == 422, refused.text
+    assert crm.operator_contact_calls == []
+
+    accepted = await _post_operator_contact(
+        crm,
+        _operator_contact_payload(contactId=str(uuid4()), identityRevision=2**63 - 1),
+    )
+    assert accepted.status_code in (200, 201), accepted.text
+    assert crm.operator_contact_calls[0].identity_revision == 2**63 - 1
+
+
+@pytest.mark.asyncio
+async def test_operator_contact_route_stale_revision_carries_a_code():
+    """Only the stale-revision refusal is structured; other errors stay strings."""
+    from atlas_brain.services.eom_crm_mutations import (
+        EOM_OPERATOR_STALE_IDENTITY_REVISION,
+        EOMOperatorContactMutationError,
+    )
+
+    class _RefusingCRM(_CRM):
+        def __init__(self, error):
+            super().__init__()
+            self._error = error
+
+        async def mutate_eom_operator_contact_atomic(self, *, command):
+            self.operator_contact_calls.append(command)
+            raise self._error
+
+    stale = await _post_operator_contact(
+        _RefusingCRM(
+            EOMOperatorContactMutationError(
+                409, "stale", code=EOM_OPERATOR_STALE_IDENTITY_REVISION
+            )
+        ),
+        _operator_contact_payload(contactId=str(uuid4()), identityRevision=4),
+    )
+    assert stale.status_code == 409
+    assert stale.json()["detail"] == {
+        "code": "stale_identity_revision",
+        "message": "stale",
+    }
+
+    other = await _post_operator_contact(
+        _RefusingCRM(
+            EOMOperatorContactMutationError(
+                409, "Operator contact identity belongs to another contact"
+            )
+        ),
+        _operator_contact_payload(contactId=str(uuid4())),
+    )
+    assert other.status_code == 409
+    assert other.json()["detail"] == (
+        "Operator contact identity belongs to another contact"
+    )
+
+
+def test_operator_contact_fingerprint_unchanged_without_bill_to_fields():
+    """A request that sends neither new field hashes exactly as before 400.
+
+    The receipt check compares stored fingerprints, so any drift here would
+    make a retry that is in flight across the deploy look like a different
+    mutation and fail with 409.
+    """
+    import hashlib
+
+    from atlas_brain.services.eom_crm_mutations import EOMOperatorContactMutation
+
+    command = EOMOperatorContactMutation.from_raw(
+        operation_key="office-fp",
+        actor_id=3,
+        actor_name="Office",
+        source_channel="time_tracker",
+        source_ref="customer:42",
+        fields={"full_name": "Ada Operator", "phone": "(217) 555-0100"},
+        contact_id="4c0f1ee8-8063-4ba9-9e10-847e6c2a95ff",
+        contact_type="customer",
+    )
+    legacy_payload = {
+        "actor_id": 3,
+        "contact_id": "4c0f1ee8-8063-4ba9-9e10-847e6c2a95ff",
+        "contact_type": "customer",
+        "fields": dict(sorted(command.fields.items())),
+        "source_channel": "time_tracker",
+        "source_ref": "customer:42",
+    }
+    legacy = hashlib.sha256(
+        json.dumps(legacy_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert command.request_fingerprint == legacy
+
+    fenced = EOMOperatorContactMutation.from_raw(
+        operation_key="office-fp",
+        actor_id=3,
+        actor_name="Office",
+        source_channel="time_tracker",
+        source_ref="customer:42",
+        fields={"full_name": "Ada Operator", "phone": "(217) 555-0100"},
+        contact_id="4c0f1ee8-8063-4ba9-9e10-847e6c2a95ff",
+        contact_type="customer",
+        identity_revision=9,
+    )
+    assert fenced.request_fingerprint != legacy, (
+        "a revision must change the fingerprint so one key cannot carry two"
+    )

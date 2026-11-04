@@ -556,6 +556,22 @@ class EOMOperatorContactRequest(BaseModel):
         str | None,
         Field(default=None, max_length=32, alias="customerType"),
     ]
+    billing_address: Annotated[
+        str | None,
+        Field(default=None, max_length=500, alias="billingAddress"),
+    ]
+    # Strict: a JSON string or boolean is not a revision. The upper bound is
+    # the BIGINT column (migration 400), so an oversized value is a 422.
+    identity_revision: Annotated[
+        int | None,
+        Field(
+            default=None,
+            strict=True,
+            ge=1,
+            le=2**63 - 1,
+            alias="identityRevision",
+        ),
+    ]
     source_channel: Annotated[
         str,
         Field(min_length=1, max_length=64, alias="sourceChannel"),
@@ -579,6 +595,7 @@ class EOMOperatorContactRequest(BaseModel):
         "state",
         "zip",
         "notes",
+        "billing_address",
         "source_channel",
         "source_ref",
         mode="before",
@@ -1220,6 +1237,10 @@ _CAPABILITY_ROUTES: dict[str, tuple[str, str]] = {
     # mutation route existing -- an older build serves the same route without
     # them -- so the tracker gates field-clearing on THIS name + route pair.
     "contact.field_clear": ("POST", "/eom-funnel/operator-contacts"),
+    # Same route again, versioning more semantics: billingAddress (the bill-to
+    # address, separate from the booking address) and the identityRevision
+    # fence ship together, and the tracker needs both before it sends either.
+    "contact.bill_to_identity": ("POST", "/eom-funnel/operator-contacts"),
     "lead.lost": ("POST", "/eom-funnel/leads/{contact_id}/lost"),
     "lead.reopen": ("POST", "/eom-funnel/leads/{contact_id}/reopen"),
     # A separate, narrow seam rather than an inferred lead-stage: the office
@@ -1391,6 +1412,7 @@ def _operator_contact_fields(payload: EOMOperatorContactRequest) -> dict[str, An
         "zip": "zip",
         "notes": "notes",
         "customer_type": "customer_type",
+        "billing_address": "billing_address",
     }
     return {
         contact_field: getattr(payload, model_field)
@@ -1418,6 +1440,7 @@ def _operator_contact_item(contact: Mapping[str, Any]) -> dict[str, Any]:
         "state": contact.get("state"),
         "zip": contact.get("zip"),
         "notes": contact.get("notes"),
+        "billingAddress": contact.get("billing_address"),
         "contactType": contact.get("contact_type"),
         "customerType": contact.get("customer_type"),
         "leadStage": contact.get("lead_stage"),
@@ -1453,10 +1476,16 @@ async def mutate_operator_contact(
                 fields=_operator_contact_fields(payload),
                 contact_id=str(payload.contact_id) if payload.contact_id else None,
                 contact_type=payload.contact_type,
+                identity_revision=payload.identity_revision,
             ),
         )
     except EOMOperatorContactMutationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=(
+                {"code": exc.code, "message": str(exc)} if exc.code else str(exc)
+            ),
+        ) from exc
     return JSONResponse(
         status_code=(
             status.HTTP_200_OK
