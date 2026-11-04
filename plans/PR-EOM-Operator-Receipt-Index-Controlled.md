@@ -40,7 +40,7 @@ Consequences on the running service:
 
 Ownership lane: eom-crm/lead-funnel
 Slice phase: Vertical slice
-Max files: 11
+Max files: 12
 
 1. Rewrite migration 401 as an atomic-bookkeeping, DBA-only migration: a
    superuser guard, `DROP INDEX IF EXISTS`, then `CREATE INDEX` with the same
@@ -73,6 +73,14 @@ Max files: 11
   - `./ops` routes both modes to the wrapper with `--json`; the capabilities
     entry and runbook carry the same commands --
     `tests/test_agent_operations_contract.py`.
+  - Real PostgreSQL, on a disposable schema where 394 has moved the
+    lifecycle table to the guard owner and 364's index exists --
+    `tests/test_eom_first_clean_completion.py::test_receipt_index_migration_401_needs_the_dba_and_commits_with_its_record`:
+    - A non-superuser executor is refused before any change.
+    - The controlled runner's pinned transaction rolls the rebuild back when its
+      ledger write fails, recording nothing.
+    - It then commits the widened, valid, guard-owned index together with a
+      ledger row carrying the file's digest.
 - Reachability proof: the ops dispatcher, the wrapper, and the shared runner
   are exercised end to end with a fake DBA pool; startup exclusion is
   exercised through `run_migrations`.
@@ -121,6 +129,7 @@ as for 394-399. No runtime configuration changes.
 - `scripts/apply_eom_first_clean_completion_schema.py`
 - `scripts/apply_eom_operator_contact_receipt_index_schema.py`
 - `tests/test_agent_operations_contract.py`
+- `tests/test_eom_first_clean_completion.py`
 - `tests/test_eom_first_clean_completion_dba_runner.py`
 - `tests/test_migrations_runner.py`
 
@@ -165,6 +174,9 @@ Parked hardening: none.
   `tests/test_agent_operations_contract.py`, and
   `tests/test_migrations_runner.py` (266 passed; the one skip needs
   `ATLAS_MIGRATION_TEST_DATABASE_URL`).
+- Skipped locally, proven in CI: the real-PostgreSQL 401 test in
+  `tests/test_eom_first_clean_completion.py`. It needs the disposable runtime
+  and DBA URLs that the eom-lead-pipeline workflow provides.
 - Passed locally: `ruff check` on the changed Python files and `ops`; no
   non-ASCII added; `python scripts/check_guard_class_closure.py --base origin/main --strict`.
 
