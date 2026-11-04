@@ -239,6 +239,29 @@ sessions. Retain migrations 398 and 399, all commitment rows, and all card-vault
 provider evidence. Never update, delete, truncate, or invent a commitment as an
 application rollback mechanism.
 
+## EOM operator-contact receipt index migration
+
+Migration `401_eom_operator_contact_matched_receipt_index` is excluded from
+automatic startup. It rebuilds the operator receipt-lookup index (migration
+364) so it also covers `contact_matched`, the receipt a create-or-return writes
+when `onMatch: "return"` leaves a matched contact unchanged. Migration 394 gave
+`eom_lead_lifecycle_events` to the guard owner, so the runtime role cannot do
+this, and startup does not try. Atlas is correct without it: the receipt lookup
+is only unindexed until it runs. It changes no table and no data.
+
+```bash
+git rev-parse HEAD
+./ops deploy status
+./ops db controlled eom-operator-contact-receipt-index preflight
+./ops db controlled eom-operator-contact-receipt-index apply
+./ops db controlled eom-operator-contact-receipt-index preflight
+```
+
+The rebuild is one short transaction: the index's write lock lasts as long as
+the build, which is brief on the small lifecycle ledger. Rollback is to recreate
+migration 364's index as a DBA from the rollback evidence in the migration
+file. Keep the migration record.
+
 ## Role-topology evidence preflight
 
 This is a read-only prerequisite for a later least-privilege role cutover. It

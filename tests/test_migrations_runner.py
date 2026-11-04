@@ -799,34 +799,49 @@ def test_operator_contact_receipt_index_lists_exactly_the_receipt_types():
     The receipt lookup asks for EOM_OPERATOR_CONTACT_EVENT_TYPES; a partial
     index whose predicate omits one of them cannot serve that lookup, so the
     predicate is compared with the tuple itself rather than with a copy.
+
+    The index's table belongs to the guard owner since migration 394, which the
+    runtime role is not, so 401 is a controlled DBA migration: startup skips it,
+    and the controlled runner applies its DDL and ledger row as one transaction
+    (atomic bookkeeping, hence no CONCURRENTLY).
     """
     from atlas_brain.services.eom_crm_mutations import (
         EOM_OPERATOR_CONTACT_EVENT_TYPES,
     )
-    from atlas_brain.storage.migrations import _split_sql_statements
+    from atlas_brain.storage.migrations import (
+        CONTROLLED_DBA_MIGRATION_NAMES,
+        _contains_executable_concurrently,
+        _requires_atomic_bookkeeping,
+        _split_sql_statements,
+    )
 
+    name = "401_eom_operator_contact_matched_receipt_index"
     index = "idx_eom_lead_lifecycle_operator_contact_operation_key"
     migration = (
         Path(__file__).resolve().parent.parent
         / "atlas_brain"
         / "storage"
         / "migrations"
-        / "401_eom_operator_contact_matched_receipt_index.sql"
+        / f"{name}.sql"
     ).read_text()
+    assert name in CONTROLLED_DBA_MIGRATION_NAMES
+    assert _requires_atomic_bookkeeping(migration)
+    assert not _contains_executable_concurrently(migration)
+
     executable = "\n".join(
         line for line in migration.splitlines() if not line.lstrip().startswith("--")
     )
-
-    # Two statements, run one at a time: the drop, then the plain create (no
-    # IF NOT EXISTS, so a leftover INVALID index is rebuilt, not skipped).
     statements = [s.strip() for s in _split_sql_statements(executable) if s.strip()]
-    assert len(statements) == 2
-    assert statements[0] == f"DROP INDEX CONCURRENTLY IF EXISTS {index};"
-    assert statements[1].startswith(f"CREATE INDEX CONCURRENTLY {index}\n")
-    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in statements[1]
-    assert "operation_key IS NOT NULL" in statements[1]
+    assert len(statements) == 3
+    # A DBA-only guard first, then the drop and the plain create.
+    assert statements[0].startswith("DO $$")
+    assert f"database administrator must run {name}" in statements[0]
+    assert statements[1] == f"DROP INDEX IF EXISTS {index};"
+    assert statements[2].startswith(f"CREATE INDEX {index}\n")
+    assert "ON eom_lead_lifecycle_events (operation_key, contact_id, event_type)" in statements[2]
+    assert "operation_key IS NOT NULL" in statements[2]
 
-    predicate = re.search(r"event_type IN \(([^)]*)\)", statements[1])
+    predicate = re.search(r"event_type IN \(([^)]*)\)", statements[2])
     assert predicate is not None
     listed = tuple(re.findall(r"'([a-z_]+)'", predicate.group(1)))
     assert sorted(listed) == sorted(EOM_OPERATOR_CONTACT_EVENT_TYPES)
@@ -1418,6 +1433,7 @@ async def test_generic_run_skips_controlled_dba_migration_until_explicitly_selec
         "397_eom_terms_acceptance",
         "398_eom_card_vault",
         "399_eom_card_service_commitments",
+        "401_eom_operator_contact_matched_receipt_index",
     }
     controlled_sources = {
         controlled_name: f"SELECT '{controlled_name}'"
@@ -1437,7 +1453,7 @@ async def test_generic_run_skips_controlled_dba_migration_until_explicitly_selec
         name not in CONTROLLED_DBA_MIGRATION_NAMES
         for _version, name, _digest in pool.records
     )
-    assert "Skipping 6 controlled DBA migration(s)" in caplog.text
+    assert "Skipping 7 controlled DBA migration(s)" in caplog.text
 
     for controlled_name in sorted(CONTROLLED_DBA_MIGRATION_NAMES):
         await run_migrations(
