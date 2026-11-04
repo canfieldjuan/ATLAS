@@ -3682,9 +3682,9 @@ async def _receipt_index_recorded(dba: Any) -> str | None:
 
 
 @pytest.mark.asyncio
-async def test_receipt_index_migration_401_needs_the_dba_and_commits_with_its_record(
-    monkeypatch,
-) -> None:
+async def test_receipt_index_migration_401_needs_the_dba_and_commits_with_its_record() -> (
+    None
+):
     """ATLAS #2548's 401 failed at startup: 394 gave the table to the guard.
 
     Against a disposable schema where migration 394 has already moved
@@ -3727,21 +3727,33 @@ async def test_receipt_index_migration_401_needs_the_dba_and_commits_with_its_re
             await dba.execute(f"DROP ROLE {role_ident}")
         assert await _receipt_index_state(dba) == before
 
-        # The rebuild and its ledger row are one unit: a failing ledger write
-        # leaves 364's index exactly as it was and records nothing.
-        async def _failing_record(*_args: Any, **_kwargs: Any) -> None:
-            raise RuntimeError("ledger write failed")
-
-        with monkeypatch.context() as patch:
-            patch.setattr(migrations_module, "_record_migration", _failing_record)
-            with pytest.raises(RuntimeError, match="ledger write failed"):
-                await runner._run_pinned_controlled_migration(
-                    _SingleConnectionPool(dba),
-                    migration_name=_RECEIPT_INDEX_MIGRATION,
-                    run_migrations_fn=migrations_module.run_migrations,
-                )
+        # The rebuild and its ledger row are one unit. A ledger that refuses
+        # 401's row (a real constraint, not a fake) makes the real INSERT fail
+        # inside the runner's transaction: 364's index must survive unchanged
+        # and nothing may be recorded.
+        await dba.execute(
+            """
+            CREATE TABLE schema_migrations (
+                version INTEGER PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                content_sha256 VARCHAR(64),
+                applied_at TIMESTAMPTZ DEFAULT NOW(),
+                CONSTRAINT refuse_receipt_index_record CHECK (version <> 401)
+            )
+            """
+        )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await runner._run_pinned_controlled_migration(
+                _SingleConnectionPool(dba),
+                migration_name=_RECEIPT_INDEX_MIGRATION,
+                run_migrations_fn=migrations_module.run_migrations,
+            )
         assert await _receipt_index_state(dba) == before
         assert await _receipt_index_recorded(dba) is None
+        await dba.execute(
+            "ALTER TABLE schema_migrations "
+            "DROP CONSTRAINT refuse_receipt_index_record"
+        )
 
         # The controlled runner, as the DBA, commits the widened index and its
         # record together; the index stays the guard owner's.
