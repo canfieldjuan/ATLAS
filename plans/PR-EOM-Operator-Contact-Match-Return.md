@@ -229,10 +229,10 @@ Parked hardening: none.
 | `atlas_brain/services/crm_provider.py` | 12 |
 | `atlas_brain/services/eom_crm_mutations.py` | 34 |
 | `atlas_brain/storage/migrations/401_eom_operator_contact_matched_receipt_index.sql` | 33 |
-| `plans/PR-EOM-Operator-Contact-Match-Return.md` | 220 |
+| `plans/PR-EOM-Operator-Contact-Match-Return.md` | 238 |
 | `scripts/eom_write_boundary_audit.py` | 6 |
 | `tests/test_eom_funnel_capability_manifest.py` | 22 |
 | `tests/test_eom_lead_conversion.py` | 76 |
 | `tests/test_eom_lead_conversion_integration.py` | 236 |
 | `tests/test_migrations_runner.py` | 43 |
-| **Total** | **~700** |
+| **Total** | **714** |
