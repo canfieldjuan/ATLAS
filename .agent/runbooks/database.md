@@ -257,8 +257,14 @@ git rev-parse HEAD
 ./ops db controlled eom-operator-contact-receipt-index preflight
 ```
 
-The rebuild is one short transaction: the index's write lock lasts as long as
-the build, which is brief on the small lifecycle ledger. Rollback is to recreate
+The rebuild is one transaction. Its `DROP INDEX` takes an ACCESS EXCLUSIVE lock
+on `eom_lead_lifecycle_events` and holds it until the transaction commits, so
+reads of the ledger wait as well as writes, for the drop and the build together.
+On the small ledger that is milliseconds. The runner sets no `lock_timeout`: if
+another transaction already holds a lock on the ledger, the drop waits for it to
+finish, and every ledger query that arrives meanwhile queues behind the drop.
+The migration file's header comment calls this a write lock; this paragraph is
+the accurate description. Rollback is to recreate
 migration 364's index as a DBA from the rollback evidence in the migration
 file. Keep the migration record.
 
