@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -92,6 +93,9 @@ async def emit_event(
     """Persist an event to atlas_events. NOTIFY fires via trigger."""
     from ..storage.database import get_db_pool
 
+    # Producers build payloads and entity ids from asyncpg rows, which decode
+    # uuid columns to uuid.UUID. Neither json.dumps nor the TEXT entity_id
+    # codec accepts one, so normalize here, once, for every producer.
     pool = get_db_pool()
     row_id = await pool.fetchval(
         """
@@ -102,8 +106,8 @@ async def emit_event(
         event_type,
         source,
         entity_type,
-        entity_id,
-        __import__("json").dumps(payload),
+        None if entity_id is None else str(entity_id),
+        json.dumps(payload, default=str),
     )
     logger.debug("Emitted event %s (%s) -> %s", event_type, source, row_id)
     return row_id
