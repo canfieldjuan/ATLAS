@@ -70,7 +70,7 @@ services:
     #   - "5004:5004"
 
   db:
-    image: postgres:18
+    image: postgres:19
     container_name: db
     environment:
       - POSTGRES_USER=${ATLAS_VISION_DB_USER:-user}
